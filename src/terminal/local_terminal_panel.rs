@@ -1,3 +1,6 @@
+use std::borrow::Cow;
+use std::sync::LazyLock;
+
 use gpui_kit::component::{
     ActiveTheme as _, Icon, Sizable as _,
     button::Button,
@@ -8,6 +11,7 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use regex::Regex;
 
 use crate::app::{CatalogIcon, CenterTab, CloseLocalTerminal, RestartLocalTerminal};
 use crate::i18n::t;
@@ -104,10 +108,10 @@ impl LocalTerminalPanel {
     }
 
     fn display_title(&self, cx: &App) -> SharedString {
-        self.terminal
-            .read(cx)
-            .title(cx)
-            .map_or_else(|| self.default_title(), SharedString::from)
+        self.terminal.read(cx).title(cx).map_or_else(
+            || self.default_title(),
+            |title| short_title(&title).into_owned().into(),
+        )
     }
 }
 
@@ -232,6 +236,18 @@ impl Render for LocalTerminalPanel {
     }
 }
 
+/// The shell's title without the folders of programs. The Windows console
+/// titles a window with the whole path of what runs in it
+/// (`C:\Windows\system32\cmd.exe - ping localhost`), which leaves a tab
+/// little else; each such path shows as the program's name, `cmd`.
+fn short_title(title: &str) -> Cow<'_, str> {
+    static PROGRAM_PATH: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"(?i)\b[a-z]:\\(?:[^\\/:*?"<>|\r\n]+\\)*([^\\/:*?"<>|\r\n]+?)\.exe\b"#)
+            .expect("pattern")
+    });
+    PROGRAM_PATH.replace_all(title, "$1")
+}
+
 /// 「本地终端 1」, in the interface language.
 fn default_title(id: LocalTerminalId) -> SharedString {
     t!("terminal.local.title", number = id.0)
@@ -254,4 +270,32 @@ fn tab_menu(
         )
         .separator();
     close_tab_items(menu, CenterTab::LocalTerminal(id), group, panel, cx)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::short_title;
+
+    #[test]
+    fn a_programs_path_in_the_title_shows_as_its_name() {
+        for (title, shown) in [
+            (
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                "powershell",
+            ),
+            (r"C:\Windows\system32\cmd.exe", "cmd"),
+            (
+                r"C:\WINDOWS\system32\cmd.exe - ping  localhost",
+                "cmd - ping  localhost",
+            ),
+            (r"C:\Program Files\PowerShell\7\pwsh.exe", "pwsh"),
+            (r"管理员: C:\Windows\system32\cmd.exe", "管理员: cmd"),
+            // What is not a program's path stays.
+            ("xuz@mac: ~/src", "xuz@mac: ~/src"),
+            (r"D:\work", r"D:\work"),
+            ("vim notes.exe.txt", "vim notes.exe.txt"),
+        ] {
+            assert_eq!(short_title(title), shown, "{title}");
+        }
+    }
 }
