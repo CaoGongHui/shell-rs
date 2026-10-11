@@ -2,6 +2,19 @@
 
 每个版本一节，标题写成 `## [版本号]`，可以在后面加日期。发布流程（`.github/workflows/release.yml`）把与 tag 同版本的那一节原样作为更新说明：显示在 GitHub Release 和官网的更新日志里（ShellRS 的更新对话框用「查看更新内容」打开官网的更新日志），用 Markdown 书写，面向使用者。
 
+## [0.1.9-beta.1]
+
+### 新增
+
+- 设置 › 终端新增「本地终端」：可指定本地终端运行的 shell 和参数，下拉列出本机装的常用 shell。
+- 自定义快捷键可以用 Shift 加 Insert、Delete 等键，如 Shift+Insert 粘贴。
+
+### 改进
+
+- Windows 本地终端默认使用 PowerShell。
+- Windows 安装程序在中文系统上显示中文。
+- 应用图标大小与 macOS 上的其他应用一致。
+
 ## [0.1.8]
 
 ### 新增
