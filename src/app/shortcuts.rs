@@ -487,7 +487,7 @@ fn same_keystroke(a: &Keystroke, b: &Keystroke) -> bool {
 /// Why a key cannot be a shortcut.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Refusal {
-    /// A plain key: it would stop typing it.
+    /// A plain key, or Shift with one: it would stop typing it.
     NeedsModifier,
     /// 切换到标签 1…9 takes a modifier with a digit.
     NeedsDigit,
@@ -544,7 +544,10 @@ pub fn check(
             return Err(Refusal::NeedsDigit);
         }
         keystroke.key = "1".into();
-    } else if !held && !is_function_key(&keystroke.key) {
+    } else if !held
+        && !is_function_key(&keystroke.key)
+        && !(modifiers.shift && is_editing_key(&keystroke.key))
+    {
         return Err(Refusal::NeedsModifier);
     }
     let keys = keystroke.unparse();
@@ -583,10 +586,22 @@ pub fn check(
     Ok(keys)
 }
 
+/// F1–F12, which type nothing. The keys above F12 are left out: hardly a
+/// keyboard has them.
 fn is_function_key(key: &str) -> bool {
     key.strip_prefix('f')
         .and_then(|number| number.parse::<u8>().ok())
-        .is_some_and(|number| (1..=24).contains(&number))
+        .is_some_and(|number| (1..=12).contains(&number))
+}
+
+/// Keys that type nothing with Shift either, as Shift+Insert pastes on
+/// Windows and Linux. Shift with an arrow stays out: it selects text in a
+/// field, and programs in a terminal use it.
+fn is_editing_key(key: &str) -> bool {
+    matches!(
+        key,
+        "insert" | "delete" | "home" | "end" | "pageup" | "pagedown"
+    )
 }
 
 /// The keys of a shortcut, one cap each, in the platform's order: ⌃⌥⇧⌘
@@ -1042,7 +1057,18 @@ mod tests {
         assert_eq!(check(new_host, "j"), Err(Refusal::NeedsModifier));
         assert_eq!(check(new_host, "shift-j"), Err(Refusal::NeedsModifier));
         assert_eq!(check(new_host, "f5"), Ok("f5".into()));
+        assert_eq!(check(new_host, "f13"), Err(Refusal::NeedsModifier));
         assert_eq!(check(new_host, "alt-j"), Ok("alt-j".into()));
+        // Shift with a key that types nothing, as Shift+Insert pastes; alone
+        // such a key has its own work, and Shift with an arrow selects.
+        let paste = shortcut("terminal-paste");
+        assert_eq!(check(paste, "shift-insert"), Ok("shift-insert".into()));
+        assert_eq!(
+            check(new_host, "shift-pagedown"),
+            Ok("shift-pagedown".into())
+        );
+        assert_eq!(check(paste, "insert"), Err(Refusal::NeedsModifier));
+        assert_eq!(check(paste, "shift-up"), Err(Refusal::NeedsModifier));
         // Taken by another shortcut working anywhere.
         let terminal = shortcut("new-local-terminal");
         assert_eq!(
@@ -1051,6 +1077,11 @@ mod tests {
         );
         // A text field's key.
         assert_eq!(check(new_host, &primary("z")), Err(Refusal::Reserved));
+        let fixed = [KeyBinding::new("shift-home", NoAction, Some("Input"))];
+        assert_eq!(
+            super::check(new_host, &keys("shift-home"), &overrides, &fixed),
+            Err(Refusal::Reserved)
+        );
         // A terminal's key may also work anywhere, where it does something
         // else; inside a terminal the terminal's wins.
         let find = shortcut("terminal-find");
