@@ -239,6 +239,13 @@ fn shell_answer(behavior: FakeBehavior, typed: &[u8]) -> Option<Vec<u8>> {
     Some(answer.into_bytes())
 }
 
+/// Local terminals that start, and never print anything.
+pub fn fake_local_terminals() -> Arc<FixedLocalTerminalTransportProvider> {
+    Arc::new(FixedLocalTerminalTransportProvider::new(Arc::new(
+        FakeTerminalFactory::default(),
+    )))
+}
+
 pub fn open_workspace_with_remote_factory(
     cx: &mut TestAppContext,
     store: HostStore,
@@ -256,7 +263,7 @@ pub fn open_workspace_with_remote_factory(
                 store,
                 cx.new(|_| settings_store()),
                 remote,
-                Arc::new(FakeTerminalFactory::default()),
+                fake_local_terminals(),
                 Arc::new(FakeSftpProvider::default()),
                 Arc::new(FakeLocalDirectory::default()),
                 Arc::new(FakeConnectionTester::default()),

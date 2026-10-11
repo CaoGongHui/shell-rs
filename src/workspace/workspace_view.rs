@@ -67,10 +67,11 @@ use crate::sftp::{
 };
 use crate::shared::{commit_footer, confirm_danger, open_rename_tab_dialog};
 use crate::terminal::{
-    DEFAULT_FONT_SIZE, LocalPtyTransportFactory, LocalTerminalId, LocalTerminalPanel,
+    DEFAULT_FONT_SIZE, LocalPtyTransportProvider, LocalShell, LocalTerminalId, LocalTerminalPanel,
     LocalTerminalPanelEvent, RemoteTerminalId, SearchDirection,
-    SharedRemoteTerminalTransportProvider, SharedTerminalTransportFactory, TerminalLifecycle,
-    TerminalPanel, TerminalPanelEvent, TerminalView,
+    SharedLocalTerminalTransportProvider, SharedRemoteTerminalTransportProvider,
+    SharedTerminalTransportFactory, TerminalLifecycle, TerminalPanel, TerminalPanelEvent,
+    TerminalView,
 };
 use crate::update::{UpdateServices, Updater, UpdaterEvent};
 
@@ -179,7 +180,7 @@ pub struct Workspace {
     /// 匿名使用统计. Production only, like the CLI server: UI tests hand in
     /// one that only records.
     pub(super) analytics: Option<super::analytics::Reporting>,
-    local_terminal_factory: SharedTerminalTransportFactory,
+    local_terminal_provider: SharedLocalTerminalTransportProvider,
     remote_terminal_provider: SharedRemoteTerminalTransportProvider,
     sftp_provider: SharedSftpTransportProvider,
     pub(super) local_directory_provider: SharedLocalDirectoryProvider,
@@ -245,7 +246,7 @@ impl Workspace {
             store,
             settings,
             remote,
-            Arc::new(LocalPtyTransportFactory),
+            Arc::new(LocalPtyTransportProvider),
             sftp.clone(),
             Arc::new(SystemLocalDirectoryProvider),
             tester,
@@ -306,7 +307,7 @@ impl Workspace {
         store: Entity<HostStore>,
         settings: Entity<SettingsStore>,
         remote_terminal_provider: SharedRemoteTerminalTransportProvider,
-        local_terminal_factory: SharedTerminalTransportFactory,
+        local_terminal_provider: SharedLocalTerminalTransportProvider,
         sftp_provider: SharedSftpTransportProvider,
         local_directory_provider: SharedLocalDirectoryProvider,
         connection_tester: SharedConnectionTester,
@@ -540,7 +541,7 @@ impl Workspace {
             cli_server: None,
             updater,
             analytics: None,
-            local_terminal_factory,
+            local_terminal_provider,
             remote_terminal_provider,
             sftp_provider,
             local_directory_provider,
@@ -1164,8 +1165,8 @@ impl Workspace {
     ) {
         let id = LocalTerminalId(self.next_local_terminal_id);
         self.next_local_terminal_id += 1;
-        let (panel, subscription) =
-            new_local_terminal_panel(id, self.local_terminal_factory.clone(), window, cx);
+        let factory = self.local_terminal_factory(cx);
+        let (panel, subscription) = new_local_terminal_panel(id, factory, window, cx);
         self._subscriptions.push(subscription);
         let focus = panel.read(cx).focus_handle(cx);
         self._subscriptions.push(follow_focus(
@@ -1736,9 +1737,18 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(panel) = self.local_terminals.get(&action.0) {
-            panel.update(cx, |panel, cx| panel.restart(window, cx));
+        if let Some(panel) = self.local_terminals.get(&action.0).cloned() {
+            let factory = self.local_terminal_factory(cx);
+            panel.update(cx, |panel, cx| panel.restart(factory, window, cx));
         }
+    }
+
+    /// A transport for a local terminal starting now: the shell
+    /// 设置 › 终端 › 本地终端 names at this moment.
+    fn local_terminal_factory(&self, cx: &App) -> SharedTerminalTransportFactory {
+        let settings = self.settings.read(cx).settings();
+        let shell = LocalShell::new(settings.local_terminal.shell.as_deref().unwrap_or_default());
+        self.local_terminal_provider.factory_for(&shell)
     }
 
     /// The terminal of the center tab shown most recently, remote or local.

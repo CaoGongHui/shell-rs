@@ -88,9 +88,17 @@ impl LocalTerminalPanel {
         self.terminal.read(cx).status(cx)
     }
 
-    pub fn restart(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.terminal
-            .update(cx, |terminal, cx| terminal.restart(cx));
+    /// Start anew with `factory`, which runs the shell the settings name
+    /// now.
+    pub fn restart(
+        &mut self,
+        factory: SharedTerminalTransportFactory,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.terminal.update(cx, |terminal, cx| {
+            terminal.restart_with_factory(factory, cx)
+        });
         let focus = self.terminal.read(cx).focus_handle();
         window.focus(&focus, cx);
     }

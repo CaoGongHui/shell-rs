@@ -42,6 +42,9 @@ ShellRS（crate 与二进制都叫 `shellrs`）是 Xshell / WinSCP 式的 SSH �
   - 删除不确认：`hosts delete` 遇到有打开标签的主机报 `host_in_use`，`--force` 才关标签；删凭据时用它的主机改回自己登录。临时连接和外部连接只能 `show`。
   - `sync` 只从本机到主机，大小和修改时间都没变的跳过；`--delete` 不删 `.filepart` 和 `.shellrs-….backup`，本地读不了的目录不清理，拒绝同步到 `/`。
   - `exec --terminal`（`exec --json` 里 `"terminal": true`）：给只允许登录一次的堡垒机（外部连接上 exec 重新登录会被拒，另开通道又会断会话）。把命令打进这台主机已打开的远程终端（右侧栏跟的那个，否则最新已连接的），所有远程终端都能用，不限外部连接。先发 ^C，**不做忙碌检测**（用户定的：用的人有基础，交给 Agent 的标签由用户负责；别加回光标行、密码提示之类的检查），只拒绝备用屏和同一终端已有一次运行。只支持 Linux 上的 bash、dash、busybox ash。输出经管道（没有颜色和分页器）、stderr 并入；`--json` 多一项 `context`（user、host、cwd、shell、interp）。
+- **本地终端**：「设置 › 终端 › 本地终端 › Shell」是一个输入框（路径或命令加参数），右端下拉只列常用 shell 里装了的（Unix 是 `COMMON_SHELLS`：zsh、bash、sh、fish、nu、pwsh，从 `/etc/shells`、PATH 和 Homebrew 目录找；csh、ksh、dash 等不列，用户嫌长；Windows 是 pwsh、powershell、cmd），旁边「选择文件…」；这一行上下排（标题和说明在上，输入框占满整行）。新开和重启的本地终端生效，正在运行的不动。
+  - 留空是自动检测：Unix 是 `$SHELL` 或 passwd 里的登录 shell；Windows 优先 PowerShell 7，其次 Windows PowerShell，都没有才 cmd（用户定的：现代 Windows 应先 PowerShell）。
+  - 只写一个已知的 shell（`SHELL_NAMES`）时和默认一样按登录 shell 启动（`SHELL` 设成它、argv0 前加 `-`），否则 Homebrew 写在 `~/.zprofile` 的 PATH 就没了；带参数或不是 shell（如 `tmux`，它会在每个窗口起 `$SHELL`）的照写执行。
 - **开始页**：没有标签时显示「最近连接」。「快速连接」搜索保存的主机、回车连接；多选做好但关着（常量 `MULTIPLE`）。
 - **右侧栏**：窗口最右一列竖排的工具切换。
   - 显示规则：只跟着 SSH 远程终端出现，SFTP、本地终端、设置、开始页都不显示。它是工作区级的一份，开合和所选工具在所有终端间共用。默认收起，宽 320 px，只能往宽里拉。⌘⌥B / Ctrl+Alt+B 切换。
@@ -130,7 +133,7 @@ cargo test -- --ignored                     # 会读写真实钥匙串的测试�
   - `SshConnector`：所有登录都走它（终端、SFTP、exec、测试连接、端口转发、外部 CLI）。
   - 远程终端的传输：pty、系统探测、延迟、旁路 exec。
   - 代理握手；外部 CLI 用的 `run_command`。
-- `terminal/`：本地 PTY、驱动 `alacritty_terminal` 的引擎、`TerminalView`（网格、选区、查找、清屏）、关键字高亮（`highlight.rs`）、终端字体全局量、右侧栏工具共用的 `ExecTarget`。
+- `terminal/`：本地 PTY 和它跑的 shell（`local_shell.rs`：命令行拆分、已安装的 shell、Windows 的默认 shell）、驱动 `alacritty_terminal` 的引擎、`TerminalView`（网格、选区、查找、清屏）、关键字高亮（`highlight.rs`）、终端字体全局量、右侧栏工具共用的 `ExecTarget`。
 - `sftp/`：可注入的传输和本地目录接口、`RemotePath`、`RemoteFs` 协议适配、worker（批次、三次重连、空闲断网检测），以及：
   - `upload.rs` / `download.rs`：断点续传，续传记录由 `journal.rs` 管；
   - `operations.rs`：删除、重命名、新建、改权限；
@@ -353,6 +356,7 @@ cargo test -- --ignored                     # 会读写真实钥匙串的测试�
 
 - **查找条必须是终端 `div` 的兄弟**，不能是子元素，否则输入会被发给 shell；它还要 `.occlude()`。
 - **清屏只在本地模拟器里做**，全屏程序运行时不做。终端里的 ⌘K 是清屏，比全局的 `FocusSearch` 深一层，所以优先。
+- **本地终端每次打开、重启都向 `LocalTerminalTransportProvider` 要新的 factory**（同远程的 `factory_for`），带上当时设置里的 `LocalShell`；UI 测试注入 `FixedLocalTerminalTransportProvider`，它记下每次要的 shell。命令行在传输线程上解析（要查文件系统），拆不开（引号没配对）或起不来都报在终端里，报错里写着用户写的命令。
 - **终端字体走全局量 `TerminalFont`**（终端模块不依赖 settings），格子在下一帧 prepaint 时按新尺寸重排。
 - **终端颜色走全局量 `TerminalColors`**（`theme.rs`）：`settings::apply` 按当前外观设成那一栏选中的主题，系统外观变化时也重设。终端格子、边距、选区、链接、颜色查询（OSC 4 / 10 / 11 / 12）和设置里的两个预览都从它取，不用界面主题的 `background` / `foreground`；查找高亮仍用界面的 `warning`。主题的 `key` 存进 `settings.json`，发布后不能改；读不出或深浅不符的 key 退回该外观的默认。
 - **界面配色由所选主题推出**（`settings/app_theme.rs`）：从 gpui-kit 默认的浅色或深色主题出发重新着色。灰色按它在默认背景与文字之间的位置，换到该主题背景与文字之间；默认里用作可读文字的灰色（对比度 ≥ 4.5）至少保留该主题正文对比度的 80%（最高 4.5）。`base.*` 按名字换成对应的 ANSI 色，其余彩色按色相换；`.light` 和彩色的 `*foreground` 删掉，交给 gpui-kit 自己推。ShellRS Light（以及「界面跟随主题」关闭时的浅色，`TerminalThemeSettings::app_theme`）直接用 gpui-kit 的默认浅色主题；ShellRS Dark（以及关闭时的深色）是 gpui-kit 默认深色主题按 `SOFT_DARK` 把每级灰换成炭灰，彩色不动。`settings::apply` 按名字（`theme_name`）判断要不要重建，把结果放进 `Theme` 的浅色或深色槽再 `Theme::change`。

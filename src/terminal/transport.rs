@@ -1,9 +1,9 @@
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 
 use anyhow::Result;
 use async_channel::Sender;
 
-use super::TerminalSize;
+use super::{LocalShell, TerminalSize};
 use crate::connection::Latency;
 use crate::connection::{ConnectionPrompt, ConnectionPromptReply};
 use crate::host::{HostLogin, HostOs};
@@ -99,6 +99,50 @@ pub trait RemoteTerminalTransportProvider: Send + Sync + 'static {
 }
 
 pub type SharedRemoteTerminalTransportProvider = Arc<dyn RemoteTerminalTransportProvider>;
+
+/// Creates the factory of a local terminal for the shell the settings name,
+/// asked when it opens and when it restarts, so a changed setting reaches
+/// the next one. Like the remote provider, the workspace owns this boundary
+/// and UI tests inject a fake.
+pub trait LocalTerminalTransportProvider: Send + Sync + 'static {
+    fn factory_for(&self, shell: &LocalShell) -> SharedTerminalTransportFactory;
+}
+
+pub type SharedLocalTerminalTransportProvider = Arc<dyn LocalTerminalTransportProvider>;
+
+/// For tests: every local terminal gets the same factory, and the shells
+/// asked for are kept.
+pub struct FixedLocalTerminalTransportProvider {
+    factory: SharedTerminalTransportFactory,
+    shells: Mutex<Vec<LocalShell>>,
+}
+
+impl FixedLocalTerminalTransportProvider {
+    pub fn new(factory: SharedTerminalTransportFactory) -> Self {
+        Self {
+            factory,
+            shells: Default::default(),
+        }
+    }
+
+    /// The shell of each local terminal started, in order.
+    pub fn shells(&self) -> Vec<LocalShell> {
+        self.shells
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+}
+
+impl LocalTerminalTransportProvider for FixedLocalTerminalTransportProvider {
+    fn factory_for(&self, shell: &LocalShell) -> SharedTerminalTransportFactory {
+        self.shells
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(shell.clone());
+        self.factory.clone()
+    }
+}
 
 /// Provider useful for tests and embedders that want every host to use the
 /// same factory.

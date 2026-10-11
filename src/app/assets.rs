@@ -77,7 +77,8 @@ icon_assets!(
         Zap,
         ExternalLink,
         Highlighter,
-        GripVertical
+        GripVertical,
+        FileSearch
     ]
 );
 

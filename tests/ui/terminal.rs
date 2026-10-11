@@ -8,11 +8,24 @@ fn open_workspace_with_factory(
     cx: &mut TestAppContext,
     factory: Arc<FakeTerminalFactory>,
 ) -> (WindowHandle<Root>, Entity<Workspace>) {
+    open_workspace_with_local_terminals(
+        cx,
+        Arc::new(FixedLocalTerminalTransportProvider::new(factory)),
+        size(px(1280.), px(800.)),
+    )
+}
+
+/// With `local` asked for each local terminal's start.
+fn open_workspace_with_local_terminals(
+    cx: &mut TestAppContext,
+    local: Arc<FixedLocalTerminalTransportProvider>,
+    window_size: gpui_kit::Size<gpui_kit::Pixels>,
+) -> (WindowHandle<Root>, Entity<Workspace>) {
     init_app(cx);
     // Dialogs still, as in every fixture: see `open_workspace_with_tester`.
     cx.update(|cx| cx.set_reduce_motion(true));
     let mut workspace = None;
-    let handle = cx.open_window(size(px(1280.), px(800.)), |window, cx| {
+    let handle = cx.open_window(window_size, |window, cx| {
         let store = cx.new(|_| HostStore::seed());
         let remote = Arc::new(FixedRemoteTerminalTransportProvider::new(Arc::new(
             FakeTerminalFactory::default(),
@@ -22,7 +35,7 @@ fn open_workspace_with_factory(
                 store,
                 cx.new(|_| settings_store()),
                 remote,
-                factory.clone(),
+                local.clone(),
                 Arc::new(FakeSftpProvider::default()),
                 Arc::new(FakeLocalDirectory::default()),
                 Arc::new(FakeConnectionTester::default()),
@@ -140,6 +153,80 @@ async fn tab_keys_are_sent_to_the_focused_terminal(cx: &mut TestAppContext) {
         assert_eq!(window.find(("local-terminal", 1_u64)).focused(), Some(true));
     })
     .unwrap();
+}
+
+#[gpui_kit::test]
+async fn local_terminals_run_the_shell_the_settings_name(cx: &mut TestAppContext) {
+    let local = fake_local_terminals();
+    // Tall enough for the whole of 终端, whose groups the page's list
+    // draws only near the view.
+    let (handle, workspace) =
+        open_workspace_with_local_terminals(cx, local.clone(), size(px(1280.), px(1600.)));
+    let settings = cx.update(|cx| workspace.read(cx).settings().clone());
+
+    // Until one is named, the system's default shell.
+    in_frame(cx, handle, |window, cx| {
+        window.click("new-local-terminal", cx)
+    });
+    assert_eq!(local.shells(), [LocalShell::default()]);
+
+    // 终端 › 本地终端, the page's last group: the field is empty, and what
+    // is typed in it is the setting at once.
+    in_frame(cx, handle, |window, cx| window.click("open-settings", cx));
+    in_frame(cx, handle, |window, cx| {
+        window.within("settings").click("0-1", cx)
+    });
+    in_frame(cx, handle, |window, cx| {
+        // The field runs across the row under its title, 选择文件… at its
+        // end, inside the page.
+        let field = window.find("local-shell").bounds();
+        let choose = window.find("browse-local-shell").bounds();
+        let page = window.find("settings").bounds();
+        assert!(
+            field.size.width > page.size.width / 2.,
+            "{field:?} in {page:?}"
+        );
+        assert!(field.right() <= choose.left() && choose.right() <= page.right());
+        assert_eq!(window.find("local-shell").value(), Some(""));
+        window.click("local-shell", cx);
+        window.input("/bin/bash -l ", cx);
+    });
+    let shell =
+        |cx: &mut TestAppContext| cx.update(|cx| settings.read(cx).settings().local_terminal.shell);
+    assert_eq!(shell(cx).as_deref(), Some("/bin/bash -l"));
+    in_frame(cx, handle, |window, _| {
+        // The blank typed last stays in the field, ready for what follows.
+        assert_eq!(window.find("local-shell").value(), Some("/bin/bash -l "));
+    });
+
+    // The open terminal takes it when it restarts, a new one at once.
+    in_frame(cx, handle, |window, cx| {
+        window.click(("local-terminal-tab", 1_u64), cx)
+    });
+    in_frame(cx, handle, |window, cx| {
+        window.click(("restart-local-terminal-toolbar", 1_u64), cx)
+    });
+    in_frame(cx, handle, |window, cx| {
+        window.click("new-local-terminal", cx)
+    });
+    let bash = LocalShell::new("/bin/bash -l");
+    assert_eq!(
+        local.shells(),
+        [LocalShell::default(), bash.clone(), bash.clone()]
+    );
+
+    // Set back elsewhere (重置, the file read anew), the field follows.
+    settings.update(cx, |store, cx| {
+        store.update(|settings| settings.local_terminal.shell = None, cx)
+    });
+    in_frame(cx, handle, |window, cx| window.click("open-settings", cx));
+    in_frame(cx, handle, |window, _| {
+        assert_eq!(window.find("local-shell").value(), Some(""));
+    });
+    in_frame(cx, handle, |window, cx| {
+        window.click("new-local-terminal", cx)
+    });
+    assert_eq!(local.shells().last(), Some(&LocalShell::default()));
 }
 
 #[gpui_kit::test]
