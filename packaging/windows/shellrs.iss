@@ -15,6 +15,11 @@
   #define BuildDir "..\..\target\release"
 #endif
 #define IconFile AddBackslash(SourcePath) + "..\..\assets\logo\shellrs.ico"
+; Languages\ChineseSimplified.isl is UTF-8 without a BOM, and has the
+; messages of 6.5 onwards.
+#if Ver < EncodeVer(6, 5, 0)
+  #error Inno Setup 6.5 or later is needed
+#endif
 
 [Setup]
 AppId={{45D9E9F5-84BB-4B09-ABE8-1FFE107ACF96}
@@ -40,16 +45,20 @@ UninstallDisplayName=ShellRS
 ; A running ShellRS is closed through the Restart Manager rather than
 ; making the setup fail on files in use.
 CloseApplications=yes
+; The setup speaks the language Windows shows, without asking: Simplified
+; Chinese on a Chinese Windows, English on any other, as ShellRS itself.
+ShowLanguageDialog=no
 #if FileExists(IconFile)
 SetupIconFile={#IconFile}
 #endif
 
 [Languages]
-#if FileExists(AddBackslash(CompilerPath) + "Languages\ChineseSimplified.isl")
-Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
-#else
+; The first is the one for a language not listed.
 Name: "english"; MessagesFile: "compiler:Default.isl"
-#endif
+; Not among the translations Inno Setup installs, so kept here: issrc's
+; Files/Languages/Unofficial/ChineseSimplified.isl at is-6_7_1, the version
+; on the windows-2025 runner. Update it with Inno Setup.
+Name: "chinesesimplified"; MessagesFile: "Languages\ChineseSimplified.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
