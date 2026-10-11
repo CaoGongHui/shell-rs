@@ -48,6 +48,9 @@ CloseApplications=yes
 ; The setup speaks the language Windows shows, without asking: Simplified
 ; Chinese on a Chinese Windows, English on any other, as ShellRS itself.
 ShowLanguageDialog=no
+; Not the language of the copy it replaces: up to 0.1.9-beta.1 every setup
+; was English, which would otherwise stay with each installed copy.
+UsePreviousLanguage=no
 #if FileExists(IconFile)
 SetupIconFile={#IconFile}
 #endif
