@@ -14,7 +14,9 @@ fn main() {
         resource
             .set_icon("assets/logo/shellrs.ico")
             .set("ProductName", "ShellRS")
-            .set("FileDescription", "ShellRS");
+            .set("FileDescription", "ShellRS")
+            // Some bastion launchers require this resource to contain "Xshell".
+            .set("OriginalFilename", "ShellRS-Xshell.exe");
         if let Err(error) = resource.compile() {
             panic!("cannot embed the icon: {error}");
         }
