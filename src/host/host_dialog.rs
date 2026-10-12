@@ -1165,7 +1165,6 @@ impl Render for HostForm {
             .child(
                 Field::new()
                     .label(t!("host.dialog.name"))
-                    .required(!self.temporary)
                     .col_span(4)
                     .child(Input::new(&self.name).id("host-name").small()),
             )

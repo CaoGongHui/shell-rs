@@ -637,7 +637,6 @@ impl HostDraft {
 /// shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HostDraftError {
-    Name,
     Address,
     Port,
     NoJumpHosts,
@@ -649,7 +648,6 @@ pub enum HostDraftError {
 impl HostDraftError {
     pub fn message(self) -> SharedString {
         match self {
-            HostDraftError::Name => t!("host.draft.name"),
             HostDraftError::Address => t!("host.draft.address"),
             HostDraftError::Port => t!("host.draft.port"),
             HostDraftError::NoJumpHosts => t!("host.draft.no_jump_hosts"),
