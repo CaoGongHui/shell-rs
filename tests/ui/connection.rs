@@ -176,9 +176,8 @@ async fn authentication_prompt_is_masked_and_drives_connected_state(cx: &mut Tes
         window.find("status-connection").label() == Some("已连接 prompt-host")
             && window
                 .within(("terminal-tab", 1u64))
-                .find("connection-status")
-                .label()
-                == Some("已连接")
+                .try_find("connection-status")
+                .is_none()
     })
     .await;
 
@@ -511,24 +510,13 @@ async fn disconnecting_one_tab_leaves_the_other_tabs_of_its_host(cx: &mut TestAp
 
     cx.update_window(handle.into(), |_, window, cx| {
         window.render_frame(cx);
+        // Connected tabs carry no dot.
         for id in [INITIAL_WEB_TERMINAL, second.0] {
-            let tab = window.within(("terminal-tab", id));
-            let mark = tab.find(("terminal-tab-os", id)).bounds();
-            let dot = tab.find("connection-status").bounds();
-            let title = window.find(("terminal-tab", id)).bounds();
-            let close = window.find(("close-terminal", id)).bounds();
-            assert_eq!(mark.center().y, close.center().y);
-            let centers = dot.center() - mark.center();
-            let distance = (f32::from(centers.x).powi(2) + f32::from(centers.y).powi(2)).sqrt();
-            assert!(distance > f32::from(mark.size.width + dot.size.width) / 2.);
-            assert!(dot.right() < close.left());
-            assert_eq!(mark.center().y, title.center().y);
-            assert_eq!(
+            assert!(
                 window
                     .within(("terminal-tab", id))
-                    .find("connection-status")
-                    .label(),
-                Some("已连接")
+                    .try_find("connection-status")
+                    .is_none()
             );
         }
         window.dispatch_action(Box::new(DisconnectTerminal(second)), cx);
@@ -560,20 +548,24 @@ async fn disconnecting_one_tab_leaves_the_other_tabs_of_its_host(cx: &mut TestAp
 
     cx.update_window(handle.into(), |_, window, cx| {
         window.render_frame(cx);
-        assert_eq!(
+        assert!(
             window
                 .within(("terminal-tab", INITIAL_WEB_TERMINAL))
-                .find("connection-status")
-                .label(),
-            Some("已连接")
+                .try_find("connection-status")
+                .is_none()
         );
-        assert_eq!(
-            window
-                .within(("terminal-tab", second.0))
-                .find("connection-status")
-                .label(),
-            Some("未连接")
-        );
+        let tab = window.within(("terminal-tab", second.0));
+        assert_eq!(tab.find("connection-status").label(), Some("未连接"));
+        let mark = tab.find(("terminal-tab-os", second.0)).bounds();
+        let dot = tab.find("connection-status").bounds();
+        let title = window.find(("terminal-tab", second.0)).bounds();
+        let close = window.find(("close-terminal", second.0)).bounds();
+        assert_eq!(mark.center().y, close.center().y);
+        let centers = dot.center() - mark.center();
+        let distance = (f32::from(centers.x).powi(2) + f32::from(centers.y).powi(2)).sqrt();
+        assert!(distance > f32::from(mark.size.width + dot.size.width) / 2.);
+        assert!(dot.right() < close.left());
+        assert_eq!(mark.center().y, title.center().y);
         window.click(("terminal", second.0), cx);
         window.press("enter", cx);
     })
@@ -583,9 +575,8 @@ async fn disconnecting_one_tab_leaves_the_other_tabs_of_its_host(cx: &mut TestAp
         remote_lifecycle(&workspace, second, cx) == TerminalLifecycle::Running
             && window
                 .within(("terminal-tab", second.0))
-                .find("connection-status")
-                .label()
-                == Some("已连接")
+                .try_find("connection-status")
+                .is_none()
     })
     .await;
 }
@@ -619,9 +610,8 @@ async fn failed_connection_tab_reports_disconnected_then_recovers(cx: &mut TestA
         remote_lifecycle(&workspace, terminal_id, cx) == TerminalLifecycle::Running
             && window
                 .within(("terminal-tab", terminal_id.0))
-                .find("connection-status")
-                .label()
-                == Some("已连接")
+                .try_find("connection-status")
+                .is_none()
     })
     .await;
 }
@@ -1285,10 +1275,6 @@ fn connection_badge_preserves_icon_alignment_and_fits_the_tab(cx: &mut TestAppCo
                     let plain_mark = window.find(("layout-mark", 0u64)).bounds();
                     let mark = window.find(("layout-mark", 1u64)).bounds();
                     let close = window.find(("layout-close", 1u64)).bounds();
-                    let dot = window
-                        .within(("layout-title", 1u64))
-                        .find("connection-status")
-                        .bounds();
                     assert_eq!(title.size, plain.size, "badge must not affect title layout");
                     assert_eq!(mark.size, plain_mark.size, "badge must not shrink the icon");
                     assert_eq!(
@@ -1297,6 +1283,15 @@ fn connection_badge_preserves_icon_alignment_and_fits_the_tab(cx: &mut TestAppCo
                     );
                     assert_eq!(mark.center().y, close.center().y);
                     assert_eq!(mark.center().y, title.center().y);
+                    // A connection that is up is the normal state: no dot.
+                    let dot = window
+                        .within(("layout-title", 1u64))
+                        .try_find("connection-status");
+                    assert_eq!(dot.is_none(), state == ConnectionState::Connected);
+                    let Some(dot) = dot else {
+                        return;
+                    };
+                    let dot = dot.bounds();
                     let centers = dot.center() - mark.center();
                     let distance =
                         (f32::from(centers.x).powi(2) + f32::from(centers.y).powi(2)).sqrt();

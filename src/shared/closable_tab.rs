@@ -62,7 +62,9 @@ impl ClosableTabTitle {
     }
 
     /// Show this tab's own connection state, never its host's aggregate state.
-    /// Tabs that do not own a remote connection leave this unset.
+    /// Only a connection that is not up gets a dot, so a dot always means
+    /// something to look at. Tabs that do not own a remote connection leave
+    /// this unset.
     pub fn connection_state(mut self, state: ConnectionState) -> Self {
         self.connection_state = Some(state);
         self
@@ -97,13 +99,13 @@ impl RenderOnce for ClosableTabTitle {
         // The badge must not change the mark's layout box or baseline. Put
         // its center at the circular mark's lower-right corner: the two
         // circles remain separate without shifting the icon or title text.
-        let leading = match self.connection_state {
-            Some(state) => {
-                let color = match state {
-                    ConnectionState::Connected => cx.theme().success,
-                    ConnectionState::Connecting => cx.theme().warning,
-                    ConnectionState::Disconnected => cx.theme().danger,
-                };
+        let status = self.connection_state.and_then(|state| match state {
+            ConnectionState::Connected => None,
+            ConnectionState::Connecting => Some((state, cx.theme().warning)),
+            ConnectionState::Disconnected => Some((state, cx.theme().danger)),
+        });
+        let leading = match status {
+            Some((state, color)) => {
                 let label = state.label();
                 div()
                     .relative()

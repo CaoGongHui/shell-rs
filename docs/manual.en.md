@@ -192,7 +192,7 @@ Remote terminal tabs and SFTP tabs use the host’s system badge as their icon (
 
 ## Terminal
 
-Remote terminal and SFTP tabs show their own connection state with a status dot and text tooltip. After a remote connection fails, exits, is disconnected or has authentication cancelled, press an unmodified Enter with the terminal focused to reconnect that tab using the current host settings. Held keys, pasted input, search fields and authentication fields do not trigger reconnection. Local terminals retain their restart action.
+Remote terminal and SFTP tabs show their own connection state: a yellow dot at the lower right of the icon while connecting, a red one when disconnected, and none when connected; hover over the dot to see the state in words. After a remote connection fails, exits, is disconnected or has authentication cancelled, press an unmodified Enter with the terminal focused to reconnect that tab using the current host settings. Held keys, pasted input, search fields and authentication fields do not trigger reconnection. Local terminals retain their restart action.
 
 The terminal’s context menu has “Copy”, “Paste”, “Find…” and “Clear screen”; a remote terminal’s also has “Open SFTP”, “Reconnect” and “Disconnect”. “Disconnect” disconnects only this tab: the tab stays and can reconnect at any time, and other tabs and SFTP for the same host aren’t affected. Settings › Terminal › Interaction can make right-click paste or do nothing instead, and can turn on “Copy on select”.
 
