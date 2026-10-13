@@ -330,6 +330,76 @@ async fn sftp_size_column_shows_kilobytes_until_another_format_is_chosen(cx: &mu
     }
 }
 
+/// 设置 › SFTP › 图标风格: the app's monochrome icons until color is chosen,
+/// then color ones in the lists, links included, and in the page's preview.
+/// Menus are not driven here: the dropdown's item writes the settings store,
+/// so the test writes it the same way.
+#[gpui_kit::test]
+async fn sftp_lists_take_color_icons_once_chosen_in_the_settings(cx: &mut TestAppContext) {
+    use shellrs::explorer::FileIconStyle;
+    let provider = Arc::new(FakeSftpProvider::default());
+    let (handle, workspace) = open_workspace_with_sftp(cx, provider);
+    open_test_explorer(cx, handle).await;
+    let colored = |cx: &mut TestAppContext, name: &str| {
+        in_frame(cx, handle, |window, _| {
+            window
+                .within(("remote-pane", SFTP_TAB))
+                .within(ElementId::Name(format!("name:{name}").into()))
+                .try_find("color-icon")
+                .is_some()
+        })
+    };
+    let rows = ["..", "目录", "链接目录", "文件 甲.txt"];
+    for row in rows {
+        assert!(!colored(cx, row), "{row}");
+    }
+
+    let settings = cx.update(|cx| workspace.read(cx).settings().clone());
+    cx.update(|cx| {
+        settings.update(cx, |settings, cx| {
+            settings.update(
+                |settings| settings.file_icon_style = FileIconStyle::Color,
+                cx,
+            )
+        })
+    });
+    cx.run_until_parked();
+    for row in rows {
+        assert!(colored(cx, row), "{row}");
+    }
+
+    in_frame(cx, handle, |window, cx| window.click("open-settings", cx));
+    // SFTP comes right after 终端.
+    in_frame(cx, handle, |window, cx| {
+        window.within("settings").click("0-2", cx)
+    });
+    in_frame(cx, handle, |window, _| {
+        assert_eq!(appearance_dropdown(window, 0).as_deref(), Some("彩色"));
+        // The plain folder and file side by side first, then named ones.
+        let origin = |window: &mut gpui_kit::Window, id: &str| {
+            window
+                .within("file-icon-preview")
+                .find(ElementId::Name(format!("preview:{id}").into()))
+                .bounds()
+                .origin
+        };
+        let (folder, file) = (origin(window, "folder"), origin(window, "file"));
+        assert_eq!(folder.y, file.y);
+        assert!(folder.x < file.x);
+        assert!(folder.y < origin(window, ".config").y);
+        for id in ["folder", "file", ".bashrc"] {
+            assert!(
+                window
+                    .within("file-icon-preview")
+                    .within(ElementId::Name(format!("preview:{id}").into()))
+                    .try_find("color-icon")
+                    .is_some(),
+                "{id}"
+            );
+        }
+    });
+}
+
 /// 显示隐藏文件 is a switch for each side on its own, saved like the size
 /// format and off at first: a side's toolbar button and the key turn it on
 /// and off, its icon and tooltip follow, and a hidden file leaves the

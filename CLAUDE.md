@@ -17,7 +17,7 @@ ShellRS（crate 与二进制都叫 `shellrs`）是 Xshell / WinSCP 式的 SSH �
 用户定过的事，不要改回去。细节以 `docs/manual.md` 和代码为准。
 
 - **界面语言**：「设置 › 外观 › 界面语言」有跟随系统（默认：中文系统用简体中文，其余用英文，系统没说时用中文）、简体中文、English。改了立刻生效，不用重启。老用户的 settings.json 里已存着 `zh-CN`，不迁移。框架用 gpui-kit 自带的 `rust-i18n`，不另引 Fluent 之类。
-- **SFTP**：Dock 标签，每次「打开 SFTP」新开一个、各自连接。操作对标 WinSCP Commander：两行工具栏、路径标签、WinSCP 的列、高亮多选、「名称」格才是项目、框选。本地侧与远程侧对称，本地删除进废纸篓；书签按主机、按侧持久化。传输进行中还能再发起，新批次在标签底部的传输队列里排队，不做前台进度对话框。大小列默认整 KB，右键列标题可切换。「显示隐藏文件」（`.` 开头的）本地、远程各一个开关、互不影响，每侧对所有标签生效，存进设置，默认不显示；工具栏用睁眼 / 闭眼两个图标表示状态，不用选中效果；显示时隐藏文件的文字浅一些。SFTP 标签暂不做目录同步（外部 CLI 有 `shellrs sync`）、过滤、查找、目录树和 Dock 布局持久化。
+- **SFTP**：Dock 标签，每次「打开 SFTP」新开一个、各自连接。操作对标 WinSCP Commander：两行工具栏、路径标签、WinSCP 的列、高亮多选、「名称」格才是项目、框选。本地侧与远程侧对称，本地删除进废纸篓；书签按主机、按侧持久化。传输进行中还能再发起，新批次在标签底部的传输队列里排队，不做前台进度对话框。大小列默认整 KB，右键列标题可切换。「显示隐藏文件」（`.` 开头的）本地、远程各一个开关、互不影响，每侧对所有标签生效，存进设置，默认不显示；工具栏用睁眼 / 闭眼两个图标表示状态，不用选中效果；显示时隐藏文件的文字浅一些。文件图标默认单色（gpui-kit 规范：一个产品一套图标）；用户反馈后加了「设置 › SFTP › 图标风格」可换彩色（对标 WinSCP / Xftp），只管文件列表和传输确认框里的文件图标，工具栏、路径标签不变。彩色取自 Material Icon Theme（MIT），只带服务器、项目、主目录常见的约 160 个，普通文件夹改成黄色（它本身的蓝灰太像单色）；Linux 的 `/dev`、`/media` 不按它的项目含义配图标。SFTP 标签暂不做目录同步（外部 CLI 有 `shellrs sync`）、过滤、查找、目录树和 Dock 布局持久化。
 - **主机树**：搜索匹配主机（名称、地址、用户）和分组名；分组名匹配时列出整个分组，回车只连本身匹配的第一台主机（按树的顺序）。首次启动是空库；分组可任意嵌套，主机可以不属于分组；删除分组连同子分组和主机，确认框写明数量。
 - **主机对话框**：
   - 认证方式三选一：「密码」（留空就每次连接时询问，不悄悄试密钥）、「使用凭据」、「无密码」（依次试服务器免认证、SSH Agent、`~/.ssh` 默认私钥，服务器要密码就报错、不询问）。主机自己没有私钥文件，要用私钥就建密钥凭据。
@@ -85,7 +85,7 @@ ShellRS（crate 与二进制都叫 `shellrs`）是 Xshell / WinSCP 式的 SSH �
   - 只收主要功能（含新加的下一个 / 上一个 / 切换到标签 1…9），不收 SFTP 文件列表、图片预览的键和 Enter、方向键、Tab、Esc 这类固定键。
   - 每行：按键（点了录制「按下组合键」，Esc 或失焦放弃）、禁用、恢复默认。键要带 ⌘ / Ctrl / Alt，或是 F1–F12（F12 以上不收，用户定的），或是 Shift 加 Insert、Delete、Home、End、PageUp、PageDown（Shift+Insert 粘贴；提示文字不提这条，只写 F1–F12）；撞上同一处的另一个快捷键或输入框等内置键就拒绝并提示占用者，不抢、不允许重复。
   - 存在 `settings.json` 的 `shortcuts`，只存和默认不同的（`null` 是禁用）。`Shortcut` 的 `id` 一经发布不能改。
-- **关键字高亮**：设置左栏单独一个分类，排在「终端」下面，三组：常规（总开关）、预览（当前终端主题下的示例输出）、规则（N）。规则存在 `settings.json`，所有终端共用。
+- **关键字高亮**：设置左栏单独一个分类，排在「SFTP」下面（左栏依次是外观、终端、SFTP、关键字高亮…），三组：常规（总开关）、预览（当前终端主题下的示例输出）、规则（N）。规则存在 `settings.json`，所有终端共用。
   - 规则表在行里直接改，不弹对话框：拖动把手（一直显示，只有把手能拖）、启用、正则表达式、备注、颜色（gpui-kit `ColorPicker` 加 `#rrggbb` 输入框）、通知、删除（不确认）。规则都是正则，区分大小写；颜色是用户数据，任意 RGB，不跟主题；不做加粗。重叠时靠前的优先。
   - 总开关默认关闭。首次（文件里没有这一项）预置三条示例：ERROR 红、WARN 琥珀、IPv4 蓝，各自启用、都不通知，打开总开关就能用；用户删光后保持为空。空的新行照样保存。
   - 通知同响铃：看不到那个终端才提醒，同一终端 10 秒一次，标题用备注。全屏程序（备用屏）里不高亮也不通知。
@@ -141,7 +141,8 @@ cargo test -- --ignored                     # 会读写真实钥匙串的测试�
   - `edit.rs`：编辑器和预览的整文件读写。
 - `explorer/`：SFTP 标签的界面：两侧面板、列表、路径标签、各种对话框、传输队列，以及：
   - `file_edit.rs`：给编辑器和预览读写文件；
-  - `preview.rs` / `image_preview.rs`：预览对话框和可缩放的图片。
+  - `preview.rs` / `image_preview.rs`：预览对话框和可缩放的图片；
+  - `file_icons.rs`：文件图标 `FileIcon`（按设置画单色或彩色），彩色的匹配表 `file_icons_table.rs` 和 `assets/icons/files/` 由 `scripts/file_icons.py` 从 Material Icon Theme 生成，不手改。
 - `editor/`：编辑器标签（`EditorPanel`），语言、缩进和状态栏文字是 `model.rs` 的纯函数。
 - `forward/`：端口转发的运行（`ForwardManager`、每条规则一个工作线程、SOCKS 解析）和界面。`credential/`：凭据的界面。
 - `monitor/`、`netstat/`、`processes/`、`services/`、`docker/`、`history/`、`snippets/`：右侧栏的七个工具。各自是「命令（`linux.rs` 等）+ 纯解析和模型（`model.rs`）+ 面板」，确认和通知在工作区。
@@ -211,7 +212,8 @@ cargo test -- --ignored                     # 会读写真实钥匙串的测试�
 | 显示隐藏文件 | Show hidden files |
 | 废纸篓 | macOS 写 Trash，Windows 写 Recycle Bin |
 | 右侧栏七个工具 | Snippets / History / Docker / Services / Processes / Network / Monitor |
-| 设置七类（外观、终端、关键字高亮、键盘快捷键、外部 CLI、应用、关于） | Appearance / Terminal / Highlighting / Keyboard shortcuts / External CLI / General / About |
+| 设置八类（外观、终端、SFTP、关键字高亮、键盘快捷键、外部 CLI、应用、关于） | Appearance / Terminal / SFTP / Highlighting / Keyboard shortcuts / External CLI / General / About |
+| 图标风格：单色 / 彩色 | Icon style: Monochrome / Color |
 | 应用更新 / 稳定版 / 重启并安装 / 查看更新内容 | Updates / Stable / Restart to update / What’s new |
 | 连接 / 断开连接 / 重新连接 | Connect / Disconnect / Reconnect |
 | 已连接 / 未连接 / 连接中 | Connected / Not connected / Connecting |
@@ -249,7 +251,7 @@ cargo test -- --ignored                     # 会读写真实钥匙串的测试�
 - **gpui-kit 的 `Settings` 把选中的分类放在元素状态里**，标签切走、不再绘制时就丢了，切回来回到第一类。设置页靠页头的 `title_suffix`（只给正在显示的页绘制）记下当前分类，再经 `default_selected_index` 恢复；页内滚动位置不保留。
 - **`Select` 必须放进有尺寸的容器**，否则会盖住整行。`ListItem` 里会增长的文字要 `w_0().flex_grow(1.).overflow_x_hidden()`，否则会把 `suffix` 挤出去。
 - **`ColorPicker` 要自己给常用色**（`featured_colors`）：默认的第一行是主题色，它们也在下面的调色板里。gpui-kit 按十六进制给色块起 id，同一颜色出现两格就是重复的无障碍节点，调试版在辅助技术（或借助它的窗口管理工具）连着时直接 panic；测试平台不建无障碍树，测不出来。常用色不能取调色板（shadcn 的 stone、red … pink）里的颜色。
-- **要彩色就不能用 `Icon`**：它把 SVG 当成单色遮罩画。系统徽章是「主题色圆底 + 单色 logo」。
+- **要彩色就不能用 `Icon`**：它把 SVG 当成单色遮罩画。系统徽章是「主题色圆底 + 单色 logo」。彩色的 SFTP 文件图标用 `img` 画；GPUI 把 SVG 图片按它自身尺寸的 2 倍栅格化，所以脚本把每个图标的宽高写成 16。
 - **`px(..)` 只用在 API 要 `Pixels` 的地方**，其余用 rem 助手和 `cx.theme()` 的 token。
 - **快捷键改了要重建整个 keymap**（`app/shortcuts.rs`）：GPUI 不能删单条绑定，`clear_key_bindings` 又会清掉 gpui-kit 在 `gpui_kit::init` 里注册的输入框、对话框、列表等绑定且无法重新注册。所以 `app::init` 先存 gpui-kit 绑定的快照，`apply_shortcuts` 每次按「快照 → 可改的通用键 → 固定的通用键 → 带上下文的键（可改的、固定的）」重绑。
   - 同一按键上下文越深越优先，深度相同后加的赢，所以带上下文的必须排在通用的后面（终端的 ⌘K、预览的 ⌘= 靠这个）。新加固定键放进 `fixed_*_bindings`，可改的放进 `SHORTCUTS`。
