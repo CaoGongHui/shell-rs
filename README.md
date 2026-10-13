@@ -53,6 +53,7 @@ Hosts, groups, credentials and forwarding rules live in a local SQLite database.
 - Network connections, processes and services: search and filter, process details, ending processes, starting, stopping and restarting systemd services, switching them on at boot, and their logs. These three and the monitor are for Linux only.
 - Docker: containers grouped by compose project, with start, stop, restart, details and logs, plus volumes, images and networks. When not root, passwordless sudo is used (for services as well).
 - Command history reads `~/.bash_history` on the host, and snippets, shared by every host, can be sorted into categories; click one to type it into the terminal, or run it straight away.
+- Files: a single remote file list beside the terminal, on an SFTP channel of the terminal's own connection. Browse, edit and preview, drop files in to upload, and download to your Downloads folder.
 
 **SFTP**
 

@@ -383,6 +383,7 @@ pub enum ToolKind {
     #[default]
     Snippets,
     History,
+    Files,
     Docker,
     Services,
     Processes,
@@ -391,9 +392,10 @@ pub enum ToolKind {
 }
 
 impl ToolKind {
-    pub const ALL: [ToolKind; 7] = [
+    pub const ALL: [ToolKind; 8] = [
         ToolKind::Snippets,
         ToolKind::History,
+        ToolKind::Files,
         ToolKind::Docker,
         ToolKind::Services,
         ToolKind::Processes,

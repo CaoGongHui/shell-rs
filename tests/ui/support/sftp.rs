@@ -27,6 +27,8 @@ pub struct FakeSftpProvider {
     pub reads: Arc<Mutex<Vec<String>>>,
     /// The editor's writes: path, bytes and the stamp the file had to have.
     pub writes: FakeWrites,
+    /// The transports made for a terminal's 文件 rather than an SFTP tab.
+    pub on_terminal: Arc<Mutex<usize>>,
 }
 
 impl FakeSftpProvider {
@@ -60,8 +62,16 @@ pub fn fake_stamp(bytes: &[u8], modified: u32) -> FileStamp {
 }
 
 impl SftpTransportProvider for FakeSftpProvider {
-    fn create(&self, _: &HostLogin) -> Box<dyn SftpTransport> {
+    fn create(&self, _: &HostLogin, route: SftpRoute) -> Box<dyn SftpTransport> {
+        let terminal = match route {
+            SftpRoute::Login => None,
+            SftpRoute::Terminal(channels) => {
+                *self.on_terminal.lock().unwrap() += 1;
+                Some(channels)
+            }
+        };
         Box::new(FakeSftpTransport {
+            terminal,
             requests: self.requests.clone(),
             downloads: self.downloads.clone(),
             operations: self.operations.clone(),
@@ -81,6 +91,8 @@ impl SftpTransportProvider for FakeSftpProvider {
 }
 
 pub struct FakeSftpTransport {
+    /// Connects through this terminal's channel rather than logging in.
+    pub terminal: Option<shellrs::terminal::TerminalChannels>,
     pub requests: Arc<Mutex<Vec<UploadRequest>>>,
     pub downloads: Arc<Mutex<Vec<shellrs::sftp::DownloadRequest>>>,
     pub operations: Arc<Mutex<Vec<shellrs::sftp::RemoteOperation>>>,
@@ -104,9 +116,26 @@ impl SftpTransport for FakeSftpTransport {
         if let Some(hold) = &self.hold {
             let _ = hold.recv();
         }
-        events.send_blocking(SftpEvent::Connected {
-            home: RemotePath::new(self.home)?,
-        })?;
+        // On a terminal's channel the connection is up when the terminal
+        // opens one, as the real engine's is.
+        let connect = |home: &str| -> anyhow::Result<()> {
+            let opened = match &self.terminal {
+                None => Ok(()),
+                Some(terminal) => match terminal.open_sftp().blocking_recv() {
+                    Ok(Ok(_)) => Ok(()),
+                    Ok(Err(refusal)) => Err(refusal),
+                    Err(_) => Err("终端未连接".to_string()),
+                },
+            };
+            match opened {
+                Ok(()) => events.send_blocking(SftpEvent::Connected {
+                    home: RemotePath::new(home)?,
+                })?,
+                Err(reason) => events.send_blocking(SftpEvent::Disconnected(reason))?,
+            }
+            Ok(())
+        };
+        connect(self.home)?;
         // As in the real engine, 继续 goes on with a stopped batch, and with
         // none it only reconnects.
         let mut stopped = false;
@@ -246,9 +275,7 @@ impl SftpTransport for FakeSftpTransport {
                 }
                 SftpCommand::Resume => {
                     *self.reconnects.lock().unwrap() += 1;
-                    events.send_blocking(SftpEvent::Connected {
-                        home: RemotePath::new("/home/tester")?,
-                    })?;
+                    connect("/home/tester")?;
                     events.send_blocking(SftpEvent::Idle)?;
                 }
                 SftpCommand::Answer { answer, .. } => {
@@ -279,6 +306,8 @@ pub struct FakeLocalDirectory {
     pub files: Arc<Mutex<std::collections::BTreeMap<std::path::PathBuf, Vec<u8>>>>,
     /// The places it offers, such as a drive plugged in.
     pub places: Arc<Mutex<Vec<(shellrs::sftp::Place, std::path::PathBuf)>>>,
+    /// The folders listed, in order.
+    pub listed: Arc<Mutex<Vec<std::path::PathBuf>>>,
 }
 
 impl FakeLocalDirectory {
@@ -292,7 +321,11 @@ impl LocalDirectoryProvider for FakeLocalDirectory {
     fn home(&self) -> std::path::PathBuf {
         "/local/tester".into()
     }
+    fn downloads(&self) -> std::path::PathBuf {
+        "/local/tester/Downloads".into()
+    }
     fn list(&self, path: &std::path::Path) -> anyhow::Result<DirectoryListing> {
+        self.listed.lock().unwrap().push(path.to_path_buf());
         Ok(fake_listing(path.to_str().unwrap()))
     }
     fn places(&self) -> Vec<(shellrs::sftp::Place, std::path::PathBuf)> {

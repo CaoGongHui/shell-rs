@@ -198,6 +198,12 @@ workspace.unsaved.close_sftp_title:
 workspace.unsaved.close_sftp:
   zh-CN: "%{files}有未保存的修改，关闭 SFTP 标签会一起关掉它们，修改会丢失。"
   en: Closing the SFTP tab also closes %{files}. Unsaved changes will be lost.
+workspace.unsaved.close_terminal_title:
+  zh-CN: 关闭终端？
+  en: Close the terminal?
+workspace.unsaved.close_terminal:
+  zh-CN: "%{files}有未保存的修改，关闭终端会一起关掉它们，修改会丢失。"
+  en: Closing the terminal also closes %{files}. Unsaved changes will be lost.
 workspace.unsaved.discard_and_close:
   zh-CN: 放弃修改并关闭
   en: Discard changes and close

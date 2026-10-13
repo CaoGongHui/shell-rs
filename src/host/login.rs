@@ -45,8 +45,8 @@ pub struct HostLogin {
     /// How the connection reaches the host.
     pub route: LoginRoute,
     /// The connection carries the terminal and nothing beside it: no
-    /// channel of its own for the system probe or the right sidebar's
-    /// commands. A bastion host that opened ShellRS with a link serves one
+    /// channel of its own for the system probe, the right sidebar's
+    /// commands or its 文件. A bastion host that opened ShellRS with a link serves one
     /// session per connection and ends it when another channel comes and
     /// goes, as Xshell and OpenSSH never make it do.
     pub shell_only: bool,

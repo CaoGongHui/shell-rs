@@ -656,8 +656,17 @@ impl Workspace {
         let terminal = self.tool_terminal(cx);
         let offered = self.offered_tools(cx).contains(&self.tools.read(cx).tool());
         let open = self.tool_sidebar_wanted && terminal.is_some() && offered;
-        self.tools
-            .update(cx, |tools, cx| tools.set_terminal(terminal, open, cx));
+        // A terminal's 文件 is made the first time it is shown, and kept.
+        let files = match &terminal {
+            Some(terminal) if open && self.tools.read(cx).tool() == ToolKind::Files => {
+                self.ensure_file_sidebar(terminal.id, window, cx)
+            }
+            _ => None,
+        };
+        self.tools.update(cx, |tools, cx| {
+            tools.set_files(files, window, cx);
+            tools.set_terminal(terminal, open, cx);
+        });
         if self.dock_area.read(cx).is_dock_open(DockPlacement::Right) != open {
             // A focus inside the sidebar would go off screen with it.
             let focus_inside = self

@@ -33,8 +33,9 @@ use super::notices::{NoticeScanner, ProgramNotice, TerminalNotice};
 use super::run::{BusyReason, RunFailure, RunHandle};
 use super::search::{MatchMarker, SearchDirection, SearchMark, SearchPosition, TerminalSearch};
 use super::{
-    ExecRequest, ExecResult, SharedTerminalTransportFactory, TerminalColors, TerminalLifecycle,
-    TerminalSize, TerminalStatus, TerminalTransportCommand, TerminalTransportEvent,
+    ExecRequest, ExecResult, SharedTerminalTransportFactory, TerminalChannels, TerminalColors,
+    TerminalLifecycle, TerminalSize, TerminalStatus, TerminalTransportCommand,
+    TerminalTransportEvent,
 };
 
 pub type AlacrittyTerm = Term<TerminalEventProxy>;
@@ -103,6 +104,9 @@ pub struct TerminalEngine {
     /// lines against them; swapped when the settings change them.
     highlights: SharedHighlights,
     _highlights_observer: gpui_kit::Subscription,
+    /// Where channels beside the shell open: the current runtime's
+    /// connection, attached on every start.
+    channels: TerminalChannels,
     reconnect_on_enter: bool,
     generation: u64,
     size: TerminalSize,
@@ -126,6 +130,8 @@ impl TerminalEngine {
             event_sender.clone(),
             highlights.clone(),
         );
+        let channels = TerminalChannels::default();
+        channels.attach(runtime.commands.clone());
         let highlights_observer = cx.observe_global::<TerminalHighlights>(|this, cx| {
             *this
                 .highlights
@@ -143,6 +149,7 @@ impl TerminalEngine {
             url_search: RefCell::new(url_search()),
             highlights,
             _highlights_observer: highlights_observer,
+            channels,
             reconnect_on_enter: false,
             generation,
             size,
@@ -269,6 +276,7 @@ impl TerminalEngine {
             self.event_sender.clone(),
             self.highlights.clone(),
         );
+        self.channels.attach(self.runtime.commands.clone());
         cx.notify();
     }
 
@@ -289,12 +297,14 @@ impl TerminalEngine {
         self.generation = self.generation.saturating_add(1);
         self.lifecycle = TerminalLifecycle::Closing;
         self.runtime.shutdown();
+        self.channels.detach();
         cx.notify();
     }
 
     pub fn stop(&mut self, message: &str, cx: &mut gpui_kit::Context<Self>) {
         self.generation = self.generation.saturating_add(1);
         self.runtime.shutdown();
+        self.channels.detach();
         append_message(&self.runtime.term, message);
         self.append_reconnect_hint();
         self.lifecycle = TerminalLifecycle::Exited {
@@ -504,6 +514,11 @@ impl TerminalEngine {
     /// possibly to another machine.
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// Where channels beside the shell open, now and after every reconnect.
+    pub fn channels(&self) -> TerminalChannels {
+        self.channels.clone()
     }
 
     /// Run `command` beside the shell, on the terminal's own connection; see

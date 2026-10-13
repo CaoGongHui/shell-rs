@@ -191,6 +191,11 @@ pub struct FilePane {
     listed: bool,
     connection: ConnectionState,
     transfer_enabled: bool,
+    /// The right sidebar's remote pane: a narrow list, no 目录列表 or 查找,
+    /// an upload button of its own (no local pane to upload from), and what
+    /// went wrong in its own status line, since the window's follows the
+    /// terminal.
+    compact: bool,
     /// A file operation on this pane is running.
     busy: bool,
     store: Entity<HostStore>,
@@ -289,6 +294,7 @@ impl FilePane {
                 ConnectionState::Connecting
             },
             transfer_enabled: false,
+            compact: false,
             busy: false,
             store,
             dispatch,
@@ -475,6 +481,15 @@ impl FilePane {
     pub fn select_after_load(&mut self, name: String) {
         self.select_after_load = Some(name);
     }
+    /// Fit the right sidebar; see `compact`.
+    pub(super) fn set_compact(&mut self, cx: &mut Context<Self>) {
+        self.compact = true;
+        self.table.update(cx, |table, cx| {
+            table.delegate_mut().set_compact();
+            table.refresh(cx);
+        });
+        cx.notify();
+    }
     fn sync_listing(&mut self, cx: &mut Context<Self>) {
         let context = ListingContext {
             explorer: self.explorer,
@@ -544,7 +559,10 @@ impl FilePane {
     /// wrong goes to the window's status line instead, see `problem`.
     fn render_status(&self, file_count: usize, selected: usize, cx: &App) -> impl IntoElement {
         let hidden = self.table.read(cx).delegate().hidden_count();
-        let status: SharedString = if self.connection == ConnectionState::Connecting {
+        let problem = self.error.as_ref().filter(|_| self.compact);
+        let status: SharedString = if let Some(problem) = problem {
+            problem.clone().into()
+        } else if self.connection == ConnectionState::Connecting {
             t!("explorer.list.connecting")
         } else if let Some(name) = &self.opening {
             t!("explorer.status.opening", name = name)
@@ -571,8 +589,13 @@ impl FilePane {
             .border_t_1()
             .border_color(cx.theme().border)
             .text_xs()
-            .text_color(cx.theme().muted_foreground)
-            .child(status)
+            .text_color(if problem.is_some() {
+                cx.theme().danger
+            } else {
+                cx.theme().muted_foreground
+            })
+            // A long reason wraps rather than running off the sidebar.
+            .child(div().min_w_0().child(status))
     }
 
     /// Pressing a row that is not selected selects it alone at once, as in
@@ -847,6 +870,7 @@ impl FilePane {
             can_modify: self.takes_commands() && !self.busy,
             can_transfer: self.transfer_enabled,
             show_hidden: ShowHiddenFiles::get(self.side, cx),
+            finds: self.is_remote() && !self.compact,
         }
     }
 }
@@ -941,17 +965,20 @@ impl Render for FilePane {
         };
         let navigation = toolbar()
             // `Select` fills its parent (`size_full`), so it needs a sized
-            // box of its own or it covers the whole toolbar row.
-            .child(
-                div().w(rems(10.)).flex_shrink_0().child(
-                    Select::new(&self.path_select)
-                        .id("path-select")
-                        .small()
-                        .menu_width(rems(18.))
-                        .accessibility_label(self.side.directory_select_name())
-                        .disabled(!navigable),
-                ),
-            )
+            // box of its own or it covers the whole toolbar row. Too wide for
+            // the sidebar, where the path label opens 打开目录 instead.
+            .when(!self.compact, |row| {
+                row.child(
+                    div().w(rems(10.)).flex_shrink_0().child(
+                        Select::new(&self.path_select)
+                            .id("path-select")
+                            .small()
+                            .menu_width(rems(18.))
+                            .accessibility_label(self.side.directory_select_name())
+                            .disabled(!navigable),
+                    ),
+                )
+            })
             // WinSCP's 打开目录/书签 button; its menu jumps straight to a
             // bookmark.
             .child({
@@ -1058,7 +1085,7 @@ impl Render for FilePane {
                     }),
             )
             // WinSCP's Find Files, on the remote side only.
-            .when(remote, |row| {
+            .when(remote && !self.compact, |row| {
                 row.child(Separator::vertical()).child(
                     tool(
                         "find-files",
@@ -1116,7 +1143,26 @@ impl Render for FilePane {
                 })
                 .into_any_element()
         };
+        // With no local pane beside it, the sidebar picks what to upload.
+        let choose = self.compact.then(|| {
+            let dispatch = self.dispatch.clone();
+            Button::new("choose-files")
+                .ghost()
+                .small()
+                .icon(Icon::new(CatalogIcon::Upload))
+                .label(t!("explorer.command.upload"))
+                .tooltip(t!("explorer.toolbar.choose_files"))
+                .disabled(!state.can_transfer)
+                .on_click(move |_, window, cx| {
+                    dispatch.dispatch_explorer_action(
+                        &ExplorerAction::new(sid, ExplorerCommand::ChooseFiles),
+                        window,
+                        cx,
+                    )
+                })
+        });
         let operations = toolbar()
+            .children(choose)
             .child(transfer)
             .child(Separator::vertical())
             .child(

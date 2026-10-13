@@ -34,6 +34,9 @@ pub(super) struct PaneMenuState {
     pub can_transfer: bool,
     /// 显示隐藏文件 is on for this side.
     pub show_hidden: bool,
+    /// 查找文件 is offered: on an SFTP tab's remote side, not in the right
+    /// sidebar's 文件.
+    pub finds: bool,
 }
 
 impl PaneMenuState {
@@ -131,7 +134,7 @@ pub(super) fn directory_menu(
         state.show_hidden,
         Box::new(ToggleHiddenFiles(PaneSide::from_remote(state.remote))),
     );
-    if state.remote {
+    if state.finds {
         menu = menu.menu_with_icon(
             t!("explorer.command.find_files"),
             Icon::new(IconName::Search),

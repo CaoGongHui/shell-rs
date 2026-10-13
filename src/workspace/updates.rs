@@ -147,7 +147,10 @@ impl Workspace {
             sftp_tabs: self
                 .explorers
                 .values()
-                .filter(|panel| panel.read(cx).connection_state() == ConnectionState::Connected)
+                .filter(|panel| {
+                    let panel = panel.read(cx);
+                    panel.connection_state() == ConnectionState::Connected && !panel.is_sidebar()
+                })
                 .count(),
             local_terminals: self
                 .local_terminals

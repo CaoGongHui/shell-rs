@@ -33,6 +33,9 @@ pub struct FakeTerminalFactory {
     pub exec_outputs: Arc<Mutex<std::collections::VecDeque<String>>>,
     /// The commands run beside the shell, in order.
     pub exec_commands: Arc<Mutex<Vec<String>>>,
+    /// The SFTP channels opened beside the shell, by the run (1 for the
+    /// first connection, 2 after one reconnect…) that opened each.
+    pub sftp_opens: Arc<Mutex<Vec<usize>>>,
 }
 
 impl FakeTerminalFactory {
@@ -54,6 +57,13 @@ impl FakeTerminalFactory {
 
     pub fn exec_count(&self) -> usize {
         self.exec_commands().len()
+    }
+
+    pub fn sftp_opens(&self) -> Vec<usize> {
+        self.sftp_opens
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
     }
 
     pub fn exit_first() -> Self {
@@ -118,6 +128,7 @@ impl TerminalTransportFactory for FakeTerminalFactory {
             resizes: self.resizes.clone(),
             exec_outputs: self.exec_outputs.clone(),
             exec_commands: self.exec_commands.clone(),
+            sftp_opens: self.sftp_opens.clone(),
         })
     }
 }
@@ -129,6 +140,7 @@ pub struct FakeTerminalTransport {
     pub resizes: Arc<Mutex<Vec<TerminalSize>>>,
     pub exec_outputs: Arc<Mutex<std::collections::VecDeque<String>>>,
     pub exec_commands: Arc<Mutex<Vec<String>>>,
+    pub sftp_opens: Arc<Mutex<Vec<usize>>>,
 }
 
 impl TerminalTransport for FakeTerminalTransport {
@@ -201,6 +213,18 @@ impl TerminalTransport for FakeTerminalTransport {
                     if let Some(output) = output {
                         let _ = request.reply.send(Ok(output));
                     }
+                }
+                TerminalTransportCommand::OpenSftp(request) => {
+                    self.sftp_opens
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .push(self.run);
+                    // The fake SFTP worker never reads it.
+                    let stream = tokio::io::join(tokio::io::empty(), tokio::io::sink());
+                    let _ = request.reply.send(Ok(SftpChannel {
+                        stream: Box::new(stream),
+                        fingerprint: format!("SHA256:fake-{}", self.run),
+                    }));
                 }
                 TerminalTransportCommand::PromptReply { .. } => {}
                 TerminalTransportCommand::Shutdown => break,

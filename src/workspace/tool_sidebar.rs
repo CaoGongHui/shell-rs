@@ -1,5 +1,5 @@
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, Placement, Selectable as _, Sizable as _,
+    ActiveTheme as _, Icon, IconName, Placement, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     dock::{BasePanel, Panel, PanelControl, PanelEvent},
     h_flex, v_flex,
@@ -9,6 +9,7 @@ use gpui_kit::*;
 
 use crate::app::{CatalogIcon, DOCKER_ICON, ToggleTool, ToolKind};
 use crate::docker::{Container, DockerObject, DockerPanel, ObjectSummary};
+use crate::explorer::ExplorerPanel;
 use crate::history::HistoryPanel;
 use crate::host::{HostId, HostOs, HostStore, SnippetCategoryId};
 use crate::i18n::t;
@@ -24,6 +25,7 @@ impl ToolKind {
         match self {
             ToolKind::Snippets => t!("tools.kind.snippets"),
             ToolKind::History => t!("tools.kind.history"),
+            ToolKind::Files => t!("tools.kind.files"),
             ToolKind::Docker => "Docker".into(),
             ToolKind::Services => t!("tools.kind.services"),
             ToolKind::Processes => t!("tools.kind.processes"),
@@ -38,6 +40,8 @@ impl ToolKind {
         Icon::new(match self {
             ToolKind::Snippets => CatalogIcon::CodeXml,
             ToolKind::History => CatalogIcon::RotateCcwClock,
+            // Not the SFTP button's folder tree, which opens a tab.
+            ToolKind::Files => return Icon::new(IconName::Folder),
             ToolKind::Docker => return Icon::default().path(DOCKER_ICON),
             ToolKind::Services => CatalogIcon::ServerCog,
             ToolKind::Processes => CatalogIcon::ListFilter,
@@ -46,9 +50,9 @@ impl ToolKind {
         })
     }
 
-    /// Whether the tool runs commands on a channel of its own beside the
-    /// terminal, which a terminal a bastion host opened cannot have. Command
-    /// snippets only type into the terminal.
+    /// Whether the tool runs commands or SFTP on a channel of its own beside
+    /// the terminal, which a terminal a bastion host opened cannot have.
+    /// Command snippets only type into the terminal.
     pub fn runs_commands(self) -> bool {
         !matches!(self, ToolKind::Snippets)
     }
@@ -61,7 +65,7 @@ impl ToolKind {
             | ToolKind::Processes
             | ToolKind::Connections
             | ToolKind::Monitor => os.is_none_or(HostOs::is_linux),
-            ToolKind::Snippets => true,
+            ToolKind::Snippets | ToolKind::Files => true,
             // Wherever `sh` runs `docker`: Linux, and a Mac with Docker
             // Desktop; and bash's history file wherever `sh` reads it.
             ToolKind::Docker | ToolKind::History => os != Some(HostOs::Windows),
@@ -73,6 +77,7 @@ impl ToolKind {
         match self {
             ToolKind::Snippets => "tool-snippets",
             ToolKind::History => "tool-history",
+            ToolKind::Files => "tool-files",
             ToolKind::Docker => "tool-docker",
             ToolKind::Services => "tool-services",
             ToolKind::Processes => "tool-processes",
@@ -115,6 +120,9 @@ pub struct ToolSidebar {
     monitor: Entity<MonitorPanel>,
     snippets: Entity<SnippetPanel>,
     history: Entity<HistoryPanel>,
+    /// The terminal in front's 文件, which the workspace owns: one per
+    /// terminal, made the first time it is shown.
+    files: Option<Entity<ExplorerPanel>>,
     docker: Entity<DockerPanel>,
     services: Entity<ServicePanel>,
     processes: Entity<ProcessPanel>,
@@ -139,6 +147,7 @@ impl ToolSidebar {
             monitor: cx.new(|_| MonitorPanel::new(dispatch.clone())),
             snippets: cx.new(|cx| SnippetPanel::new(store, dispatch.clone(), window, cx)),
             history: cx.new(|cx| HistoryPanel::new(dispatch.clone(), window, cx)),
+            files: None,
             docker: cx.new(|_| DockerPanel::new(dispatch.clone())),
             services: cx.new(|cx| ServicePanel::new(dispatch.clone(), window, cx)),
             processes: cx.new(|cx| ProcessPanel::new(dispatch.clone(), window, cx)),
@@ -291,6 +300,24 @@ impl ToolSidebar {
             .update(cx, |panel, cx| panel.set_target(target, netstat, cx));
     }
 
+    /// Show another terminal's 文件, or none. A focus inside the one going
+    /// away moves to the sidebar itself, as on `show`.
+    pub fn set_files(
+        &mut self,
+        files: Option<Entity<ExplorerPanel>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.files == files {
+            return;
+        }
+        if self.focus_handle.contains_focused(window, cx) {
+            window.focus(&self.focus_handle, cx);
+        }
+        self.files = files;
+        cx.notify();
+    }
+
     /// Show another tool. A focus inside the one going away moves to the
     /// sidebar itself: left on an element no longer drawn, it would take
     /// every window-level shortcut's dispatch path with it.
@@ -389,6 +416,10 @@ impl Render for ToolSidebar {
                 let panel = match self.tool {
                     ToolKind::Snippets => self.snippets.clone().into_any_element(),
                     ToolKind::History => self.history.clone().into_any_element(),
+                    ToolKind::Files => match &self.files {
+                        Some(files) => files.clone().into_any_element(),
+                        None => Empty.into_any_element(),
+                    },
                     ToolKind::Docker => self.docker.clone().into_any_element(),
                     ToolKind::Services => self.services.clone().into_any_element(),
                     ToolKind::Processes => self.processes.clone().into_any_element(),

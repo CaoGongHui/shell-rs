@@ -308,6 +308,9 @@ sftp.edit.gone_after_save:
 sftp.client.start_timeout:
   zh-CN: 启动 SFTP 超时
   en: SFTP took too long to start
+sftp.client.terminal_not_connected:
+  zh-CN: 终端未连接
+  en: The terminal isn’t connected
 sftp.client.no_v3:
   zh-CN: 服务器未提供 SFTP v3
   en: The server doesn’t offer SFTP v3

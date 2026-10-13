@@ -13,7 +13,7 @@ use crate::connection::{ConnectionPromptKind, ConnectionPromptReply};
 use crate::i18n::t;
 use crate::secrets::{SecretRef, SharedSecretStore};
 use crate::sftp::{
-    DownloadRequest, RemotePath, SftpCommand, SftpEvent, SharedSftpTransportProvider,
+    DownloadRequest, RemotePath, SftpCommand, SftpEvent, SftpRoute, SharedSftpTransportProvider,
     TransferAnswer, TransferChoice, TransferPhase, TransferProgress, TransferQuestionKind,
     UploadRequest,
 };
@@ -55,7 +55,7 @@ impl SshCliBackend {
         command: SftpCommand,
         progress: &mut dyn FnMut(TransferCounters) -> io::Result<()>,
     ) -> Result<TransferSummary, CliError> {
-        let transport = self.sftp.create(target.login());
+        let transport = self.sftp.create(target.login(), SftpRoute::Login);
         let (commands, command_receiver) = async_channel::unbounded();
         let (event_sender, events) = async_channel::unbounded();
         let worker = std::thread::Builder::new()

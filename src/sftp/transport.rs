@@ -6,6 +6,7 @@ use super::{
 use crate::{
     connection::{ConnectionPrompt, ConnectionPromptReply, Latency},
     host::HostLogin,
+    terminal::TerminalChannels,
 };
 use anyhow::Result;
 use async_channel::{Receiver, Sender};
@@ -132,7 +133,19 @@ pub trait SftpTransport: Send + 'static {
         events: Sender<SftpEvent>,
     ) -> Result<()>;
 }
+/// Where a worker's SFTP channel comes from.
+#[derive(Clone)]
+pub enum SftpRoute {
+    /// A connection of its own, logged in for the SFTP tab.
+    Login,
+    /// A channel beside the shell of a remote terminal, on whichever
+    /// connection the terminal has: the right sidebar's 文件. No login and
+    /// no questions; it is up when the terminal is.
+    Terminal(TerminalChannels),
+}
 pub trait SftpTransportProvider: Send + Sync + 'static {
-    fn create(&self, login: &HostLogin) -> Box<dyn SftpTransport>;
+    /// `login` still matters on the terminal route: resumable transfers are
+    /// recorded by its endpoint.
+    fn create(&self, login: &HostLogin, route: SftpRoute) -> Box<dyn SftpTransport>;
 }
 pub type SharedSftpTransportProvider = Arc<dyn SftpTransportProvider>;

@@ -39,11 +39,11 @@ pub use shellrs::settings::{Appearance, InterfaceLanguage, SettingsStore};
 pub use shellrs::sftp::{
     DirectoryEntry, DirectoryListing, EDIT_LIMIT, EntryKind, FileBytes, FileMetadata, FileStamp,
     LocalDirectoryProvider, ReadFailure, RemotePath, SaveFailure, SftpCommand, SftpEvent,
-    SftpTransport, SftpTransportProvider, TextFile, UploadRequest,
+    SftpRoute, SftpTransport, SftpTransportProvider, TextFile, UploadRequest,
 };
 pub use shellrs::terminal::{
     FixedLocalTerminalTransportProvider, FixedRemoteTerminalTransportProvider, LocalShell,
-    LocalTerminalId, RemoteTerminalId, RemoteTerminalTransportProvider,
+    LocalTerminalId, RemoteTerminalId, RemoteTerminalTransportProvider, SftpChannel,
     SharedTerminalTransportFactory, TerminalFont, TerminalLifecycle, TerminalSize,
     TerminalTransport, TerminalTransportCommand, TerminalTransportEvent, TerminalTransportFactory,
 };

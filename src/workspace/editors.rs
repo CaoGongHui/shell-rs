@@ -274,8 +274,8 @@ impl Workspace {
     }
 
     /// Close several center tabs of one batch (关闭其他, 关闭全部…). Editors
-    /// with changes, theirs or those of SFTP tabs in the batch, are asked
-    /// about once for all, not one dialog each.
+    /// with changes, theirs or those of SFTP tabs and terminals' 文件 in the
+    /// batch, are asked about once for all, not one dialog each.
     pub(super) fn close_center_tabs(
         &mut self,
         tabs: Vec<CenterTab>,
@@ -287,6 +287,12 @@ impl Workspace {
             match tab {
                 CenterTab::Editor(id) => editors.push(*id),
                 CenterTab::Explorer(id) => editors.extend(self.editors_of(*id, cx)),
+                // A terminal's 文件 and the files it opened close with it.
+                CenterTab::Terminal(id) => {
+                    if let Some(&sidebar) = self.file_sidebars.get(id) {
+                        editors.extend(self.editors_of(sidebar, cx));
+                    }
+                }
                 _ => {}
             }
         }
@@ -312,6 +318,7 @@ impl Workspace {
                         match tab {
                             CenterTab::Editor(id) => this.remove_editor(id, window, cx),
                             CenterTab::Explorer(id) => this.close_explorer(id, false, window, cx),
+                            CenterTab::Terminal(id) => this.close_terminal(id, false, window, cx),
                             tab => this.close_center_tab(tab, window, cx),
                         }
                     }

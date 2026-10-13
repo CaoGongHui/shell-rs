@@ -16,9 +16,9 @@ use crate::{
     host::{BookmarkSide, ConnectionState, HostId, HostStore},
     i18n::t,
     sftp::{
-        DownloadRequest, RemotePath, SftpCommand, SftpEvent, SharedLocalDirectoryProvider,
-        SharedSftpTransportProvider, TextFile, TransferDirection, TransferPhase, TransferQuestion,
-        UploadRequest,
+        DownloadRequest, RemotePath, SftpCommand, SftpEvent, SftpRoute,
+        SharedLocalDirectoryProvider, SharedSftpTransportProvider, TextFile, TransferDirection,
+        TransferPhase, TransferQuestion, UploadRequest,
     },
     shared::{ClosableTabTitle, HostMark, LatencyLabel, RenamableTab, close_tab_items},
 };
@@ -96,6 +96,10 @@ pub struct ExplorerPanel {
     custom_title: Option<SharedString>,
     /// The pane that held focus last, which takes it back on activation.
     last_remote: bool,
+    /// The right sidebar's 文件 for a remote terminal, on the terminal's
+    /// connection: the remote pane alone, with no tab of its own. The local
+    /// pane is never shown, nor listed; it only holds where downloads go.
+    sidebar: bool,
     /// Where the user put the divider between the panes, and the one above
     /// the queue. Kept here, not in element state, which goes the first
     /// frame another tab is shown instead: coming back would reset them.
@@ -111,6 +115,7 @@ impl ExplorerPanel {
         host_id: HostId,
         store: Entity<HostStore>,
         provider: SharedSftpTransportProvider,
+        route: SftpRoute,
         local_provider: SharedLocalDirectoryProvider,
         dispatch: FocusHandle,
         window: &mut Window,
@@ -121,7 +126,13 @@ impl ExplorerPanel {
             .login(host_id)
             .expect("workspace checked host");
         let endpoint = login.endpoint();
-        let home = local_provider.home().to_string_lossy().into_owned();
+        let sidebar = matches!(route, SftpRoute::Terminal(_));
+        let home = if sidebar {
+            local_provider.downloads()
+        } else {
+            local_provider.home()
+        };
+        let home = home.to_string_lossy().into_owned();
         let local = cx.new(|cx| {
             FilePane::new(
                 PaneSide::Local,
@@ -146,12 +157,18 @@ impl ExplorerPanel {
                 cx,
             )
         });
-        local.update(cx, |pane, cx| {
-            pane.load_local(home, LoadIntent::Reload, local_provider.clone(), window, cx)
-        });
+        // Listing a folder such as Downloads makes macOS ask for access,
+        // which a pane nobody sees has no business doing.
+        if sidebar {
+            remote.update(cx, |pane, cx| pane.set_compact(cx));
+        } else {
+            local.update(cx, |pane, cx| {
+                pane.load_local(home, LoadIntent::Reload, local_provider.clone(), window, cx)
+            });
+        }
         let (commands, receiver) = async_channel::unbounded();
         let (sender, events) = async_channel::unbounded();
-        let transport = provider.create(&login);
+        let transport = provider.create(&login, route);
         let failed = sender.clone();
         if let Err(error) = std::thread::Builder::new()
             .name("shellrs-sftp".into())
@@ -242,6 +259,7 @@ impl ExplorerPanel {
             tab_group: None,
             custom_title: None,
             last_remote: true,
+            sidebar,
             panes_split: cx.new(|_| ResizableState::default()),
             queue_split: cx.new(|_| ResizableState::default()),
             _subscriptions: subscriptions,
@@ -277,6 +295,10 @@ impl ExplorerPanel {
     }
     pub fn connection_state(&self) -> ConnectionState {
         self.state
+    }
+    /// The right sidebar's 文件 rather than an SFTP tab.
+    pub fn is_sidebar(&self) -> bool {
+        self.sidebar
     }
     /// What the window's status line shows for this tab: its own connection,
     /// and what went wrong, remote side first.
@@ -580,6 +602,10 @@ impl ExplorerPanel {
         if remote && self.state != ConnectionState::Connected {
             return;
         }
+        // The sidebar's local pane is only a download target.
+        if !remote && self.sidebar {
+            return;
+        }
         let pane = self.pane(remote).clone();
         let path = pane.read(cx).expanded_path(&path);
         if remote {
@@ -708,6 +734,8 @@ impl ExplorerPanel {
                 self.set_current_pane(*remote, cx);
                 self.open_directory(*remote, window, cx);
             }
+            // Finding lives in SFTP tabs: its 定位 needs a pane on screen.
+            ExplorerCommand::FindFiles | ExplorerCommand::Reveal { .. } if self.sidebar => {}
             ExplorerCommand::FindFiles => {
                 self.set_current_pane(true, cx);
                 self.open_find(window, cx);
@@ -750,7 +778,7 @@ impl ExplorerPanel {
                 }
             }
             ExplorerCommand::FocusPane { remote } => {
-                let focus = self.pane(*remote).read(cx).focus_handle(cx);
+                let focus = self.pane(*remote || self.sidebar).read(cx).focus_handle(cx);
                 window.focus(&focus, cx);
             }
             ExplorerCommand::MoveCursor {
@@ -883,6 +911,18 @@ impl ExplorerPanel {
         cx.notify();
     }
 }
+impl ExplorerPanel {
+    /// End this explorer: its connection, its find window, and then its
+    /// place in the workspace, which the `Closed` event clears. An SFTP tab
+    /// does this as the dock removes it; the sidebar's 文件, which is in no
+    /// dock, when its terminal goes.
+    pub fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_find(cx);
+        self.disconnect(window, cx);
+        self.send(SftpCommand::Shutdown);
+        cx.emit(ExplorerPanelEvent::Closed(self.id, self.host_id));
+    }
+}
 impl Drop for ExplorerPanel {
     fn drop(&mut self) {
         self.send(SftpCommand::Shutdown);
@@ -920,11 +960,8 @@ impl BasePanel for ExplorerPanel {
         self.tab_group = Some(group);
     }
     fn on_removed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.close_find(cx);
-        self.disconnect(window, cx);
-        self.send(SftpCommand::Shutdown);
         self.tab_group = None;
-        cx.emit(ExplorerPanelEvent::Closed(self.id, self.host_id));
+        self.close(window, cx);
     }
 }
 impl Panel for ExplorerPanel {
@@ -1141,6 +1178,27 @@ impl TabMenu {
 impl Render for ExplorerPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let sid = self.id;
+        let panes = if self.sidebar {
+            self.remote.clone().into_any_element()
+        } else {
+            h_resizable(("explorer-panes", sid.0))
+                .with_state(&self.panes_split)
+                .child(
+                    // Half and half when the tab opens; the state then keeps
+                    // where the user puts the divider.
+                    resizable_panel()
+                        .flex_basis(relative(0.5))
+                        .size_range(px(320.)..Pixels::MAX)
+                        .child(self.local.clone()),
+                )
+                .child(
+                    resizable_panel()
+                        .flex_basis(relative(0.5))
+                        .size_range(px(280.)..Pixels::MAX)
+                        .child(self.remote.clone()),
+                )
+                .into_any_element()
+        };
         // The queue always has its place, shown only with something in it,
         // so the panes keep their split when it comes and goes.
         v_flex()
@@ -1153,27 +1211,7 @@ impl Render for ExplorerPanel {
                 div().flex_1().min_h_0().child(
                     v_resizable(("explorer-queue", sid.0))
                         .with_state(&self.queue_split)
-                        .child(
-                            resizable_panel().child(
-                                h_resizable(("explorer-panes", sid.0))
-                                    .with_state(&self.panes_split)
-                                    .child(
-                                        // Half and half when the tab opens; the
-                                        // state then keeps where the user puts
-                                        // the divider.
-                                        resizable_panel()
-                                            .flex_basis(relative(0.5))
-                                            .size_range(px(320.)..Pixels::MAX)
-                                            .child(self.local.clone()),
-                                    )
-                                    .child(
-                                        resizable_panel()
-                                            .flex_basis(relative(0.5))
-                                            .size_range(px(280.)..Pixels::MAX)
-                                            .child(self.remote.clone()),
-                                    ),
-                            ),
-                        )
+                        .child(resizable_panel().child(panes))
                         .child(
                             resizable_panel()
                                 .size(px(180.))

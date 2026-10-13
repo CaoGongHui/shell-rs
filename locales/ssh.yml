@@ -296,6 +296,15 @@ ssh.test.host_key_declined:
 ssh.terminal.shell_only:
   zh-CN: 这个终端经由堡垒机打开，只能使用终端本身，不能另外执行命令
   en: This terminal was opened by a bastion host and can’t run commands beside the shell
+ssh.terminal.shell_only_sftp:
+  zh-CN: 这个终端经由堡垒机打开，只能使用终端本身，不能另外打开文件
+  en: This terminal was opened by a bastion host and can’t open files beside the shell
+ssh.terminal.sftp_refused:
+  zh-CN: 服务器没有开启 SFTP
+  en: The server doesn’t offer SFTP
+ssh.terminal.sftp_timeout:
+  zh-CN: 打开 SFTP 超时
+  en: Opening SFTP timed out
 ssh.terminal.runtime_failed:
   zh-CN: 无法启动 SSH 运行时
   en: Couldn’t start the SSH runtime

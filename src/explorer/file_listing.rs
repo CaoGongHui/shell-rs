@@ -85,6 +85,9 @@ pub struct FileListing {
     show_hidden: bool,
     sort: Option<(usize, ColumnSort)>,
     side: PaneSide,
+    /// The right sidebar's narrow list: names and sizes, and rows that do
+    /// not drag out (see `set_compact`).
+    compact: bool,
     context: ListingContext,
 }
 
@@ -135,8 +138,24 @@ impl FileListing {
             show_hidden: false,
             sort: None,
             side,
+            compact: false,
             context: ListingContext::default(),
         }
+    }
+
+    /// Fit the right sidebar: only names and sizes. Rows no longer drag
+    /// out: dropped on an SFTP tab's local pane, they would be fetched from
+    /// that tab's host, not this one.
+    pub(super) fn set_compact(&mut self) {
+        self.compact = true;
+        self.columns = vec![
+            name_column(px(200.)),
+            Column::new("size", column_title("size"))
+                .width(px(88.))
+                .sortable(),
+        ];
+        self.sort = None;
+        self.apply_sort();
     }
 
     pub(super) fn configure(&mut self, context: ListingContext) {
@@ -245,6 +264,9 @@ impl FileListing {
             }),
             None => cell,
         };
+        if self.compact {
+            return cell;
+        }
         let paths = names.iter().map(|name| self.child_path(name));
         match self.side {
             PaneSide::Local => drag_files(

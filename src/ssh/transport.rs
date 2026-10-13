@@ -9,9 +9,9 @@ use crate::{
     host::HostLogin,
     i18n::t,
     terminal::{
-        ExecRequest, RemoteTerminalTransportProvider, SharedTerminalTransportFactory, TerminalSize,
-        TerminalTransport, TerminalTransportCommand, TerminalTransportEvent,
-        TerminalTransportFactory,
+        ExecRequest, RemoteTerminalTransportProvider, SftpChannel, SftpChannelRequest,
+        SharedTerminalTransportFactory, TerminalSize, TerminalTransport, TerminalTransportCommand,
+        TerminalTransportEvent, TerminalTransportFactory,
     },
 };
 use anyhow::{Context as _, Result, anyhow, bail};
@@ -150,7 +150,7 @@ impl SshTerminalTransport {
         });
 
         // Said in the terminal: down to the cause, which says what to fix.
-        let (handle, _) = self
+        let (handle, fingerprint) = self
             .connector
             .connect(&self.config, broker.clone())
             .await
@@ -211,19 +211,20 @@ impl SshTerminalTransport {
         latency_ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let mut ping: Option<Pin<Box<dyn Future<Output = Latency> + Send + '_>>> = None;
 
-        // Commands for the right sidebar's tools, one at a time: a tool
-        // asking again before its last answer came back waits its turn
-        // rather than piling channels onto the server.
-        let mut exec_queue: VecDeque<ExecRequest> = VecDeque::new();
-        let mut exec: Option<Pin<Box<dyn Future<Output = ()> + Send + '_>>> = None;
+        // Channels for the right sidebar, one at a time: its tools' commands
+        // and 文件's SFTP. A tool asking again before its last answer came
+        // back waits its turn rather than piling channels onto the server.
+        // Each future starts when it is first polled, so a queued one has
+        // done nothing yet.
+        type Side<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+        let mut side_queue: VecDeque<Side<'_>> = VecDeque::new();
+        let mut side: Option<Side<'_>> = None;
 
         let mut exit_code = 0;
         let mut exit_signal = None;
         loop {
-            if exec.is_none()
-                && let Some(request) = exec_queue.pop_front()
-            {
-                exec = Some(Box::pin(run_exec(&handle, request)));
+            if side.is_none() {
+                side = side_queue.pop_front();
             }
             tokio::select! {
                 command = io_rx.recv() => match command {
@@ -255,11 +256,19 @@ impl SshTerminalTransport {
                         // beside the shell.
                         let _ = request.reply.send(Err(t!("ssh.terminal.shell_only").into()));
                     }
-                    Some(TerminalTransportCommand::Exec(request)) => exec_queue.push_back(request),
+                    Some(TerminalTransportCommand::Exec(request)) => {
+                        side_queue.push_back(Box::pin(run_exec(&handle, request)));
+                    }
+                    Some(TerminalTransportCommand::OpenSftp(request)) if shell_only => {
+                        let _ = request.reply.send(Err(t!("ssh.terminal.shell_only_sftp").into()));
+                    }
+                    Some(TerminalTransportCommand::OpenSftp(request)) => {
+                        side_queue.push_back(Box::pin(open_sftp(&handle, fingerprint.clone(), request)));
+                    }
                     Some(TerminalTransportCommand::PromptReply { .. }) => {}
                 },
-                () = async { exec.as_mut().expect("guarded").await }, if exec.is_some() => {
-                    exec = None;
+                () = async { side.as_mut().expect("guarded").await }, if side.is_some() => {
+                    side = None;
                 },
                 // Only armed while a probe channel is open, so a host that
                 // never answers costs one idle channel and nothing else.
@@ -361,6 +370,42 @@ async fn run_exec(handle: &SshHandle, request: ExecRequest) {
     .unwrap_or_else(|_| Err(t!("ssh.exec.timeout").to_string()));
     // The asker may have stopped waiting.
     let _ = reply.send(result);
+}
+
+/// Open an SFTP channel beside the shell and answer its request with the
+/// channel's stream. The stream goes on to the SFTP worker's own runtime;
+/// the connection's session task stays here, on the terminal's.
+async fn open_sftp(handle: &SshHandle, fingerprint: String, request: SftpChannelRequest) {
+    let result = tokio::time::timeout(EXEC_TIMEOUT, async {
+        let mut channel = handle
+            .channel_open_session()
+            .await
+            .map_err(|_| t!("ssh.exec.channel_failed").to_string())?;
+        channel
+            .request_subsystem(true, "sftp")
+            .await
+            .map_err(|_| t!("ssh.terminal.sftp_refused").to_string())?;
+        // russh sends the request without waiting for the answer: wait here,
+        // so a server without SFTP says so rather than ending the stream,
+        // which would read as a dropped connection worth retrying.
+        loop {
+            match channel.wait().await {
+                Some(ChannelMsg::Success) => break,
+                Some(ChannelMsg::Failure | ChannelMsg::Eof | ChannelMsg::Close) | None => {
+                    return Err(t!("ssh.terminal.sftp_refused").to_string());
+                }
+                _ => {}
+            }
+        }
+        Ok(SftpChannel {
+            stream: Box::new(channel.into_stream()),
+            fingerprint,
+        })
+    })
+    .await
+    .unwrap_or_else(|_| Err(t!("ssh.terminal.sftp_timeout").to_string()));
+    // The asker may have stopped waiting.
+    let _ = request.reply.send(result);
 }
 
 /// Open a channel and run one probe command on it. Best effort throughout: a

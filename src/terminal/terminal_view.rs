@@ -418,6 +418,12 @@ impl TerminalView {
         self.engine.read(cx).generation()
     }
 
+    /// Where channels beside the shell open: this terminal's connection,
+    /// whichever one it is on at the time.
+    pub fn channels(&self, cx: &App) -> super::TerminalChannels {
+        self.engine.read(cx).channels()
+    }
+
     /// Run `command` beside the shell, on this terminal's own connection;
     /// see [`super::ExecRequest`]. `None` while the shell is not running.
     pub fn exec(

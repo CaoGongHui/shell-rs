@@ -2,6 +2,8 @@ use std::sync::{Arc, Mutex, mpsc};
 
 use anyhow::Result;
 use async_channel::Sender;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::sync::oneshot;
 
 use super::{LocalShell, TerminalSize};
 use crate::connection::Latency;
@@ -19,6 +21,9 @@ pub enum TerminalTransportCommand {
     /// Run a command beside the shell. Only a transport with a connection of
     /// its own runs it; the others drop the request.
     Exec(ExecRequest),
+    /// Open an SFTP channel beside the shell, for the right sidebar's
+    /// 文件. Dropped like `Exec` by a transport without a connection.
+    OpenSftp(SftpChannelRequest),
     Shutdown,
 }
 
@@ -37,6 +42,61 @@ pub struct ExecRequest {
     pub reply: mpsc::Sender<ExecResult>,
 }
 
+/// A byte stream on the terminal's connection, for a protocol beside the
+/// shell.
+pub trait ChannelStream: AsyncRead + AsyncWrite + Unpin + Send {}
+
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> ChannelStream for T {}
+
+/// An SFTP channel on the terminal's own connection, and the fingerprint of
+/// the host key that connection checked, which resumed transfers verify.
+pub struct SftpChannel {
+    pub stream: Box<dyn ChannelStream>,
+    pub fingerprint: String,
+}
+
+/// Answered once on `reply` with the channel, or with why the server or the
+/// terminal would not open it. A request sent while the terminal logs in
+/// waits for its shell; one with no connection to go to is dropped, which
+/// the asker sees as the reply channel closing.
+pub struct SftpChannelRequest {
+    pub reply: oneshot::Sender<Result<SftpChannel, String>>,
+}
+
+/// Where a terminal's channels beside the shell are opened: whichever
+/// connection the terminal has now. Each launch and restart attaches its
+/// own, so a handle given out once keeps reaching the current one.
+#[derive(Clone, Default)]
+pub struct TerminalChannels(Arc<Mutex<Option<mpsc::Sender<TerminalTransportCommand>>>>);
+
+impl TerminalChannels {
+    pub(crate) fn attach(&self, commands: mpsc::Sender<TerminalTransportCommand>) {
+        *self.0.lock().unwrap_or_else(|error| error.into_inner()) = Some(commands);
+    }
+
+    /// The terminal stopped: nothing opens until the next start attaches.
+    pub(crate) fn detach(&self) {
+        *self.0.lock().unwrap_or_else(|error| error.into_inner()) = None;
+    }
+
+    /// Ask for an SFTP channel. The answer closes without a value when there
+    /// is no connection to open it on.
+    pub fn open_sftp(&self) -> oneshot::Receiver<Result<SftpChannel, String>> {
+        let (reply, answer) = oneshot::channel();
+        if let Some(commands) = self
+            .0
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+        {
+            let _ = commands.send(TerminalTransportCommand::OpenSftp(SftpChannelRequest {
+                reply,
+            }));
+        }
+        answer
+    }
+}
+
 impl std::fmt::Debug for TerminalTransportCommand {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -51,6 +111,7 @@ impl std::fmt::Debug for TerminalTransportCommand {
                 .debug_tuple("Exec")
                 .field(&request.command.len())
                 .finish(),
+            Self::OpenSftp(_) => formatter.write_str("OpenSftp"),
             Self::Shutdown => formatter.write_str("Shutdown"),
         }
     }

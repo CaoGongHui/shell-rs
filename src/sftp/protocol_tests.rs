@@ -3,8 +3,13 @@ use super::*;
 use crate::{
     connection::{ConnectionPromptKind, ConnectionPromptReply, ConnectionSecret, Latency},
     host::{AuthKind, Host, HostDraft, HostId, HostLogin, HostStore, SshLink},
+    i18n::t,
     secrets::{InMemorySecretStore, SharedSecretStore},
-    ssh::SshConnector,
+    ssh::{SshConnector, SshTerminalTransportProvider},
+    terminal::{
+        RemoteTerminalTransportProvider as _, TerminalChannels, TerminalSize,
+        TerminalTransportCommand, TerminalTransportEvent,
+    },
 };
 use russh::{
     ChannelId,
@@ -302,12 +307,20 @@ fn worker(port: u16, data: &std::path::Path) -> Worker {
     )
 }
 fn worker_for(login: &HostLogin, secrets: SharedSecretStore, data: &std::path::Path) -> Worker {
+    worker_on(login, SftpRoute::Login, secrets, data)
+}
+fn worker_on(
+    login: &HostLogin,
+    route: SftpRoute,
+    secrets: SharedSecretStore,
+    data: &std::path::Path,
+) -> Worker {
     let provider = SshSftpTransportProvider::new(
         SshConnector::new(data.join("known_hosts"), secrets),
         data.join("upload-resume"),
         data.join("download-resume"),
     );
-    let transport = provider.create(login);
+    let transport = provider.create(login, route);
     let (commands, rx) = async_channel::unbounded();
     let (tx, events) = async_channel::unbounded();
     let thread = std::thread::spawn(move || transport.run(rx, tx).unwrap());
@@ -829,5 +842,299 @@ fn uploads_and_saves_get_past_a_bastion_host_that_refuses_fsetstat_and_extension
         }
         assert_eq!(std::fs::read(&uploaded).unwrap(), b"edited");
         assert_eq!(server.connections.load(Ordering::SeqCst), 1);
+    });
+}
+
+/// The fixture's login, as a terminal or a worker gets it.
+fn fixture_login(port: u16) -> HostLogin {
+    let host = Host::new(
+        HostId(1),
+        HostDraft::new(
+            "fixture",
+            "127.0.0.1",
+            port,
+            "tester",
+            AuthKind::Password,
+            None,
+        ),
+    );
+    HostLogin::of(&host, None)
+}
+
+/// A real remote terminal's transport on a thread of its own, with its own
+/// runtime, as the terminal engine runs it; logged in and its shell asked
+/// for.
+struct Terminal {
+    commands: std::sync::mpsc::Sender<TerminalTransportCommand>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+impl Terminal {
+    async fn start(login: &HostLogin, data: &std::path::Path) -> Self {
+        let connector = SshConnector::new(
+            data.join("known_hosts"),
+            Arc::new(InMemorySecretStore::default()),
+        );
+        let transport = SshTerminalTransportProvider::with_connector(connector)
+            .factory_for(login)
+            .create();
+        let (commands, receiver) = std::sync::mpsc::channel();
+        let (sender, events) = async_channel::unbounded();
+        let thread = std::thread::spawn(move || {
+            let _ = transport.run(TerminalSize::DEFAULT, receiver, sender);
+        });
+        loop {
+            let event = tokio::time::timeout(Duration::from_secs(25), events.recv())
+                .await
+                .expect("terminal timed out")
+                .expect("terminal ended");
+            match event {
+                TerminalTransportEvent::Started => break,
+                TerminalTransportEvent::Prompt(prompt) => {
+                    let reply = match prompt.kind() {
+                        ConnectionPromptKind::UnknownHost(_) => ConnectionPromptReply::TrustAndSave,
+                        _ => ConnectionPromptReply::Answers(vec![ConnectionSecret::new(
+                            "fixture-password",
+                        )]),
+                    };
+                    commands
+                        .send(TerminalTransportCommand::PromptReply {
+                            request_id: prompt.request_id(),
+                            reply,
+                        })
+                        .unwrap();
+                }
+                TerminalTransportEvent::Failed(error) => panic!("terminal failed: {error}"),
+                _ => {}
+            }
+        }
+        Self {
+            commands,
+            thread: Some(thread),
+        }
+    }
+    /// Where its channels open, as the engine hands them to 文件.
+    fn channels(&self) -> TerminalChannels {
+        let channels = TerminalChannels::default();
+        channels.attach(self.commands.clone());
+        channels
+    }
+}
+impl Drop for Terminal {
+    fn drop(&mut self) {
+        let _ = self.commands.send(TerminalTransportCommand::Shutdown);
+        if let Some(thread) = self.thread.take() {
+            thread.join().unwrap();
+        }
+    }
+}
+
+/// The next event of a worker that must never ask anything.
+async fn next_quiet(worker: &Worker) -> SftpEvent {
+    let event = tokio::time::timeout(Duration::from_secs(25), worker.events.recv())
+        .await
+        .expect("worker timed out")
+        .unwrap();
+    if let SftpEvent::Prompt(prompt) = event {
+        panic!("a terminal's SFTP asked {:?}", prompt.kind());
+    }
+    event
+}
+
+/// 文件 rides the terminal's connection: no login and no question of its
+/// own, a transfer that loses its channel gets a new one on the same
+/// connection, and letting go of the channel leaves the terminal be.
+#[test]
+fn sftp_beside_a_terminal_rides_its_connection() {
+    runtime().block_on(async {
+        let temp = tempfile::tempdir().unwrap();
+        let remote = temp.path().join("remote");
+        std::fs::create_dir(&remote).unwrap();
+        let Some(server) = server(remote.clone(), 1, false).await else {
+            return;
+        };
+        let login = fixture_login(server.port);
+        let terminal = Terminal::start(&login, temp.path()).await;
+        let worker = worker_on(
+            &login,
+            SftpRoute::Terminal(terminal.channels()),
+            Arc::new(InMemorySecretStore::default()),
+            temp.path(),
+        );
+        let home = loop {
+            match next_quiet(&worker).await {
+                SftpEvent::Connected { home } => break home,
+                SftpEvent::Disconnected(e) => panic!("connect failed: {e}"),
+                _ => {}
+            }
+        };
+        let source = temp.path().join("文件.bin");
+        let data = vec![42; 300_007];
+        std::fs::write(&source, &data).unwrap();
+        worker
+            .commands
+            .send(SftpCommand::Upload(
+                UploadRequest::new(vec![source], home).unwrap(),
+            ))
+            .await
+            .unwrap();
+        let mut reconnecting = false;
+        loop {
+            match next_quiet(&worker).await {
+                SftpEvent::Progress(p) if p.phase() == TransferPhase::Completed => break,
+                SftpEvent::Progress(p) if p.phase() == TransferPhase::Stopped => {
+                    panic!("stopped unexpectedly: {p:?}")
+                }
+                SftpEvent::Progress(p) if p.phase() == TransferPhase::Reconnecting => {
+                    reconnecting = true
+                }
+                SftpEvent::Question(q) => panic!("unexpected question: {q:?}"),
+                _ => {}
+            }
+        }
+        assert!(reconnecting);
+        assert_eq!(std::fs::read(remote.join("文件.bin")).unwrap(), data);
+        // 断开 drops the channel, not the terminal: 重新连接 opens another.
+        worker.commands.send(SftpCommand::Disconnect).await.unwrap();
+        worker.commands.send(SftpCommand::Resume).await.unwrap();
+        let mut dropped = false;
+        loop {
+            match next_quiet(&worker).await {
+                SftpEvent::Connected { .. } if dropped => break,
+                SftpEvent::Disconnected(_) => dropped = true,
+                _ => {}
+            }
+        }
+        assert_eq!(server.connections.load(Ordering::SeqCst), 1);
+        assert_eq!(server.shells.load(Ordering::SeqCst), 1);
+        drop(worker);
+        drop(terminal);
+    });
+}
+
+/// The terminal goes, and 文件 with it; once the terminal connects again,
+/// 重新连接 finds the new connection through the same handle.
+#[test]
+fn sftp_beside_a_terminal_follows_it_to_its_next_connection() {
+    runtime().block_on(async {
+        let temp = tempfile::tempdir().unwrap();
+        let Some(server) = server(temp.path().into(), 0, false).await else {
+            return;
+        };
+        let login = fixture_login(server.port);
+        let first = Terminal::start(&login, temp.path()).await;
+        let channels = first.channels();
+        let worker = worker_on(
+            &login,
+            SftpRoute::Terminal(channels.clone()),
+            Arc::new(InMemorySecretStore::default()),
+            temp.path(),
+        );
+        loop {
+            match next_quiet(&worker).await {
+                SftpEvent::Connected { .. } => break,
+                SftpEvent::Disconnected(e) => panic!("connect failed: {e}"),
+                _ => {}
+            }
+        }
+        drop(first);
+        loop {
+            match next_quiet(&worker).await {
+                SftpEvent::Disconnected(_) => break,
+                SftpEvent::Latency(_) => {}
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        // Nothing to open a channel on until the next terminal is up.
+        worker.commands.send(SftpCommand::Resume).await.unwrap();
+        loop {
+            match next_quiet(&worker).await {
+                SftpEvent::Disconnected(reason) => {
+                    assert_eq!(reason, t!("sftp.client.terminal_not_connected"));
+                    break;
+                }
+                SftpEvent::Connecting => {}
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        let second = Terminal::start(&login, temp.path()).await;
+        channels.attach(second.commands.clone());
+        worker.commands.send(SftpCommand::Resume).await.unwrap();
+        loop {
+            match next_quiet(&worker).await {
+                SftpEvent::Connected { .. } => break,
+                SftpEvent::Disconnected(e) => panic!("reconnect failed: {e}"),
+                _ => {}
+            }
+        }
+        assert_eq!(server.connections.load(Ordering::SeqCst), 2);
+        drop(worker);
+        drop(second);
+    });
+}
+
+/// A server without SFTP says so, once: no retries, and the terminal goes
+/// on.
+#[test]
+fn sftp_beside_a_terminal_on_a_server_without_it_is_refused() {
+    runtime().block_on(async {
+        let temp = tempfile::tempdir().unwrap();
+        let Some(server) = server(temp.path().into(), 0, true).await else {
+            return;
+        };
+        let login = fixture_login(server.port);
+        let terminal = Terminal::start(&login, temp.path()).await;
+        let worker = worker_on(
+            &login,
+            SftpRoute::Terminal(terminal.channels()),
+            Arc::new(InMemorySecretStore::default()),
+            temp.path(),
+        );
+        loop {
+            match next_quiet(&worker).await {
+                SftpEvent::Disconnected(reason) => {
+                    assert_eq!(reason, t!("ssh.terminal.sftp_refused"));
+                    break;
+                }
+                SftpEvent::Connecting => {}
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        // Still there: it answers the next request rather than dropping it.
+        let answer = terminal.channels().open_sftp().await;
+        assert!(matches!(answer, Ok(Err(_))));
+        drop(worker);
+        drop(terminal);
+    });
+}
+
+/// A terminal a bastion host opened carries nothing beside its shell.
+#[test]
+fn sftp_beside_a_shell_only_terminal_is_refused() {
+    runtime().block_on(async {
+        let temp = tempfile::tempdir().unwrap();
+        let Some(server) = server(temp.path().into(), 0, false).await else {
+            return;
+        };
+        let mut login = fixture_login(server.port);
+        login.shell_only = true;
+        let terminal = Terminal::start(&login, temp.path()).await;
+        let worker = worker_on(
+            &login,
+            SftpRoute::Terminal(terminal.channels()),
+            Arc::new(InMemorySecretStore::default()),
+            temp.path(),
+        );
+        loop {
+            match next_quiet(&worker).await {
+                SftpEvent::Disconnected(reason) => {
+                    assert_eq!(reason, t!("ssh.terminal.shell_only_sftp"));
+                    break;
+                }
+                SftpEvent::Connecting => {}
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        drop(worker);
+        drop(terminal);
     });
 }

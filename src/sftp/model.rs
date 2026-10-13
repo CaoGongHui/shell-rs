@@ -738,6 +738,11 @@ pub trait LocalDirectoryProvider: Send + Sync + 'static {
     fn places(&self) -> Vec<(Place, PathBuf)> {
         Vec::new()
     }
+    /// Where downloads go when nothing else says: the system's Downloads
+    /// folder. Only works out the path, so it may run anywhere.
+    fn downloads(&self) -> PathBuf {
+        self.home()
+    }
     /// Move items to the system trash. Links go as links.
     fn trash(&self, paths: &[PathBuf]) -> Result<()>;
     /// Rename without replacing an existing item.
@@ -809,6 +814,9 @@ pub struct SystemLocalDirectoryProvider;
 impl LocalDirectoryProvider for SystemLocalDirectoryProvider {
     fn home(&self) -> PathBuf {
         dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"))
+    }
+    fn downloads(&self) -> PathBuf {
+        dirs::download_dir().unwrap_or_else(|| self.home())
     }
     fn places(&self) -> Vec<(Place, PathBuf)> {
         [

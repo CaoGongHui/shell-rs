@@ -62,7 +62,7 @@ use crate::settings::{
     WindowSettings,
 };
 use crate::sftp::{
-    SharedLocalDirectoryProvider, SharedSftpTransportProvider, SshSftpTransportProvider,
+    SftpRoute, SharedLocalDirectoryProvider, SharedSftpTransportProvider, SshSftpTransportProvider,
     SystemLocalDirectoryProvider, TransferDirection,
 };
 use crate::shared::{commit_footer, confirm_danger, open_rename_tab_dialog};
@@ -159,8 +159,13 @@ pub struct Workspace {
     /// The start page the dock skin shows while the center has no tab.
     recent: Entity<RecentHosts>,
     pub(super) terminals: HashMap<RemoteTerminalId, Entity<TerminalPanel>>,
-    /// SFTP tabs; a host can have several, like terminals.
+    /// SFTP tabs; a host can have several, like terminals. The right
+    /// sidebar's 文件 are here too, so commands, questions and editors reach
+    /// them the same way.
     pub(super) explorers: HashMap<ExplorerId, Entity<ExplorerPanel>>,
+    /// Each remote terminal's 文件, once shown: on the terminal's own
+    /// connection, and gone with the terminal.
+    pub(super) file_sidebars: HashMap<RemoteTerminalId, ExplorerId>,
     pub(super) local_terminals: HashMap<LocalTerminalId, Entity<LocalTerminalPanel>>,
     /// The settings tab, while it is open. There is only ever one.
     settings_tab: Option<Entity<SettingsPanel>>,
@@ -534,6 +539,7 @@ impl Workspace {
             recent,
             terminals,
             explorers: HashMap::new(),
+            file_sidebars: HashMap::new(),
             local_terminals: HashMap::new(),
             settings_tab: None,
             settings,
@@ -608,12 +614,16 @@ impl Workspace {
         self.explorers.get(&id)
     }
 
-    /// A host's SFTP tabs, oldest first.
+    /// A host's SFTP tabs, oldest first. Not its terminals' 文件, which
+    /// come and go with the terminals.
     pub fn explorers_of(&self, host: HostId, cx: &App) -> Vec<Entity<ExplorerPanel>> {
         let mut explorers: Vec<_> = self
             .explorers
             .iter()
-            .filter(|(_, panel)| panel.read(cx).host_id() == host)
+            .filter(|(_, panel)| {
+                let panel = panel.read(cx);
+                panel.host_id() == host && !panel.is_sidebar()
+            })
             .collect();
         explorers.sort_by_key(|(id, _)| id.0);
         explorers
@@ -627,12 +637,67 @@ impl Workspace {
         self.terminals_of(host, cx).next().is_some() || !self.explorers_of(host, cx).is_empty()
     }
 
-    /// How many of a host's SFTP tabs are in the middle of a transfer.
+    /// How many of a host's SFTP tabs and terminals' 文件 are in the
+    /// middle of a transfer.
     fn transfers_of(&self, host: HostId, cx: &App) -> usize {
-        self.explorers_of(host, cx)
-            .iter()
-            .filter(|panel| panel.read(cx).is_transferring())
+        self.explorers
+            .values()
+            .filter(|panel| {
+                let panel = panel.read(cx);
+                panel.host_id() == host && panel.is_transferring()
+            })
             .count()
+    }
+
+    /// A remote terminal's 文件, once it has been shown.
+    pub fn file_sidebar(&self, terminal: RemoteTerminalId) -> Option<&Entity<ExplorerPanel>> {
+        self.explorers.get(self.file_sidebars.get(&terminal)?)
+    }
+
+    /// The terminal whose 文件 an explorer is, if it is one.
+    fn sidebar_terminal(&self, explorer: ExplorerId) -> Option<RemoteTerminalId> {
+        self.file_sidebars
+            .iter()
+            .find(|(_, id)| **id == explorer)
+            .map(|(terminal, _)| *terminal)
+    }
+
+    /// A remote terminal's 文件, made the first time it is shown: SFTP on a
+    /// channel of the terminal's own connection, no login of its own.
+    pub(super) fn ensure_file_sidebar(
+        &mut self,
+        terminal: RemoteTerminalId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<ExplorerPanel>> {
+        if let Some(panel) = self.file_sidebar(terminal) {
+            return Some(panel.clone());
+        }
+        let panel = self.terminals.get(&terminal)?.read(cx);
+        let host_id = panel.host_id();
+        let channels = panel.terminal().read(cx).channels(cx);
+        let id = ExplorerId(self.next_explorer_id);
+        self.next_explorer_id += 1;
+        let (panel, subscription) =
+            new_explorer_panel(self, id, host_id, SftpRoute::Terminal(channels), window, cx);
+        self._subscriptions.push(subscription);
+        self.explorers.insert(id, panel.clone());
+        self.file_sidebars.insert(terminal, id);
+        Some(panel)
+    }
+
+    /// End a terminal's 文件 with the terminal. Its `Closed` does the rest,
+    /// as for an SFTP tab: its editors, its place in the registers.
+    fn close_file_sidebar(
+        &mut self,
+        terminal: RemoteTerminalId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // It logs in nowhere, so no question of its own can be waiting.
+        if let Some(panel) = self.file_sidebar(terminal).cloned() {
+            panel.update(cx, |panel, cx| panel.close(window, cx));
+        }
     }
 
     pub fn local_terminal(&self, id: LocalTerminalId) -> Option<&Entity<LocalTerminalPanel>> {
@@ -1154,7 +1219,8 @@ impl Workspace {
         // terminals: two directories of one host side by side.
         let id = ExplorerId(self.next_explorer_id);
         self.next_explorer_id += 1;
-        let (panel, subscription) = new_explorer_panel(self, id, host_id, window, cx);
+        let (panel, subscription) =
+            new_explorer_panel(self, id, host_id, SftpRoute::Login, window, cx);
         self._subscriptions.push(subscription);
         let focus = panel.read(cx).focus_handle(cx);
         self._subscriptions
@@ -1391,7 +1457,33 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(panel) = self.terminals.get(&action.0).cloned() {
+        self.close_terminal(action.0, true, window, cx);
+    }
+
+    /// Close a remote terminal tab, asking first while its 文件 transfers or
+    /// has files open with changes not saved yet, unless that was asked.
+    pub(super) fn close_terminal(
+        &mut self,
+        id: RemoteTerminalId,
+        ask_about_unsaved: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(&sidebar) = self.file_sidebars.get(&id)
+            && self.ask_before_closing(sidebar, ask_about_unsaved, true, window, cx)
+        {
+            return;
+        }
+        self.remove_terminal(id, window, cx);
+    }
+
+    fn remove_terminal(
+        &mut self,
+        id: RemoteTerminalId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(panel) = self.terminals.get(&id).cloned() {
             self.dock_area
                 .update(cx, |area, cx| area.remove_panel(panel, window, cx));
         }
@@ -1415,57 +1507,90 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(panel) = self.explorers.get(&id).cloned() {
-            let generation = panel.read(cx).generation();
-            // Its remote files close with it: changes not saved yet would be
-            // lost, so the question names them.
-            let unsaved = if ask_about_unsaved {
-                self.unsaved_files(&self.editors_of(id, cx), cx)
-            } else {
-                Vec::new()
-            };
-            let unsaved = (!unsaved.is_empty()).then(|| {
-                t!(
-                    "workspace.unsaved.close_sftp",
-                    files = describe_files(&unsaved)
-                )
-                .to_string()
-            });
-            if panel.read(cx).is_transferring() {
-                let direction = panel.read(cx).transfer_direction();
-                confirm_close_transfer(
-                    id,
-                    generation,
-                    direction,
-                    unsaved,
-                    self.focus_handle.clone(),
-                    window,
-                    cx,
-                );
-            } else if let Some(unsaved) = unsaved {
-                let dispatch = self.focus_handle.clone();
-                confirm_danger(
-                    t!("workspace.unsaved.close_sftp_title"),
-                    Some(unsaved.into()),
-                    t!("workspace.unsaved.discard_and_close"),
-                    Rc::new(move |window, cx| {
-                        dispatch.dispatch_explorer_action(
-                            &ExplorerAction::new(id, ExplorerCommand::CloseConfirmed)
-                                .with_generation(generation),
-                            window,
-                            cx,
-                        )
-                    }),
-                    window,
-                    cx,
-                );
-            } else {
-                self.remove_explorer(id, window, cx);
-            }
+        if self.explorers.contains_key(&id)
+            && !self.ask_before_closing(id, ask_about_unsaved, false, window, cx)
+        {
+            self.remove_explorer(id, window, cx);
         }
     }
 
+    /// Ask before closing an explorer that transfers, or whose files have
+    /// changes not saved yet (unless that was asked already): an SFTP tab,
+    /// or a terminal's 文件 as the terminal closes. Confirming sends the
+    /// explorer `CloseConfirmed`. `false` when there is nothing to ask.
+    fn ask_before_closing(
+        &mut self,
+        id: ExplorerId,
+        ask_about_unsaved: bool,
+        terminal: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(panel) = self.explorers.get(&id).cloned() else {
+            return false;
+        };
+        let generation = panel.read(cx).generation();
+        // Its remote files close with it: changes not saved yet would be
+        // lost, so the question names them.
+        let unsaved = if ask_about_unsaved {
+            self.unsaved_files(&self.editors_of(id, cx), cx)
+        } else {
+            Vec::new()
+        };
+        let unsaved = (!unsaved.is_empty()).then(|| {
+            let files = describe_files(&unsaved);
+            if terminal {
+                t!("workspace.unsaved.close_terminal", files = files)
+            } else {
+                t!("workspace.unsaved.close_sftp", files = files)
+            }
+            .to_string()
+        });
+        if panel.read(cx).is_transferring() {
+            let direction = panel.read(cx).transfer_direction();
+            confirm_close_transfer(
+                id,
+                generation,
+                direction,
+                unsaved,
+                self.focus_handle.clone(),
+                window,
+                cx,
+            );
+        } else if let Some(unsaved) = unsaved {
+            let dispatch = self.focus_handle.clone();
+            confirm_danger(
+                if terminal {
+                    t!("workspace.unsaved.close_terminal_title")
+                } else {
+                    t!("workspace.unsaved.close_sftp_title")
+                },
+                Some(unsaved.into()),
+                t!("workspace.unsaved.discard_and_close"),
+                Rc::new(move |window, cx| {
+                    dispatch.dispatch_explorer_action(
+                        &ExplorerAction::new(id, ExplorerCommand::CloseConfirmed)
+                            .with_generation(generation),
+                        window,
+                        cx,
+                    )
+                }),
+                window,
+                cx,
+            );
+        } else {
+            return false;
+        }
+        true
+    }
+
+    /// Close an explorer the user agreed to close. A terminal's 文件 was
+    /// asked about as its terminal closed: the terminal goes, and it with it.
     fn remove_explorer(&mut self, id: ExplorerId, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(terminal) = self.sidebar_terminal(id) {
+            self.remove_terminal(terminal, window, cx);
+            return;
+        }
         if let Some(panel) = self.explorers.get(&id).cloned() {
             self.cancel_prompts_for_owner(
                 PromptOwner::Sftp(id, panel.read(cx).generation()),
@@ -1512,8 +1637,10 @@ impl Workspace {
                 TransferDirection::Upload => Counter::Upload,
                 TransferDirection::Download => Counter::Download,
             }),
+            // The sidebar's 文件 has no 查找文件 to count.
             ExplorerCommand::FindFiles
-                if panel.read(cx).connection_state() == ConnectionState::Connected =>
+                if panel.read(cx).connection_state() == ConnectionState::Connected
+                    && !panel.read(cx).is_sidebar() =>
             {
                 self.count(Counter::SftpFind)
             }
@@ -1853,7 +1980,21 @@ impl Workspace {
         if let Some(terminal) = self.terminals.get(&id).cloned() {
             let host_id = terminal.read(cx).host_id();
             terminal.update(cx, |terminal, cx| terminal.disconnect(cx));
+            self.disconnect_file_sidebar(id, window, cx);
             self.refresh_host_connection_state(host_id, cx);
+        }
+    }
+
+    /// A terminal's 文件 goes down with it at once, rather than finding out
+    /// when its channel ends and then retrying for a while.
+    fn disconnect_file_sidebar(
+        &mut self,
+        terminal: RemoteTerminalId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(panel) = self.file_sidebar(terminal).cloned() {
+            panel.update(cx, |panel, cx| panel.disconnect(window, cx));
         }
     }
 
@@ -1871,6 +2012,7 @@ impl Workspace {
         let terminals: Vec<_> = self.terminals_of(id, cx).cloned().collect();
         for terminal in terminals {
             terminal.update(cx, |terminal, cx| terminal.disconnect(cx));
+            self.disconnect_file_sidebar(terminal.read(cx).id(), window, cx);
         }
         for panel in self.explorers_of(id, cx) {
             panel.update(cx, |panel, cx| panel.disconnect(window, cx));
@@ -2290,6 +2432,7 @@ fn new_terminal_panel(
             TerminalPanelEvent::Closed(terminal_id, host_id) => {
                 this.cancel_prompts_for_terminal(*terminal_id, window, cx);
                 this.terminals.remove(terminal_id);
+                this.close_file_sidebar(*terminal_id, window, cx);
                 if this.active_tab == Some(CenterTab::Terminal(*terminal_id)) {
                     this.set_active_tab(None, window, cx);
                 }
@@ -2306,7 +2449,21 @@ fn new_terminal_panel(
                 this.refresh_host_connection_state(*host_id, cx);
                 cx.notify();
             }
-            TerminalPanelEvent::Connected(_, host_id) => this.count_connection(*host_id, false, cx),
+            TerminalPanelEvent::Connected(terminal_id, host_id) => {
+                this.count_connection(*host_id, false, cx);
+                // 文件 comes back with its terminal: a channel on the new
+                // connection, whatever the old one's state.
+                if let Some(panel) = this.file_sidebar(*terminal_id).cloned()
+                    && panel.read(cx).can_reconnect()
+                {
+                    let id = panel.read(cx).id();
+                    this.on_explorer_action(
+                        &ExplorerAction::new(id, ExplorerCommand::Reconnect),
+                        window,
+                        cx,
+                    );
+                }
+            }
             TerminalPanelEvent::PromptRequested(terminal_id, host_id, prompt) => this
                 .enqueue_prompt(
                     PromptOwner::Terminal(*terminal_id),
@@ -2386,6 +2543,7 @@ fn new_explorer_panel(
     workspace: &Workspace,
     id: ExplorerId,
     host_id: HostId,
+    route: SftpRoute,
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> (Entity<ExplorerPanel>, Subscription) {
@@ -2395,6 +2553,7 @@ fn new_explorer_panel(
             host_id,
             workspace.store.clone(),
             workspace.sftp_provider.clone(),
+            route,
             workspace.local_directory_provider.clone(),
             workspace.focus_handle.clone(),
             window,
@@ -2418,6 +2577,12 @@ fn new_explorer_panel(
                 if this.active_tab == Some(CenterTab::Explorer(*id)) {
                     this.set_active_tab(None, window, cx);
                 }
+                let sidebars = this.file_sidebars.len();
+                this.file_sidebars.retain(|_, sidebar| sidebar != id);
+                if this.file_sidebars.len() != sidebars {
+                    // The right sidebar lets go of it.
+                    this.sync_tool_sidebar(window, cx);
+                }
                 this.refresh_host_connection_state(*host_id, cx);
                 this.forget_unused_temporary_host(*host_id, window, cx);
             }
@@ -2429,9 +2594,11 @@ fn new_explorer_panel(
                         this.cancel_prompts_for_owner(owner,window,cx);
                     }
                 }
-                // Only connecting, connected and disconnected change it.
+                // Only connecting, connected and disconnected change it. A
+                // terminal's 文件 logs in nowhere: `tool_files` counts it.
                 if this.explorers.get(id).is_some_and(|panel| {
-                    panel.read(cx).connection_state() == ConnectionState::Connected
+                    let panel = panel.read(cx);
+                    panel.connection_state() == ConnectionState::Connected && !panel.is_sidebar()
                 }) {
                     this.count_connection(*host_id, true, cx);
                 }

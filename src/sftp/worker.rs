@@ -1,6 +1,7 @@
 use super::{
-    EntryKind, ReadFailure, RemotePath, SaveFailure, SftpCommand, SftpEvent, SftpTransport,
-    SftpTransportProvider, TransferDetail, TransferDirection, TransferPhase, TransferProgress,
+    EntryKind, ReadFailure, RemotePath, SaveFailure, SftpCommand, SftpEvent, SftpRoute,
+    SftpTransport, SftpTransportProvider, TransferDetail, TransferDirection, TransferPhase,
+    TransferProgress,
     client::RemoteFs as _,
     client::{SftpClient, is_network_error},
     control::{Cancelled, TransferControl},
@@ -54,10 +55,11 @@ impl SshSftpTransportProvider {
     }
 }
 impl SftpTransportProvider for SshSftpTransportProvider {
-    fn create(&self, login: &HostLogin) -> Box<dyn SftpTransport> {
+    fn create(&self, login: &HostLogin, route: SftpRoute) -> Box<dyn SftpTransport> {
         Box::new(SshSftpTransport {
             connector: self.connector.clone(),
             config: SshConnectionConfig::from(login),
+            route,
             journal: Journal::new(self.resume_dir.clone()),
             download_journal: DownloadJournal::new(self.download_resume_dir.clone()),
         })
@@ -66,6 +68,7 @@ impl SftpTransportProvider for SshSftpTransportProvider {
 struct SshSftpTransport {
     connector: SshConnector,
     config: SshConnectionConfig,
+    route: SftpRoute,
     journal: Journal,
     download_journal: DownloadJournal,
 }
@@ -137,8 +140,18 @@ impl SshSftpTransport {
     ) -> Result<Arc<SftpClient>> {
         events.send(SftpEvent::Connecting).await?;
         let mut stop = shutdown.clone();
+        // A terminal's channel measures no latency: the terminal already
+        // shows its connection's.
+        let client = async {
+            match &self.route {
+                SftpRoute::Login => {
+                    SftpClient::connect(&self.connector, &self.config, prompts).await
+                }
+                SftpRoute::Terminal(terminal) => SftpClient::on_terminal(terminal).await,
+            }
+        };
         let client = tokio::select! {
-            result = SftpClient::connect(&self.connector, &self.config, prompts) => Arc::new(result?),
+            result = client => Arc::new(result?),
             _ = stop.changed() => return Err(Cancelled.into()),
         };
         let home = client.canonicalize(&RemotePath::new(".")?).await?;

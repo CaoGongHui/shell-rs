@@ -1,0 +1,412 @@
+//! 文件: the right sidebar's single remote pane beside an SSH terminal, on an
+//! SFTP channel of the terminal's own connection. It logs in nowhere, comes
+//! and goes with its terminal, and leaves SFTP tabs as they are.
+
+use crate::support::*;
+use shellrs::analytics::{Analytics, Counter, Signal};
+use shellrs::app::{
+    CloseTerminal, DisconnectTerminal, ExplorerAction, ExplorerCommand, ReconnectTerminal,
+};
+use shellrs::explorer::ExplorerPanel;
+
+/// The first terminal's 文件, the first explorer the workspace makes.
+const FILES: u64 = 1;
+const REMOTE_FILE: &str = "/home/tester/文件 甲.txt";
+
+struct Fixture {
+    handle: WindowHandle<Root>,
+    workspace: Entity<Workspace>,
+    terminals: Arc<FakeTerminalFactory>,
+    sftp: Arc<FakeSftpProvider>,
+    local: FakeLocalDirectory,
+}
+
+/// The seeded hosts, web-01 and staging-api with a terminal each, on fakes
+/// the test can look into.
+fn open(cx: &mut TestAppContext, sftp: FakeSftpProvider) -> Fixture {
+    init_app(cx);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let terminals = Arc::new(FakeTerminalFactory::default());
+    let sftp = Arc::new(sftp);
+    let local = FakeLocalDirectory::default();
+    let mut workspace = None;
+    let handle = cx.open_window(size(px(1280.), px(800.)), |window, cx| {
+        let view = cx.new(|cx| {
+            Workspace::new_with_services(
+                cx.new(|_| HostStore::seed()),
+                cx.new(|_| settings_store()),
+                Arc::new(FixedRemoteTerminalTransportProvider::new(terminals.clone())),
+                fake_local_terminals(),
+                sftp.clone(),
+                Arc::new(local.clone()),
+                Arc::new(FakeConnectionTester::default()),
+                Arc::new(FakeForwardProvider::default()),
+                window,
+                cx,
+            )
+        });
+        workspace = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    Fixture {
+        handle,
+        workspace: workspace.unwrap(),
+        terminals,
+        sftp,
+        local,
+    }
+}
+
+/// Bring a terminal forward and open 文件 beside it.
+async fn show_files(cx: &mut TestAppContext, fixture: &Fixture, terminal: u64, explorer: u64) {
+    in_frame(cx, fixture.handle, |window, cx| {
+        window.activate_window();
+        window.click(("terminal-tab", terminal), cx);
+    });
+    in_frame(cx, fixture.handle, |window, cx| {
+        if window
+            .try_find(("remote-pane", explorer))
+            .is_none_or(|pane| !pane.visible())
+        {
+            window.click("tool-files", cx);
+        }
+    });
+    wait_for_path(cx, fixture.handle, explorer, "/home/tester").await;
+}
+
+async fn wait_for_path(
+    cx: &mut TestAppContext,
+    handle: WindowHandle<Root>,
+    explorer: u64,
+    path: &str,
+) {
+    cx.wait_for(handle.into(), Duration::from_secs(2), |window, cx| {
+        window.render_frame(cx);
+        window
+            .within(("remote-pane", explorer))
+            .try_find("remote-path")
+            .is_some_and(|label| label.value() == Some(path))
+    })
+    .await;
+}
+
+fn sidebar(fixture: &Fixture, terminal: u64, cx: &App) -> Option<Entity<ExplorerPanel>> {
+    fixture
+        .workspace
+        .read(cx)
+        .file_sidebar(RemoteTerminalId(terminal))
+        .cloned()
+}
+
+fn state(fixture: &Fixture, cx: &mut TestAppContext) -> Option<ConnectionState> {
+    cx.update(|cx| {
+        sidebar(fixture, INITIAL_WEB_TERMINAL, cx).map(|panel| panel.read(cx).connection_state())
+    })
+}
+
+async fn wait_for_state(cx: &mut TestAppContext, fixture: &Fixture, wanted: ConnectionState) {
+    for _ in 0..100 {
+        if state(fixture, cx) == Some(wanted) {
+            return;
+        }
+        cx.executor().advance_clock(Duration::from_millis(20));
+        cx.run_until_parked();
+    }
+    panic!("文件 never got {wanted:?}: {:?}", state(fixture, cx));
+}
+
+async fn wait_for(cx: &mut TestAppContext, handle: WindowHandle<Root>, id: &'static str) {
+    cx.wait_for(handle.into(), Duration::from_secs(2), move |window, cx| {
+        window.render_frame(cx);
+        window.try_find(id).is_some()
+    })
+    .await;
+}
+
+#[gpui_kit::test]
+async fn files_open_on_the_terminals_own_connection(cx: &mut TestAppContext) {
+    let fixture = open(cx, FakeSftpProvider::default());
+    // Nothing until it is first shown.
+    assert_eq!(*fixture.sftp.on_terminal.lock().unwrap(), 0);
+    show_files(cx, &fixture, INITIAL_WEB_TERMINAL, FILES).await;
+
+    // A channel of the terminal's connection, no login of its own.
+    assert_eq!(*fixture.sftp.on_terminal.lock().unwrap(), 1);
+    assert_eq!(fixture.terminals.sftp_opens(), [1]);
+    in_frame(cx, fixture.handle, |window, _| {
+        assert!(window.try_find("prompt-dialog").is_none());
+        // The remote pane alone, in the sidebar, not a tab.
+        let sidebar = window.within(("tool-sidebar", INITIAL_WEB_TERMINAL));
+        assert!(sidebar.try_find(("remote-pane", FILES)).is_some());
+        assert!(window.try_find(("local-pane", FILES)).is_none());
+        assert!(window.try_find(("explorer-tab", FILES)).is_none());
+        let pane = window.within(("remote-pane", FILES));
+        // Narrow: no 目录列表 or 查找, and an upload button of its own.
+        assert!(pane.try_find("path-select").is_none());
+        assert!(pane.try_find("find-files").is_none());
+        assert!(pane.try_find("choose-files").is_some());
+    });
+    cx.update(|cx| {
+        let panel = sidebar(&fixture, INITIAL_WEB_TERMINAL, cx).unwrap();
+        let panel = panel.read(cx);
+        assert!(panel.is_sidebar());
+        assert_eq!(panel.remote().read(cx).column_names(cx), ["名称", "大小"]);
+        // Downloads go to Downloads, and the folder is never listed.
+        assert_eq!(panel.local().read(cx).path(), "/local/tester/Downloads");
+    });
+    assert!(fixture.local.listed.lock().unwrap().is_empty());
+
+    // Hidden and shown again, it is the same one.
+    in_frame(cx, fixture.handle, |window, cx| {
+        window.click("tool-files", cx)
+    });
+    in_frame(cx, fixture.handle, |window, cx| {
+        window.click("tool-files", cx)
+    });
+    wait_for_path(cx, fixture.handle, FILES, "/home/tester").await;
+    assert_eq!(*fixture.sftp.on_terminal.lock().unwrap(), 1);
+    assert_eq!(fixture.terminals.sftp_opens(), [1]);
+}
+
+#[gpui_kit::test]
+async fn each_terminal_has_files_of_its_own(cx: &mut TestAppContext) {
+    let fixture = open(cx, FakeSftpProvider::default());
+    show_files(cx, &fixture, INITIAL_WEB_TERMINAL, FILES).await;
+    in_frame(cx, fixture.handle, |window, cx| {
+        window.dispatch_action(
+            Box::new(ExplorerAction::new(
+                ExplorerId(FILES),
+                ExplorerCommand::Navigate {
+                    remote: true,
+                    path: "/srv".into(),
+                },
+            )),
+            cx,
+        )
+    });
+    wait_for_path(cx, fixture.handle, FILES, "/srv").await;
+
+    // The other terminal's, made as it comes forward with 文件 showing.
+    in_frame(cx, fixture.handle, |window, cx| {
+        window.click(("terminal-tab", INITIAL_STAGING_TERMINAL), cx)
+    });
+    wait_for_path(cx, fixture.handle, FILES + 1, "/home/tester").await;
+    in_frame(cx, fixture.handle, |window, _| {
+        assert!(window.try_find(("remote-pane", FILES)).is_none());
+    });
+    assert_eq!(*fixture.sftp.on_terminal.lock().unwrap(), 2);
+
+    // Back where it was.
+    in_frame(cx, fixture.handle, |window, cx| {
+        window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx)
+    });
+    wait_for_path(cx, fixture.handle, FILES, "/srv").await;
+    assert_eq!(*fixture.sftp.on_terminal.lock().unwrap(), 2);
+}
+
+#[gpui_kit::test]
+async fn files_go_down_and_come_back_with_their_terminal(cx: &mut TestAppContext) {
+    let fixture = open(cx, FakeSftpProvider::default());
+    show_files(cx, &fixture, INITIAL_WEB_TERMINAL, FILES).await;
+
+    in_frame(cx, fixture.handle, |window, cx| {
+        window.dispatch_action(
+            Box::new(DisconnectTerminal(RemoteTerminalId(INITIAL_WEB_TERMINAL))),
+            cx,
+        )
+    });
+    wait_for_state(cx, &fixture, ConnectionState::Disconnected).await;
+    // The host goes by its tabs, not by 文件.
+    cx.update(|cx| {
+        let store = fixture.workspace.read(cx).store().read(cx);
+        assert_eq!(
+            store.host(HostId(WEB_01)).unwrap().state,
+            ConnectionState::Disconnected
+        );
+    });
+
+    // On the terminal's next connection.
+    in_frame(cx, fixture.handle, |window, cx| {
+        window.dispatch_action(
+            Box::new(ReconnectTerminal(RemoteTerminalId(INITIAL_WEB_TERMINAL))),
+            cx,
+        )
+    });
+    wait_for_state(cx, &fixture, ConnectionState::Connected).await;
+    // Runs count across terminals: staging-api's was the second.
+    assert_eq!(fixture.terminals.sftp_opens(), [1, 3]);
+    assert_eq!(*fixture.sftp.on_terminal.lock().unwrap(), 1);
+}
+
+#[gpui_kit::test]
+async fn closing_a_terminal_whose_files_download_asks_first(cx: &mut TestAppContext) {
+    let fixture = open(cx, FakeSftpProvider::default());
+    show_files(cx, &fixture, INITIAL_WEB_TERMINAL, FILES).await;
+    in_frame(cx, fixture.handle, |window, cx| {
+        window
+            .within(("remote-pane", FILES))
+            .click("name:文件 甲.txt", cx);
+    });
+    in_frame(cx, fixture.handle, |window, cx| window.press("f5", cx));
+    in_frame(cx, fixture.handle, |window, cx| {
+        assert_eq!(
+            window.find("download-target").value(),
+            Some("/local/tester/Downloads")
+        );
+        window.click("download-confirm", cx);
+    });
+    cx.wait_for(
+        fixture.handle.into(),
+        Duration::from_secs(2),
+        |window, cx| {
+            window.render_frame(cx);
+            window.try_find("transfer-status").is_some()
+        },
+    )
+    .await;
+    // The narrow queue: a batch on lines of its own, no column titles.
+    in_frame(cx, fixture.handle, |window, _| {
+        let edge = window
+            .find(("tool-sidebar", INITIAL_WEB_TERMINAL))
+            .bounds()
+            .right();
+        assert!(window.find(("queue-entry", 1u64)).bounds().right() <= edge);
+        assert!(window.find("choose-files").bounds().right() <= edge);
+    });
+
+    let close = |cx: &mut TestAppContext| {
+        in_frame(cx, fixture.handle, |window, cx| {
+            window.dispatch_action(
+                Box::new(CloseTerminal(RemoteTerminalId(INITIAL_WEB_TERMINAL))),
+                cx,
+            )
+        })
+    };
+    close(cx);
+    wait_for(cx, fixture.handle, "cancel").await;
+    in_frame(cx, fixture.handle, |window, cx| window.click("cancel", cx));
+    cx.update(|cx| {
+        let workspace = fixture.workspace.read(cx);
+        assert!(
+            workspace
+                .remote_terminal(RemoteTerminalId(INITIAL_WEB_TERMINAL))
+                .is_some()
+        );
+        assert!(sidebar(&fixture, INITIAL_WEB_TERMINAL, cx).is_some());
+    });
+
+    close(cx);
+    wait_for(cx, fixture.handle, "ok").await;
+    in_frame(cx, fixture.handle, |window, cx| window.click("ok", cx));
+    cx.update(|cx| {
+        let workspace = fixture.workspace.read(cx);
+        assert!(
+            workspace
+                .remote_terminal(RemoteTerminalId(INITIAL_WEB_TERMINAL))
+                .is_none()
+        );
+        assert!(sidebar(&fixture, INITIAL_WEB_TERMINAL, cx).is_none());
+        assert!(workspace.explorer(ExplorerId(FILES)).is_none());
+    });
+}
+
+#[gpui_kit::test]
+async fn closing_a_terminal_asks_once_about_files_its_files_left_unsaved(cx: &mut TestAppContext) {
+    let fixture = open(
+        cx,
+        FakeSftpProvider::with_files(&[(REMOTE_FILE, b"text\n")]),
+    );
+    show_files(cx, &fixture, INITIAL_WEB_TERMINAL, FILES).await;
+    in_frame(cx, fixture.handle, |window, cx| {
+        window
+            .within(("remote-pane", FILES))
+            .double_click("name:文件 甲.txt", cx)
+    });
+    let editor = ("editor", 1u64);
+    cx.wait_for(
+        fixture.handle.into(),
+        Duration::from_secs(2),
+        move |window, cx| {
+            window.render_frame(cx);
+            window.try_find(editor).is_some()
+        },
+    )
+    .await;
+    in_frame(cx, fixture.handle, |window, cx| window.input("1", cx));
+
+    in_frame(cx, fixture.handle, |window, cx| {
+        window.dispatch_action(
+            Box::new(CloseTerminal(RemoteTerminalId(INITIAL_WEB_TERMINAL))),
+            cx,
+        )
+    });
+    wait_for(cx, fixture.handle, "ok").await;
+    in_frame(cx, fixture.handle, |window, cx| window.click("ok", cx));
+    cx.update(|cx| {
+        let workspace = fixture.workspace.read(cx);
+        assert!(
+            workspace
+                .remote_terminal(RemoteTerminalId(INITIAL_WEB_TERMINAL))
+                .is_none()
+        );
+        assert!(workspace.editor(shellrs::editor::EditorId(1)).is_none());
+    });
+    assert!(fixture.sftp.writes.lock().unwrap().is_empty());
+}
+
+#[gpui_kit::test]
+async fn files_dropped_on_files_are_offered_for_upload(cx: &mut TestAppContext) {
+    let fixture = open(cx, FakeSftpProvider::default());
+    show_files(cx, &fixture, INITIAL_WEB_TERMINAL, FILES).await;
+    in_frame(cx, fixture.handle, |window, cx| {
+        // Empty space under the rows, above the status line.
+        let pane = window.find(("remote-pane", FILES)).bounds();
+        let position = gpui_kit::point(pane.center().x, pane.bottom() - px(48.));
+        let paths =
+            gpui_kit::ExternalPaths(vec![std::path::PathBuf::from("/tmp/Finder 文件")].into());
+        window.dispatch_event(
+            gpui_kit::FileDropEvent::Entered { position, paths }.to_platform_input(),
+            cx,
+        );
+        window.dispatch_event(
+            gpui_kit::FileDropEvent::Submit { position }.to_platform_input(),
+            cx,
+        );
+    });
+    in_frame(cx, fixture.handle, |window, _| {
+        assert!(window.find("upload-confirm").visible());
+        assert_eq!(window.find("upload-target").value(), Some("/home/tester"));
+    });
+}
+
+#[gpui_kit::test]
+async fn files_count_as_a_tool_not_as_an_sftp_connection(cx: &mut TestAppContext) {
+    let fixture = open(cx, FakeSftpProvider::default());
+    let (sender, signals) = mpsc::channel();
+    cx.update_window(fixture.handle.into(), |_, window, cx| {
+        fixture.workspace.update(cx, |workspace, cx| {
+            workspace.set_analytics(Analytics::new(sender, true), window, cx)
+        });
+    })
+    .unwrap();
+    show_files(cx, &fixture, INITIAL_WEB_TERMINAL, FILES).await;
+    // ⌘F there finds nothing, so nothing is counted for it either.
+    in_frame(cx, fixture.handle, |window, cx| {
+        window.dispatch_action(
+            Box::new(ExplorerAction::new(
+                ExplorerId(FILES),
+                ExplorerCommand::FindFiles,
+            )),
+            cx,
+        )
+    });
+    // The seeded terminals' own connections aside.
+    let counted: Vec<Counter> = signals
+        .try_iter()
+        .filter_map(|signal| match signal {
+            Signal::Count(counter) if counter != Counter::Ssh => Some(counter),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(counted, [Counter::ToolFiles]);
+}
