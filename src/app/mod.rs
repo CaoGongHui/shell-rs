@@ -20,7 +20,7 @@ pub use shortcuts::{
     Refusal, SHORTCUTS, Shortcut, ShortcutGroup, ShortcutOverrides, apply_shortcuts, check,
     fixed_bindings, key_caps, key_text,
 };
-pub use window_hiding::{bring_forward, hide_when_closed};
+pub use window_hiding::{MainWindow, bring_forward, hide_when_closed};
 
 use gpui_kit::component::Theme;
 use gpui_kit::*;
@@ -41,6 +41,8 @@ pub const EDITOR_CONTEXT: &str = "FileEditor";
 pub const IMAGE_PREVIEW_CONTEXT: &str = "ImagePreview";
 pub const LOCAL_FILE_LIST_CONTEXT: &str = "LocalFileList";
 pub const REMOTE_FILE_LIST_CONTEXT: &str = "RemoteFileList";
+/// The 查找文件 window of an SFTP tab.
+pub const FIND_FILES_CONTEXT: &str = "FindFiles";
 
 /// What the window says when the local database cannot be opened: the run
 /// goes on, keeping its changes in memory only.

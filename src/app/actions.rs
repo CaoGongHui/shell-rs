@@ -43,6 +43,10 @@ gpui_kit::actions!(
         FindPreviousInTerminal,
         /// Close the active terminal's find bar and its highlights.
         DismissTerminalFind,
+        /// Close the 查找文件 window it is pressed in.
+        CloseFindFiles,
+        /// 复制结果 in the 查找文件 window: every result's path.
+        CopyFindResults,
         /// Clear the active terminal's screen and scrollback, keeping the
         /// prompt line.
         ClearTerminal,
@@ -477,6 +481,12 @@ pub enum ExplorerCommand {
     OpenDirectory {
         remote: bool,
     },
+    /// 查找文件, WinSCP's Find Files: on the remote side only, as there.
+    FindFiles,
+    /// 定位 in 查找文件: show a remote path's folder and select it there.
+    Reveal {
+        path: String,
+    },
     /// 复制路径 on the path label: the directory shown.
     CopyPath {
         remote: bool,
@@ -528,6 +538,10 @@ pub enum ExplorerCommand {
     /// Ask to delete the pane's selection.
     Delete {
         remote: bool,
+    },
+    /// 删除 in 查找文件, confirmed there: remote paths in any folders.
+    DeletePaths {
+        paths: Vec<String>,
     },
     /// Carry out a confirmed delete, rename, new item or permission change
     /// in the pane's directory.

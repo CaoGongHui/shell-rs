@@ -122,6 +122,12 @@ impl SftpTransport for FakeSftpTransport {
                         "/dotfiles" => Ok(dotfiles_listing()),
                         // The files put there, as `with_files` gave them.
                         "/pictures" => Ok(files_listing(&self.files, "/pictures")),
+                        // A tree to search: the files put under it, and the
+                        // folders that hold them; `locked` cannot be read.
+                        p if p.ends_with("/locked") => Err("权限不足".into()),
+                        p if p == "/srv" || p.starts_with("/srv/") => {
+                            Ok(tree_listing(&self.files, p))
+                        }
                         _ => Ok(fake_listing(path.as_str())),
                     };
                     events.send_blocking(SftpEvent::Listed { request_id, result })?;
@@ -376,6 +382,40 @@ pub fn files_listing(files: &FakeFiles, path: &str) -> DirectoryListing {
             ))
         })
         .collect();
+    DirectoryListing::new(path, entries)
+}
+
+/// The files put under `path`, as `with_files` gave them, and the folders
+/// that hold the ones further down.
+pub fn tree_listing(files: &FakeFiles, path: &str) -> DirectoryListing {
+    let prefix = format!("{path}/");
+    let mut entries = Vec::new();
+    let mut folders = std::collections::BTreeSet::new();
+    for (file, (bytes, modified)) in files.lock().unwrap().iter() {
+        let Some(rest) = file.strip_prefix(&prefix) else {
+            continue;
+        };
+        match rest.split_once('/') {
+            Some((folder, _)) => {
+                folders.insert(folder.to_string());
+            }
+            None => entries.push(DirectoryEntry::new(
+                rest,
+                FileMetadata::new(
+                    EntryKind::File,
+                    bytes.len() as u64,
+                    Some(*modified),
+                    Some(0o644),
+                ),
+            )),
+        }
+    }
+    entries.extend(folders.into_iter().map(|folder| {
+        DirectoryEntry::new(
+            folder,
+            FileMetadata::new(EntryKind::Directory, 0, None, Some(0o755)),
+        )
+    }));
     DirectoryListing::new(path, entries)
 }
 

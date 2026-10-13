@@ -18,6 +18,7 @@ use std::{
 use super::{
     ClickMode, ExplorerId, FileEntry, FileIcon, FilePane, FileSizeFormat, PaneSide, Selection,
     child_path, format_changed, format_rights,
+    marquee::{ListGeometry, Pressed, ends_a_drag},
 };
 
 /// What the row closures need from the pane, pushed in by `FilePane` so
@@ -60,55 +61,6 @@ impl ListPlaceholder {
             Self::NotConnected => t!("explorer.list.not_connected"),
             Self::Unreadable => t!("explorer.list.unreadable"),
         }
-    }
-}
-
-/// Where the list and its rows are on screen, recorded as they paint, so a
-/// selection rectangle can tell which rows it covers. Rows are all the same
-/// height, so one row tells where all of them are.
-#[derive(Default)]
-pub(super) struct ListGeometry {
-    /// Where the first row's top is (scrolled out of view or not), and the
-    /// row height.
-    pub rows: Cell<Option<(Pixels, Pixels)>>,
-    /// The list, header included.
-    pub list: Cell<Option<Bounds<Pixels>>>,
-    /// Where the left button went down in the list last.
-    pub press: Cell<Option<Point<Pixels>>>,
-    /// What the last press in the list landed on.
-    pub pressed: Cell<Pressed>,
-}
-
-/// What a press in the list landed on. As in WinSCP without full row select,
-/// everything but the name cells and the column titles is empty space:
-/// clicking there clears the selection, and dragging from there draws a
-/// rectangle.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(super) enum Pressed {
-    #[default]
-    Empty,
-    /// A name cell, which clicks and right-clicks select. Dragging its icon
-    /// and text moves files; dragging the rest of it draws a rectangle.
-    Name,
-    /// A column title.
-    Title,
-}
-
-/// How far a press may move and still be a click: GPUI's own drag
-/// threshold, which is private.
-const DRAG_THRESHOLD: f64 = 2.;
-
-/// Whether a click is the end of a drag instead. GPUI forgets every pending
-/// press once it paints a frame with a drag active, but a drag started and
-/// let go within one frame (a quick flick) still clicks each element both
-/// ends were over, bar the drag's own: a rectangle or a file drag let go
-/// over the name cell it began in must not select that row alone.
-fn ends_a_drag(event: &ClickEvent) -> bool {
-    match event {
-        ClickEvent::Mouse(click) => {
-            (click.up.position - click.down.position).magnitude() > DRAG_THRESHOLD
-        }
-        _ => false,
     }
 }
 

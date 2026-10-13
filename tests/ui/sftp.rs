@@ -2,6 +2,8 @@
 //! commands, selection and the connection.
 
 use crate::support::*;
+use gpui_kit::AnyWindowHandle;
+use shellrs::app::{CloseExplorer, ExplorerCommand, ExplorerShortcut};
 
 #[gpui_kit::test]
 async fn sftp_button_opens_explorer_and_navigates(cx: &mut TestAppContext) {
@@ -2411,4 +2413,436 @@ async fn sftp_controls_fit_small_window_in_light_dark_and_zoom(cx: &mut TestAppC
             .unwrap();
         }
     }
+}
+
+/// The SFTP tab's 查找文件 window, once open.
+fn find_window(workspace: &Entity<Workspace>, cx: &mut TestAppContext) -> Option<AnyWindowHandle> {
+    cx.update(|cx| {
+        workspace
+            .read(cx)
+            .explorer(ExplorerId(SFTP_TAB))
+            .and_then(|explorer| explorer.read(cx).find_window())
+    })
+}
+
+/// Open 查找文件 from the remote toolbar, and search `folder` for `mask`.
+fn find(
+    cx: &mut TestAppContext,
+    handle: WindowHandle<Root>,
+    workspace: &Entity<Workspace>,
+    mask: &str,
+    folder: &str,
+) -> AnyWindowHandle {
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window
+            .within(("remote-pane", SFTP_TAB))
+            .click("find-files", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let find = find_window(workspace, cx).expect("查找文件 opened");
+    cx.update_window(find, |_, window, cx| {
+        window.render_frame(cx);
+        window.input(mask, cx);
+        window.click("find-folder", cx);
+        window.press("secondary-a", cx);
+        window.input(folder, cx);
+        window.press("enter", cx);
+    })
+    .unwrap();
+    find
+}
+
+#[gpui_kit::test]
+async fn find_files_searches_below_a_remote_folder_in_a_window_of_its_own(cx: &mut TestAppContext) {
+    let provider = Arc::new(FakeSftpProvider::with_files(&[
+        ("/srv/new-api/docker-compose.yml", b"services: {}"),
+        ("/srv/web/docker-compose.yml", b"services: {}\n"),
+        ("/srv/web/README.md", b"# web"),
+        ("/srv/locked/docker-compose.yml", b""),
+    ]));
+    let (handle, workspace) = open_workspace_with_sftp(cx, provider);
+    open_test_explorer(cx, handle).await;
+    cx.update_window(handle.into(), |_, window, _| window.activate_window())
+        .unwrap();
+    cx.run_until_parked();
+
+    // The remote toolbar's 查找文件 opens a window on the remote folder; a
+    // search needs a name.
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window
+            .within(("remote-pane", SFTP_TAB))
+            .click("find-files", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let find = find_window(&workspace, cx).expect("查找文件 opened");
+    assert_ne!(find, AnyWindowHandle::from(handle));
+    cx.update_window(find, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(window.find("find-folder").value(), Some("/home/tester"));
+        window.press("enter", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(find, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("form-error").label(),
+            Some("请输入要查找的文件名")
+        );
+        // The whole name finds it, under the folder typed.
+        window.input("docker-compose.yml", cx);
+        window.click("find-folder", cx);
+        window.press("secondary-a", cx);
+        window.input("/srv", cx);
+        window.press("enter", cx);
+    })
+    .unwrap();
+    cx.wait_for(find, Duration::from_secs(2), |window, cx| {
+        window.render_frame(cx);
+        window
+            .try_find("find-status")
+            .is_some_and(|status| status.label() == Some("找到 2 个"))
+    })
+    .await;
+    cx.update_window(find, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window
+                .try_find("found:/srv/new-api/docker-compose.yml")
+                .is_some()
+        );
+        assert!(window.try_find("found:/srv/web/README.md").is_none());
+        // The folder that could not be read is skipped, and counted.
+        assert_eq!(
+            window.find("find-unreadable").label(),
+            Some("1 个文件夹无法读取")
+        );
+        window.click("found:/srv/web/docker-compose.yml", cx);
+        window.click("find-reveal", cx);
+    })
+    .unwrap();
+
+    // 定位: the remote pane shows the result's folder, the result selected,
+    // and the window stays open behind.
+    cx.wait_for(handle.into(), Duration::from_secs(2), |window, cx| {
+        window.render_frame(cx);
+        window.find("remote-path").value() == Some("/srv/web")
+    })
+    .await;
+    cx.update(|cx| assert_eq!(pane_selection(&workspace, true, cx), ["docker-compose.yml"]));
+    assert_eq!(find_window(&workspace, cx), Some(find));
+    cx.update_window(find, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("find-copy", cx);
+        // A double-click goes to a result too.
+        window.double_click("found:/srv/new-api/docker-compose.yml", cx);
+    })
+    .unwrap();
+    cx.update(|cx| {
+        assert_eq!(
+            cx.read_from_clipboard().and_then(|item| item.text()),
+            Some("/srv/new-api/docker-compose.yml\n/srv/web/docker-compose.yml".into())
+        )
+    });
+    cx.wait_for(handle.into(), Duration::from_secs(2), |window, cx| {
+        window.render_frame(cx);
+        window.find("remote-path").value() == Some("/srv/new-api")
+    })
+    .await;
+
+    // ⌘F in the remote list brings it forward on the folder shown now, the
+    // results as they were; Escape closes it.
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.press("secondary-f", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(find_window(&workspace, cx), Some(find));
+    cx.update_window(find, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(window.find("find-folder").value(), Some("/srv/new-api"));
+        assert_eq!(window.find("find-status").label(), Some("找到 2 个"));
+        window.press("escape", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(find_window(&workspace, cx), None);
+}
+
+#[gpui_kit::test]
+async fn a_result_of_find_files_downloads_and_the_window_closes_with_its_tab(
+    cx: &mut TestAppContext,
+) {
+    let provider = Arc::new(FakeSftpProvider::with_files(&[(
+        "/srv/app/app.log",
+        b"started",
+    )]));
+    let (handle, workspace) = open_workspace_with_sftp(cx, provider);
+    open_test_explorer(cx, handle).await;
+    let find = find(cx, handle, &workspace, "*.log", "/srv");
+    cx.wait_for(find, Duration::from_secs(2), |window, cx| {
+        window.render_frame(cx);
+        window.try_find("found:/srv/app/app.log").is_some()
+    })
+    .await;
+    cx.update_window(find, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("found:/srv/app/app.log", cx);
+        window.click("find-download", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    // The usual question, in the main window.
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("download-confirm").is_some());
+        window.close_dialog(cx);
+        window.dispatch_action(Box::new(CloseExplorer(ExplorerId(SFTP_TAB))), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(
+        cx.update_window(find, |_, _, _| ()).is_err(),
+        "the window closed with its tab"
+    );
+}
+
+#[gpui_kit::test]
+async fn find_files_results_sort_select_several_and_delete(cx: &mut TestAppContext) {
+    let provider = Arc::new(FakeSftpProvider::with_files(&[
+        ("/srv/a/app.log", b"12345"),
+        ("/srv/b/app.log", b"1"),
+        ("/srv/c/big.log", b"1234567890"),
+    ]));
+    let (handle, workspace) = open_workspace_with_sftp(cx, provider.clone());
+    open_test_explorer(cx, handle).await;
+    let find = find(cx, handle, &workspace, "*.log", "/srv");
+    cx.wait_for(find, Duration::from_secs(2), |window, cx| {
+        window.render_frame(cx);
+        window
+            .try_find("find-status")
+            .is_some_and(|status| status.label() == Some("找到 3 个"))
+    })
+    .await;
+    let (a, b, c) = ("/srv/a/app.log", "/srv/b/app.log", "/srv/c/big.log");
+    let row = |path: &str| ElementId::Name(format!("found:{path}").into());
+    // The results from the top down.
+    let order = |cx: &mut TestAppContext| {
+        cx.update_window(find, |_, window, cx| {
+            window.render_frame(cx);
+            let mut paths: Vec<&str> = [a, b, c]
+                .into_iter()
+                .filter(|path| window.try_find(row(path)).is_some())
+                .collect();
+            paths.sort_by(|x, y| {
+                let top = |path: &str| window.find(row(path)).bounds().origin.y;
+                top(x).partial_cmp(&top(y)).unwrap()
+            });
+            paths
+        })
+        .unwrap()
+    };
+    let selected = |cx: &mut TestAppContext| {
+        cx.update_window(find, |_, window, cx| {
+            window.render_frame(cx);
+            [a, b, c]
+                .into_iter()
+                .filter(|path| window.find(row(path)).selected() == Some(true))
+                .collect::<Vec<_>>()
+        })
+        .unwrap()
+    };
+    let click_size = |cx: &mut TestAppContext| {
+        cx.update_window(find, |_, window, cx| {
+            window.render_frame(cx);
+            window.click("column:size", cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+    };
+
+    // By folder, until a title is clicked: descending, ascending, back.
+    assert_eq!(order(cx), [a, b, c]);
+    click_size(cx);
+    assert_eq!(order(cx), [c, a, b]);
+    click_size(cx);
+    assert_eq!(order(cx), [b, a, c]);
+    click_size(cx);
+    assert_eq!(order(cx), [a, b, c]);
+
+    // A click selects one, ⌘ adds, Shift extends; ↓ and ⌘A as in the lists.
+    cx.update_window(find, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(row(a), cx);
+        let position = window.find(row(c)).bounds().center();
+        click_at(window, position, gpui_kit::Modifiers::secondary_key(), cx);
+    })
+    .unwrap();
+    assert_eq!(selected(cx), [a, c]);
+    cx.update_window(find, |_, window, cx| {
+        window.render_frame(cx);
+        let position = window.find(row(b)).bounds().center();
+        click_at(window, position, gpui_kit::Modifiers::shift(), cx);
+    })
+    .unwrap();
+    assert_eq!(selected(cx), [b, c]);
+    cx.update_window(find, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(row(a), cx);
+        window.press("down", cx);
+    })
+    .unwrap();
+    assert_eq!(selected(cx), [b]);
+    cx.update_window(find, |_, window, cx| {
+        window.render_frame(cx);
+        window.press("secondary-a", cx);
+    })
+    .unwrap();
+    assert_eq!(selected(cx), [a, b, c]);
+
+    // 下载… takes them all.
+    cx.update_window(find, |_, window, cx| {
+        window.render_frame(cx);
+        window.click("find-download", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("download-confirm").is_some());
+        window.close_dialog(cx);
+    })
+    .unwrap();
+
+    // 删除 asks in this window, then the deleted results leave the list.
+    cx.update_window(find, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(row(a), cx);
+        let position = window.find(row(b)).bounds().center();
+        click_at(window, position, gpui_kit::Modifiers::secondary_key(), cx);
+        window.press("delete", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(find, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("ok").visible());
+        window.click("ok", cx);
+    })
+    .unwrap();
+    cx.wait_for(find, Duration::from_secs(2), |window, cx| {
+        window.render_frame(cx);
+        window.try_find(row(a)).is_none()
+    })
+    .await;
+    assert_eq!(order(cx), [c]);
+    assert_eq!(
+        provider.operations.lock().unwrap().last(),
+        Some(&shellrs::sftp::RemoteOperation::Delete {
+            paths: vec![RemotePath::new(a).unwrap(), RemotePath::new(b).unwrap()],
+        })
+    );
+    cx.update_window(find, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(window.find("find-status").label(), Some("找到 1 个"));
+    })
+    .unwrap();
+}
+
+/// The results take the pointer as the main window's lists do: the name
+/// cell is the result, a click elsewhere clears the selection, and a drag
+/// from there selects the rows it crosses.
+#[gpui_kit::test]
+async fn find_files_results_select_by_name_and_by_rectangle(cx: &mut TestAppContext) {
+    let provider = Arc::new(FakeSftpProvider::with_files(&[
+        ("/srv/a/app.log", b"12345"),
+        ("/srv/b/app.log", b"1"),
+        ("/srv/c/big.log", b"1234567890"),
+    ]));
+    let (handle, workspace) = open_workspace_with_sftp(cx, provider);
+    open_test_explorer(cx, handle).await;
+    let find = find(cx, handle, &workspace, "*.log", "/srv");
+    cx.wait_for(find, Duration::from_secs(2), |window, cx| {
+        window.render_frame(cx);
+        window
+            .try_find("find-status")
+            .is_some_and(|status| status.label() == Some("找到 3 个"))
+    })
+    .await;
+    let (a, b, c) = ("/srv/a/app.log", "/srv/b/app.log", "/srv/c/big.log");
+    let id = |kind: &str, path: &str| ElementId::Name(format!("{kind}:{path}").into());
+    let selected = |cx: &mut TestAppContext| {
+        cx.update_window(find, |_, window, cx| {
+            window.render_frame(cx);
+            [a, b, c]
+                .into_iter()
+                .filter(|path| window.find(id("found", path)).selected() == Some(true))
+                .collect::<Vec<_>>()
+        })
+        .unwrap()
+    };
+
+    // The name selects; the size beside it is empty space, which clears.
+    cx.update_window(find, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(id("found", a), cx);
+    })
+    .unwrap();
+    assert_eq!(selected(cx), [a]);
+    cx.update_window(find, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(id("found-size", b), cx);
+    })
+    .unwrap();
+    assert!(selected(cx).is_empty());
+
+    // A drag from empty space selects the rows it crosses, and the
+    // rectangle goes with the button.
+    cx.update_window(find, |_, window, cx| {
+        window.render_frame(cx);
+        let from = window.find(id("found-size", c)).bounds().center();
+        let to = window.find(id("found-size", b)).bounds().center();
+        window.drag(from, to, cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(selected(cx), [b, c]);
+    cx.update_window(find, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find("selection-rectangle").is_none());
+    })
+    .unwrap();
+
+    // The context menu's commands are this window's: 复制结果, and 定位
+    // once a single result is selected.
+    cx.update_window(find, |_, window, cx| {
+        window.render_frame(cx);
+        window.dispatch_action(Box::new(shellrs::app::CopyFindResults), cx);
+    })
+    .unwrap();
+    cx.update(|cx| {
+        assert_eq!(
+            cx.read_from_clipboard().and_then(|item| item.text()),
+            Some(format!("{a}\n{b}\n{c}"))
+        )
+    });
+    cx.update_window(find, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(id("found", c), cx);
+        window.dispatch_action(
+            Box::new(ExplorerShortcut(ExplorerCommand::Open { remote: true })),
+            cx,
+        );
+    })
+    .unwrap();
+    cx.wait_for(handle.into(), Duration::from_secs(2), |window, cx| {
+        window.render_frame(cx);
+        window.find("remote-path").value() == Some("/srv/c")
+    })
+    .await;
 }

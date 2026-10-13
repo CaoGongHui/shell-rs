@@ -126,13 +126,19 @@ pub(super) fn directory_menu(
     cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
     let create = state.clone();
-    let menu = refresh_items(menu, state, window, cx)
-        .menu_with_check(
-            t!("explorer.command.show_hidden_files"),
-            state.show_hidden,
-            Box::new(ToggleHiddenFiles(PaneSide::from_remote(state.remote))),
-        )
-        .separator();
+    let mut menu = refresh_items(menu, state, window, cx).menu_with_check(
+        t!("explorer.command.show_hidden_files"),
+        state.show_hidden,
+        Box::new(ToggleHiddenFiles(PaneSide::from_remote(state.remote))),
+    );
+    if state.remote {
+        menu = menu.menu_with_icon(
+            t!("explorer.command.find_files"),
+            Icon::new(IconName::Search),
+            state.action(ExplorerCommand::FindFiles),
+        );
+    }
+    let menu = menu.separator();
     add_bookmark_item(menu, state).separator().submenu(
         t!("explorer.command.new"),
         window,

@@ -1512,6 +1512,11 @@ impl Workspace {
                 TransferDirection::Upload => Counter::Upload,
                 TransferDirection::Download => Counter::Download,
             }),
+            ExplorerCommand::FindFiles
+                if panel.read(cx).connection_state() == ConnectionState::Connected =>
+            {
+                self.count(Counter::SftpFind)
+            }
             ExplorerCommand::Preview { remote, path } => {
                 if let Some((_, kind)) = panel.read(cx).preview_target(*remote, path.as_deref(), cx)
                 {

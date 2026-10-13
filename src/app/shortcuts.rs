@@ -752,9 +752,72 @@ fn fixed_context_bindings() -> Vec<KeyBinding> {
             DismissTerminalFind,
             Some(TERMINAL_FIND_KEY_CONTEXT),
         ),
+        // The 查找文件 window closes as a dialog would, and as a window does.
+        KeyBinding::new("escape", CloseFindFiles, Some(FIND_FILES_CONTEXT)),
+        KeyBinding::new(&primary("w"), CloseFindFiles, Some(FIND_FILES_CONTEXT)),
     ];
     bindings.extend(terminal_key_bindings());
     bindings.extend(file_list_key_bindings());
+    bindings.extend(find_results_key_bindings());
+    bindings
+}
+
+/// 查找文件's results take the remote file list's keys for what they offer:
+/// moving and selecting, 定位 on Return, 编辑, 下载 and 删除. Bound at the
+/// table, a level below the window, so the fields keep Return and the rest.
+fn find_results_key_bindings() -> Vec<KeyBinding> {
+    use crate::explorer::CursorMotion;
+    #[cfg(target_os = "macos")]
+    const PRIMARY: &str = "cmd";
+    #[cfg(not(target_os = "macos"))]
+    const PRIMARY: &str = "ctrl";
+
+    let table = format!("{FIND_FILES_CONTEXT} > DataTable");
+    let remote = true;
+    let bind = |keys: &str, command: ExplorerCommand| {
+        KeyBinding::new(keys, ExplorerShortcut(command), Some(table.as_str()))
+    };
+    let mut bindings = vec![
+        bind("enter", ExplorerCommand::Open { remote }),
+        bind("f4", ExplorerCommand::Edit { remote, path: None }),
+        bind("f5", ExplorerCommand::Transfer { remote }),
+        bind("delete", ExplorerCommand::Delete { remote }),
+        bind("f8", ExplorerCommand::Delete { remote }),
+        #[cfg(target_os = "macos")]
+        bind("cmd-backspace", ExplorerCommand::Delete { remote }),
+        bind("space", ExplorerCommand::ToggleSelection { remote }),
+        bind("insert", ExplorerCommand::ToggleSelection { remote }),
+        bind(
+            &format!("{PRIMARY}-a"),
+            ExplorerCommand::SelectAll { remote },
+        ),
+        KeyBinding::new("left", NoAction {}, Some(table.as_str())),
+        KeyBinding::new("right", NoAction {}, Some(table.as_str())),
+    ];
+    for (key, motion) in [
+        ("up", CursorMotion::Up),
+        ("down", CursorMotion::Down),
+        ("pageup", CursorMotion::PageUp),
+        ("pagedown", CursorMotion::PageDown),
+        ("home", CursorMotion::Home),
+        ("end", CursorMotion::End),
+    ] {
+        for extend in [false, true] {
+            let keys = if extend {
+                format!("shift-{key}")
+            } else {
+                key.to_string()
+            };
+            bindings.push(bind(
+                &keys,
+                ExplorerCommand::MoveCursor {
+                    remote,
+                    motion,
+                    extend,
+                },
+            ));
+        }
+    }
     bindings
 }
 
@@ -812,6 +875,15 @@ fn file_list_key_bindings() -> Vec<KeyBinding> {
         ]);
         #[cfg(not(target_os = "macos"))]
         bindings.push(bind("ctrl-h", ExplorerCommand::Home { remote }, context));
+        // 查找文件, as ⌘F finds in a terminal; the remote side only, as in
+        // WinSCP.
+        if remote {
+            bindings.push(bind(
+                &format!("{PRIMARY}-f"),
+                ExplorerCommand::FindFiles,
+                context,
+            ));
+        }
         bindings.extend([
             bind("backspace", ExplorerCommand::Up { remote }, context),
             bind(

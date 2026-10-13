@@ -50,6 +50,8 @@ pub enum Counter {
     Sftp,
     SftpTemporary,
     SftpExternal,
+    /// 查找文件 opened in an SFTP tab.
+    SftpFind,
     LocalTerminal,
     /// A port forward started, by the user or with ShellRS.
     ForwardLocal,
@@ -96,7 +98,7 @@ pub enum Counter {
 }
 
 impl Counter {
-    pub const ALL: [Counter; 44] = [
+    pub const ALL: [Counter; 45] = [
         Self::Ssh,
         Self::SshJump,
         Self::SshProxy,
@@ -107,6 +109,7 @@ impl Counter {
         Self::Sftp,
         Self::SftpTemporary,
         Self::SftpExternal,
+        Self::SftpFind,
         Self::LocalTerminal,
         Self::ForwardLocal,
         Self::ForwardRemote,
@@ -155,6 +158,7 @@ impl Counter {
             Self::Sftp => "sftp",
             Self::SftpTemporary => "sftp_temporary",
             Self::SftpExternal => "sftp_external",
+            Self::SftpFind => "sftp_find",
             Self::LocalTerminal => "local_terminal",
             Self::ForwardLocal => "forward_local",
             Self::ForwardRemote => "forward_remote",

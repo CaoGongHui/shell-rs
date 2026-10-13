@@ -179,6 +179,9 @@ explorer.command.properties:
 explorer.command.new:
   zh-CN: 新建
   en: New
+explorer.command.find_files:
+  zh-CN: 查找文件…
+  en: Find files…
 
 explorer.transfer.upload_title:
   zh-CN: 上传文件
@@ -704,3 +707,73 @@ explorer.properties.recursive:
 explorer.properties.dir_x:
   zh-CN: 为目录添加执行权限（X）
   en: Add execute permission to folders (X)
+
+explorer.find.window_title:
+  zh-CN: 查找文件 – %{host}
+  en: Find files – %{host}
+explorer.find.mask:
+  zh-CN: 文件名
+  en: File name
+explorer.find.mask_placeholder:
+  zh-CN: 例如 *.log; nginx.conf
+  en: For example, *.log; nginx.conf
+explorer.find.mask_hint:
+  zh-CN: 多个名称用分号隔开，* 代表任意几个字符，? 代表一个，不分大小写；以 / 结尾的查找文件夹，如 logs/。
+  en: "Separate several names with semicolons. * stands for any characters and ? for one, and case doesn’t matter. End a name with / to find folders, such as logs/."
+explorer.find.folder:
+  zh-CN: 查找位置
+  en: Search in
+explorer.find.start:
+  zh-CN: 查找
+  en: Find
+explorer.find.stop:
+  zh-CN: 停止
+  en: Stop
+explorer.find.mask_missing:
+  zh-CN: 请输入要查找的文件名
+  en: Enter a file name to find
+explorer.find.folder_missing:
+  zh-CN: 请输入查找位置
+  en: Enter a folder to search in
+explorer.find.column_folder:
+  zh-CN: 目录
+  en: Folder
+explorer.find.searching:
+  zh-CN: 正在查找 %{folder}
+  en: Searching %{folder}
+explorer.find.searching_short:
+  zh-CN: 正在查找…
+  en: Searching…
+explorer.find.nothing:
+  zh-CN: 没有找到
+  en: Nothing found
+explorer.find.found.one:
+  en: Found %{count} item
+explorer.find.found.other:
+  zh-CN: 找到 %{count} 个
+  en: Found %{count} items
+explorer.find.stopped.one:
+  en: Stopped. Found %{count} item
+explorer.find.stopped.other:
+  zh-CN: 已停止，找到 %{count} 个
+  en: Stopped. Found %{count} items
+explorer.find.unreadable.one:
+  en: "%{count} folder couldn’t be read"
+explorer.find.unreadable.other:
+  zh-CN: "%{count} 个文件夹无法读取"
+  en: "%{count} folders couldn’t be read"
+explorer.find.reveal:
+  zh-CN: 定位
+  en: Go to
+explorer.find.reveal_tip:
+  zh-CN: 在远程列表里选中它
+  en: Select it in the remote list
+explorer.find.busy:
+  zh-CN: 远程面板正在进行别的文件操作，等它完成后再删除。
+  en: Another file operation is running on the remote side. Delete when it’s done.
+explorer.find.copy:
+  zh-CN: 复制结果
+  en: Copy results
+explorer.find.copy_tip:
+  zh-CN: 复制全部结果的路径
+  en: Copy the paths of all results

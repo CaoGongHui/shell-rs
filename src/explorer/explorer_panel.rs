@@ -2,6 +2,7 @@ use super::{
     ExplorerId, FileLocation, FilePane, FilePaneEvent, LoadIntent, PaneSide, QueueId, QueueState,
     Removal, TransferJob, TransferQueue,
     file_edit::{Opening, PendingFile},
+    find_window::{FIND_REQUESTS, FindWindow},
     pane_operations::PendingOperation,
     preview::PreviewKind,
 };
@@ -67,7 +68,11 @@ pub struct ExplorerPanel {
     /// id; the files being read for a new editor tab.
     pub(super) files: HashMap<u64, PendingFile>,
     pub(super) opening: HashSet<FileLocation>,
-    commands: async_channel::Sender<SftpCommand>,
+    /// 查找文件's window, while it is open, and the name it last searched
+    /// for, which the next one starts with.
+    pub(super) find: Option<FindWindow>,
+    pub(super) find_mask: String,
+    pub(super) commands: async_channel::Sender<SftpCommand>,
     state: ConnectionState,
     /// The connection's latest round trip; none until the first one after
     /// connecting comes back.
@@ -206,6 +211,8 @@ impl ExplorerPanel {
                 this.send(SftpCommand::Shutdown);
                 async {}
             }),
+            // The main window closed, and the workspace with it.
+            cx.on_release(|this, cx| this.close_find(cx)),
         ];
         Self {
             id,
@@ -220,6 +227,8 @@ impl ExplorerPanel {
             next_operation: 0,
             files: HashMap::new(),
             opening: HashSet::new(),
+            find: None,
+            find_mask: String::new(),
             commands,
             state: ConnectionState::Connecting,
             latency: None,
@@ -471,6 +480,7 @@ impl ExplorerPanel {
                 self.state = ConnectionState::Disconnected;
                 self.latency = None;
                 self.abandon_remote_operations(cx);
+                self.find_connection_lost(cx);
                 self.remote
                     .update(cx, |pane, cx| pane.disconnected(message, cx));
                 cx.emit(ExplorerPanelEvent::StateChanged(self.id, self.host_id));
@@ -481,6 +491,10 @@ impl ExplorerPanel {
                 self.generation,
                 prompt,
             )),
+            // The search's listings, and an answer to one stopped since.
+            SftpEvent::Listed { request_id, result } if request_id >= FIND_REQUESTS => {
+                self.find_listed(request_id, result, cx)
+            }
             SftpEvent::Listed { request_id, result } => self.remote.update(cx, |pane, cx| {
                 pane.apply_listing(request_id, result, window, cx)
             }),
@@ -694,6 +708,24 @@ impl ExplorerPanel {
                 self.set_current_pane(*remote, cx);
                 self.open_directory(*remote, window, cx);
             }
+            ExplorerCommand::FindFiles => {
+                self.set_current_pane(true, cx);
+                self.open_find(window, cx);
+            }
+            ExplorerCommand::Reveal { path } => {
+                let (directory, name) = match path.rsplit_once('/') {
+                    Some(("", name)) => ("/".to_string(), name),
+                    Some((directory, name)) => (directory.to_string(), name),
+                    None => return,
+                };
+                if self.state == ConnectionState::Connected {
+                    self.remote
+                        .update(cx, |pane, _| pane.select_after_load(name.to_string()));
+                    self.navigate(true, directory, LoadIntent::Visit, window, cx);
+                }
+                let focus = self.remote.read(cx).focus_handle(cx);
+                window.focus(&focus, cx);
+            }
             ExplorerCommand::CopyPath { remote } => {
                 let path = self.pane(*remote).read(cx).path();
                 if !path.is_empty() {
@@ -757,6 +789,7 @@ impl ExplorerPanel {
             }
             ExplorerCommand::Enqueue(job) => self.enqueue(job.clone(), window, cx),
             ExplorerCommand::Delete { remote } => self.confirm_delete(*remote, window, cx),
+            ExplorerCommand::DeletePaths { paths } => self.delete_paths(paths.clone(), window, cx),
             ExplorerCommand::Rename { remote } => self.open_rename(*remote, window, cx),
             ExplorerCommand::New { remote, kind } => self.open_new(*remote, *kind, window, cx),
             ExplorerCommand::Properties { remote } => self.open_properties(*remote, window, cx),
@@ -887,6 +920,7 @@ impl BasePanel for ExplorerPanel {
         self.tab_group = Some(group);
     }
     fn on_removed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_find(cx);
         self.disconnect(window, cx);
         self.send(SftpCommand::Shutdown);
         self.tab_group = None;
@@ -994,7 +1028,10 @@ fn needs_connection(command: &ExplorerCommand) -> bool {
         | C::New { remote, .. }
         | C::Properties { remote }
         | C::Operate { remote, .. } => *remote,
-        C::Transfer { .. }
+        C::FindFiles
+        | C::Reveal { .. }
+        | C::DeletePaths { .. }
+        | C::Transfer { .. }
         | C::DownloadPaths { .. }
         | C::ChooseFiles
         | C::UploadPaths { .. }

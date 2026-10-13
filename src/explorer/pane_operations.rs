@@ -43,6 +43,8 @@ pub(super) struct PendingOperation {
     select: Option<String>,
     /// A new file, to open in the editor once it exists (WinSCP does).
     edit: Option<String>,
+    /// Paths 查找文件 deleted: its window hears how it went, and says it.
+    found: Option<Vec<String>>,
 }
 
 impl PaneOperation {
@@ -167,6 +169,7 @@ impl ExplorerPanel {
                 failure: operation.failure_title(),
                 select: operation.result_name(),
                 edit,
+                found: None,
             },
         );
         pane.update(cx, |pane, cx| pane.set_busy(true, cx));
@@ -214,6 +217,9 @@ impl ExplorerPanel {
             }
         });
         match result {
+            result if pending.found.is_some() => {
+                self.find_deleted(pending.found.unwrap_or_default(), result, cx)
+            }
             Err(message) => window
                 .push_notification(Notification::error(message).title((pending.failure)()), cx),
             Ok(()) => {
@@ -234,6 +240,43 @@ impl ExplorerPanel {
         }
         // Re-read even after a failure: a delete may have removed part of a tree.
         self.reload(pending.remote, window, cx);
+    }
+
+    /// 删除 in 查找文件: remote paths in any folders, as the remote pane's
+    /// own delete runs, the pane busy until it is done and read again after.
+    pub(super) fn delete_paths(
+        &mut self,
+        paths: Vec<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if paths.is_empty() || !self.can_modify(true, cx) {
+            return;
+        }
+        self.next_operation += 1;
+        let id = self.next_operation;
+        self.operations.insert(
+            id,
+            PendingOperation {
+                remote: true,
+                failure: || t!("explorer.operation.delete_failed"),
+                select: None,
+                edit: None,
+                found: Some(paths.clone()),
+            },
+        );
+        self.remote.update(cx, |pane, cx| pane.set_busy(true, cx));
+        match paths
+            .into_iter()
+            .map(RemotePath::new)
+            .collect::<Result<Vec<_>>>()
+        {
+            Ok(paths) => self.send(SftpCommand::Operate {
+                request_id: id,
+                operation: RemoteOperation::Delete { paths },
+            }),
+            Err(error) => self.finish_operation(id, Err(format!("{error:#}")), window, cx),
+        }
     }
 
     /// The connection dropped: remote operations will not answer, nor will

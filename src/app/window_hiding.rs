@@ -1,6 +1,6 @@
 //! On macOS the window's close button hides ShellRS instead of closing it.
 //!
-//! ShellRS has one window, and the workspace in it owns everything that
+//! ShellRS has one main window, and the workspace in it owns everything that
 //! runs: connections, transfers, port forwards, the external CLI. Closing
 //! it would stop all of that yet leave the app in the Dock with no window,
 //! and the Dock icon could not bring one back. So, like Mac terminals,
@@ -9,7 +9,14 @@
 //! the window closes, as GPUI does there by default, but like ⌘Q only once
 //! the quit guard lets them (unsaved changes in an editor are asked about).
 
-use gpui_kit::{App, Window};
+use gpui_kit::{AnyWindowHandle, App, Global, Window};
+
+/// The workspace's window: the one the Dock icon brings back. Others, such
+/// as an SFTP tab's 查找文件, come and go beside it.
+#[derive(Clone, Copy)]
+pub struct MainWindow(pub AnyWindowHandle);
+
+impl Global for MainWindow {}
 
 /// Make the window's close button hide ShellRS on macOS. Elsewhere closing
 /// quits, after asking the quit guard.

@@ -259,6 +259,7 @@ Each pane has two rows of toolbar, with the path label below them. When a pane i
   - Bookmarks: the button opens the “Open folder” dialog (see below); the drop-down arrow next to it lists this host’s bookmarks for this side, which you click to go there, and can also add or remove the current path. Bookmarks are saved in the local database and deleted along with the host.
   - Parent folder, Root folder, Home folder, Refresh, Back, Forward.
   - Show / hide hidden files: files and folders whose names start with `.`. An open eye means they’re shown, a crossed-out eye that they’re hidden. Local and remote each have their own switch, independent of each other; each side’s choice applies to every SFTP tab and is saved in the settings; both are hidden by default. While they’re hidden, the bottom of the pane says “N hidden”; while they’re shown, hidden files’ text is lighter. The file lists’ icons are monochrome by default; for color ones as in WinSCP, see Settings › SFTP.
+  - Find files (remote side only): see “Find files” below.
 - Second row (files):
   - “Download…” on the remote side and “Upload…” on the local side, whose drop-down also has “Choose files to upload…”.
   - Delete, Rename…, Properties…, New (Folder… / File…).
@@ -301,7 +302,7 @@ The columns are the same as in WinSCP: Name, Size, Type and Modified on the loca
 - Keyboard: ↑↓, Home, End, PageUp and PageDown move, with Shift to extend the selection; Space or Insert toggles the current row; ⌘A selects all; Tab switches to the other side.
 - Right-clicking an unselected name cell selects it first; right-clicking empty space clears the selection and opens the empty-space menu.
   - The menu on file names: Edit (for files; images, SVG and Markdown also have Preview, and images other than SVG have only Preview), Upload… / Download…, Copy path (the full paths of the selected items, one per line), Delete, Rename…, Properties…. Double-clicking a folder goes into it, so the menu has no “Open”.
-  - The empty-space menu: Go to (Parent folder / Root folder / Home folder / Back / Forward), Refresh, Show hidden files (checked means this side shows them), Add path to bookmarks, New.
+  - The empty-space menu: Go to (Parent folder / Root folder / Home folder / Back / Forward), Refresh, Show hidden files (checked means this side shows them), Find files… (remote), Add path to bookmarks, New.
 
 ### Shortcuts
 
@@ -322,6 +323,20 @@ The columns are the same as in WinSCP: Name, Size, Type and Modified on the loca
 | Open folder / Edit file | Enter; also ⌘↓ on macOS |
 | Open folder or bookmark | ⌘O / Ctrl+O; also ⌘⇧G on macOS |
 | Show / hide hidden files (depending on the pane) | ⌘⇧. on macOS, Ctrl+Alt+H on Windows and Linux |
+| Find files (remote) | ⌘F / Ctrl+F |
+
+### Find files
+
+As WinSCP’s Find Files, on the remote side only: click the magnifying glass at the right end of the first toolbar row, choose “Find files…” in the empty-space menu, or press ⌘F (Ctrl+F on Windows and Linux). It’s a window of its own that, as in WinSCP, doesn’t block the main one: you can browse and transfer while it searches, and switch between the two windows. Each SFTP tab has at most one; opening it again brings it to the front (when it isn’t searching, “Search in” becomes the remote pane’s current folder), and it closes with its SFTP tab.
+
+- “File name”: file masks as in WinSCP. Separate several with semicolons (or commas); case doesn’t matter, and a mask must match the whole name: `*` stands for any characters and `?` for one, such as `*.log` or `nginx.conf` (`*.*` means every name). A mask finds files; one ending in `/` finds folders, such as `logs/`. WinSCP’s exclusions (`|`), paths, and size and time conditions aren’t supported.
+- “Search in”: the remote pane’s current folder when the dialog opens. `~` is the home folder, and a relative path starts from the current folder.
+- Press Return or “Find” to start; while searching, the button is “Stop”. Every folder below is read (four at a time), and the files and folders found are listed as they come, with their name, folder, size and modification time, then sorted by folder and name once the search is over. Below the list is the folder being searched, then how many were found; folders that can’t be read are skipped, and counted.
+- As in WinSCP, symbolic links to folders are followed; each folder (by its real path) is read once, so a link back up the tree doesn’t go on forever. No folder is skipped and there’s no limit on results: a search from `/` reads `/proc` too and can take long, and you can “Stop” it any time. Hidden files and folders are searched only while the remote side shows hidden files.
+- Results sort and select as the main window’s file lists do: click a column title (or the arrow beside it) to sort by that column descending, then ascending, then by folder again, folders always ahead of files; click to select one, ⌘-click (Ctrl-click on Windows and Linux) to add or remove one, Shift-click to select a range; ↑↓, Home, End, PageUp and PageDown move, with Shift to extend, Space toggles the current row, and ⌘A selects all. As in the main window, too, the “Name” cell is the result: the row’s other columns and the space below the list are empty space, where a click clears the selection and a drag draws a rectangle that selects the rows it covers (starting with ⌘ or Shift held adds them to the selection).
+- “Go to” (or a double-click, or Return) brings the main window to the front, and the remote pane goes to the result’s folder and selects it; “Edit” (F4) opens the file in the editor. These two act on one result. “Download…” (F5) asks the usual download question in the main window, and “Delete” (F8, Delete; also ⌘⌫ on macOS) deletes once confirmed in the Find files window; both act on every selected result. Deleted results, and what was found in a deleted folder, leave the list. The Find files window stays open behind, ready for the next result. “Copy results” copies the full paths of all results, one per line.
+- The context menu has the same commands: right-clicking a result’s name selects it alone unless it’s selected already, and offers Go to, Edit, Download…, Delete and Copy results; right-clicking empty space clears the selection and offers Copy results.
+- Escape, ⌘W (Ctrl+W on Windows and Linux) or the window’s close button closes it and stops a search under way; the next time, “File name” starts with the last one searched for.
 
 ### File operations
 
@@ -444,7 +459,7 @@ Every statistics event carries ShellRS’s version number and the operating syst
 
 The first three carry these settings and counts, each with a fixed set of possible values: CPU architecture, appearance, interface language, light and dark themes (names of built-in themes), whether the interface matches the theme, whether highlighting, the external CLI and automatic updates are on, the update channel, whether any shortcut was changed, the SFTP icon style (monochrome or color), and how many hosts, credentials, port forwards and snippets are saved (only as a band: 0, 1-5, 6-20, 21-100, 100+).
 
-`usage` has only counts, no content. It counts: SSH terminals connected (also counted separately for jump hosts, proxies, credentials, no password, quick connections and external connections), SFTP connected (also counted for quick connections and external connections), local terminals, port forwards started (local, remote, dynamic), upload and download batches, the editor opening local and remote files, previews of images and Markdown, opening each of the seven right sidebar tools, snippets and history commands sent to the terminal, terminal find, notifications (program, bell, keyword), the external CLI’s `exec`, `upload`, `download`, `sync`, `hosts` and `credentials` commands, and turning highlighting and the external CLI on and off.
+`usage` has only counts, no content. It counts: SSH terminals connected (also counted separately for jump hosts, proxies, credentials, no password, quick connections and external connections), SFTP connected (also counted for quick connections and external connections), opening SFTP’s Find files, local terminals, port forwards started (local, remote, dynamic), upload and download batches, the editor opening local and remote files, previews of images and Markdown, opening each of the seven right sidebar tools, snippets and history commands sent to the terminal, terminal find, notifications (program, bell, keyword), the external CLI’s `exec`, `upload`, `download`, `sync`, `hosts` and `credentials` commands, and turning highlighting and the external CLI on and off.
 
 - Counts are first kept in `analytics.json` in the data folder, so quitting doesn’t lose them, and they’re sent later. Being offline or on an intranet doesn’t get in the way: when sending fails, ShellRS waits 1 minute, then doubles the wait each time up to 6 hours, and retries only while you’re using ShellRS, sending no requests while it’s idle.
 - Aptabase infers the country and region from the request’s IP address but doesn’t store the IP. It tells devices apart by a hash of the IP and User-Agent with a random salt that changes every day, so it can’t follow the same device across days.

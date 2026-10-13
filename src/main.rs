@@ -32,7 +32,7 @@ fn main() {
     // macOS: the Dock icon of a ShellRS whose window was closed, which only
     // hid it (see `hide_when_closed`).
     app.on_reopen(|cx| {
-        if let Some(window) = cx.windows().first().copied() {
+        if let Some(shellrs::app::MainWindow(window)) = cx.try_global().copied() {
             window
                 .update(cx, |_, window, cx| shellrs::app::bring_forward(window, cx))
                 .ok();
@@ -60,26 +60,32 @@ fn main() {
         let options =
             shellrs::workspace::window_options(saved.as_ref(), settings.settings().window, cx);
         cx.spawn(async move |cx| {
-            cx.open_window(options, |window, cx| {
-                window.activate_window();
-                window.set_window_title("ShellRS");
-                shellrs::app::hide_when_closed(window, cx);
-                let (store, problem) = open_store();
-                let store = cx.new(|_| store);
-                let settings = cx.new(|_| settings);
-                let workspace =
-                    cx.new(|cx| shellrs::workspace::Workspace::new(store, settings, window, cx));
-                // Not pushed here: the window has no `Root` to show it yet.
-                let settings_problem = settings_problem.map(|problem| problem.message());
-                for problem in [problem, settings_problem].into_iter().flatten() {
-                    shellrs::workspace::notify_once_open(Notification::error(problem), window, cx);
-                }
-                if let Some(link) = link {
-                    shellrs::workspace::open_link_once_open(&workspace, link, window, cx);
-                }
-                cx.new(|cx| Root::new(workspace, window, cx))
-            })
-            .expect("failed to open window");
+            let window = cx
+                .open_window(options, |window, cx| {
+                    window.activate_window();
+                    window.set_window_title("ShellRS");
+                    shellrs::app::hide_when_closed(window, cx);
+                    let (store, problem) = open_store();
+                    let store = cx.new(|_| store);
+                    let settings = cx.new(|_| settings);
+                    let workspace = cx
+                        .new(|cx| shellrs::workspace::Workspace::new(store, settings, window, cx));
+                    // Not pushed here: the window has no `Root` to show it yet.
+                    let settings_problem = settings_problem.map(|problem| problem.message());
+                    for problem in [problem, settings_problem].into_iter().flatten() {
+                        shellrs::workspace::notify_once_open(
+                            Notification::error(problem),
+                            window,
+                            cx,
+                        );
+                    }
+                    if let Some(link) = link {
+                        shellrs::workspace::open_link_once_open(&workspace, link, window, cx);
+                    }
+                    cx.new(|cx| Root::new(workspace, window, cx))
+                })
+                .expect("failed to open window");
+            cx.update(|cx| cx.set_global(shellrs::app::MainWindow(window.into())));
         })
         .detach();
     });
