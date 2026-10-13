@@ -65,6 +65,7 @@ icon_assets!(
         Boxes,
         ShipWheel,
         RadioTower,
+        Cast,
         ArrowDownLeft,
         ArrowUpRight,
         ListFilter,

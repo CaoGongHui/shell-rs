@@ -1,11 +1,13 @@
 //! 终端: shared terminal emulation, transports and Dock panels.
 
+mod broadcast;
 mod directory;
 mod directory_setup;
 mod engine;
 mod exec;
 mod font;
 mod highlight;
+mod input;
 mod links;
 mod local_pty;
 mod local_shell;
@@ -22,6 +24,7 @@ mod theme;
 mod transport;
 mod zmodem;
 
+pub(crate) use broadcast::BroadcastSelection;
 pub use directory::ReportedDirectory;
 pub use directory_setup::{
     FollowCheck, FollowSetup, check_command as directory_check_command,
@@ -37,6 +40,7 @@ pub use font::{
 pub use highlight::{
     HighlightColor, HighlightRule, HighlightSet, PatternError, TerminalHighlights, default_rules,
 };
+pub use input::{TerminalInput, TerminalInputEvent};
 pub use local_pty::LocalPtyTransportProvider;
 pub use local_shell::{LocalShell, default_shell_name, installed_shells, quote_word};
 pub use local_terminal_panel::{LocalTerminalPanel, LocalTerminalPanelEvent};

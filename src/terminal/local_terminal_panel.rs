@@ -24,6 +24,7 @@ use super::{
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LocalTerminalPanelEvent {
+    Input(LocalTerminalId, super::TerminalInputEvent),
     Activated(LocalTerminalId),
     Closed(LocalTerminalId),
     StatusChanged(LocalTerminalId),
@@ -38,6 +39,7 @@ pub struct LocalTerminalPanel {
     id: LocalTerminalId,
     terminal: Entity<TerminalView>,
     tab_group: Option<WeakEntity<TabGroup>>,
+    broadcast: Option<super::BroadcastSelection>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -65,6 +67,9 @@ impl LocalTerminalPanel {
             cx.subscribe(
                 &terminal,
                 move |_, _, event: &TerminalEvent, cx| match event {
+                    TerminalEvent::Input(input) => {
+                        cx.emit(LocalTerminalPanelEvent::Input(id, input.clone()));
+                    }
                     TerminalEvent::Notice(notice) => {
                         cx.emit(LocalTerminalPanelEvent::Notice(id, notice.clone()));
                     }
@@ -80,6 +85,7 @@ impl LocalTerminalPanel {
             id,
             terminal,
             tab_group: None,
+            broadcast: None,
             _subscriptions: subscriptions,
         }
     }
@@ -101,6 +107,17 @@ impl LocalTerminalPanel {
     /// What the user chose for the transfer `rz` or `sz` started.
     pub fn zmodem_reply(&self, reply: ZmodemReply, cx: &App) {
         self.terminal.read(cx).zmodem_reply(reply, cx);
+    }
+
+    pub(crate) fn set_broadcast_selection(
+        &mut self,
+        selection: Option<super::BroadcastSelection>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.broadcast != selection {
+            self.broadcast = selection;
+            cx.notify();
+        }
     }
 
     pub fn status(&self, cx: &App) -> TerminalStatus {
@@ -174,9 +191,15 @@ impl BasePanel for LocalTerminalPanel {
 impl Panel for LocalTerminalPanel {
     fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (id, group, panel) = (self.id, self.tab_group.clone(), cx.entity_id());
+        let mark = match self.broadcast {
+            Some(selection) => selection
+                .render(CenterTab::LocalTerminal(id), self.display_title(cx))
+                .into_any_element(),
+            None => Icon::new(CatalogIcon::Terminal).small().into_any_element(),
+        };
         ClosableTabTitle::new(
             ("local-terminal-tab", self.id.0),
-            Icon::new(CatalogIcon::Terminal).small(),
+            mark,
             self.display_title(cx),
         )
         .closable(

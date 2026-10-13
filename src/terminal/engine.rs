@@ -827,6 +827,8 @@ impl Drop for TerminalEngine {
 
 #[derive(Clone, Debug)]
 pub enum TerminalEvent {
+    /// Emitted only by TerminalView for direct user input, never by the engine.
+    Input(super::TerminalInputEvent),
     /// The shell is there: connected, for a remote terminal, again after
     /// each reconnection.
     Started,

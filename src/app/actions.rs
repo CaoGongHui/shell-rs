@@ -35,6 +35,8 @@ gpui_kit::actions!(
         NewGroup,
         /// Open a new local login-shell terminal.
         NewLocalTerminal,
+        /// Replace terminal tab marks with broadcast membership checkboxes.
+        ToggleTerminalBroadcast,
         /// Copy the active terminal selection.
         CopyTerminal,
         /// Paste the clipboard into the active terminal.
@@ -411,6 +413,28 @@ pub enum CenterTab {
     /// There is at most one settings tab.
     Settings,
     Editor(EditorId),
+}
+
+/// Select one connected terminal for interactive input broadcast.
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = shellrs, no_json)]
+pub struct SetBroadcastTarget {
+    tab: CenterTab,
+    selected: bool,
+}
+
+impl SetBroadcastTarget {
+    pub fn new(tab: CenterTab, selected: bool) -> Self {
+        Self { tab, selected }
+    }
+
+    pub fn tab(&self) -> CenterTab {
+        self.tab
+    }
+
+    pub fn is_selected(&self) -> bool {
+        self.selected
+    }
 }
 
 /// A tool of the right sidebar, in the order of the switch beside it.

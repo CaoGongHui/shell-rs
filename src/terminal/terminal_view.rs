@@ -35,8 +35,8 @@ use super::scrollbar::ScrollbackHandle;
 use super::search::SearchMark;
 use super::{
     RightClick, SearchDirection, SharedTerminalTransportFactory, TerminalColors, TerminalEngine,
-    TerminalEvent, TerminalFont, TerminalInteraction, TerminalLifecycle, TerminalSize,
-    TerminalSnapshot, TerminalStatus, TerminalTheme, ZmodemReply,
+    TerminalEvent, TerminalFont, TerminalInput, TerminalInputEvent, TerminalInteraction,
+    TerminalLifecycle, TerminalSize, TerminalSnapshot, TerminalStatus, TerminalTheme, ZmodemReply,
 };
 
 pub const TERMINAL_KEY_CONTEXT: &str = "Terminal";
@@ -527,11 +527,7 @@ impl TerminalView {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
-        self.engine.read(cx).paste(&text);
-        self.selecting = false;
-        self.scroll_accumulator.reset();
-        self.cursor_visible = true;
-        cx.notify();
+        self.send_input(TerminalInput::Paste(text), cx);
     }
 
     /// Put `command` on the shell's input line, with `replace` in place of
@@ -697,9 +693,7 @@ impl TerminalView {
             cx.stop_propagation();
             return;
         }
-        let mode = self.engine.read(cx).mode();
-        if let Some(bytes) = encode_key(&event.keystroke, mode) {
-            self.send_user_input(bytes, cx);
+        if self.send_input(TerminalInput::Key(event.keystroke.clone()), cx) {
             cx.stop_propagation();
         }
     }
@@ -922,12 +916,43 @@ impl TerminalView {
     }
 
     fn send_user_input(&mut self, bytes: impl Into<Vec<u8>>, cx: &mut Context<Self>) {
+        self.send_input(TerminalInput::Bytes(bytes.into()), cx);
+    }
+
+    fn send_input(&mut self, input: TerminalInput, cx: &mut Context<Self>) -> bool {
+        if !self.receive_input(&input, cx) {
+            return false;
+        }
+        cx.emit(TerminalEvent::Input(TerminalInputEvent::new(
+            input,
+            self.generation(cx),
+        )));
+        true
+    }
+
+    /// Apply broadcast input without emitting it again. Each terminal encodes
+    /// keys and bracketed paste using its own mode; no focus is transferred.
+    pub(crate) fn receive_input(&mut self, input: &TerminalInput, cx: &mut Context<Self>) -> bool {
+        if !self.lifecycle(cx).accepts_input() {
+            return false;
+        }
+        let engine = self.engine.read(cx);
+        match input {
+            TerminalInput::Key(key) => {
+                let Some(bytes) = encode_key(key, engine.mode()) else {
+                    return false;
+                };
+                engine.send_user_input(bytes);
+            }
+            TerminalInput::Bytes(bytes) => engine.send_user_input(bytes.clone()),
+            TerminalInput::Paste(text) => engine.paste(text),
+        }
         self.hover_link(None, cx);
         self.selecting = false;
         self.scroll_accumulator.reset();
         self.cursor_visible = true;
-        self.engine.read(cx).send_user_input(bytes);
         cx.notify();
+        true
     }
 
     fn prepare_for_user_input(&mut self, cx: &mut Context<Self>) {
@@ -1074,10 +1099,7 @@ impl EntityInputHandler for TerminalView {
 
     fn paste(&mut self, item: ClipboardItem, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = item.text() {
-            self.engine.read(cx).paste(&text);
-            self.selecting = false;
-            self.scroll_accumulator.reset();
-            cx.notify();
+            self.send_input(TerminalInput::Paste(text), cx);
         }
     }
 
