@@ -376,7 +376,15 @@ async fn sftp_lists_take_color_icons_once_chosen_in_the_settings(cx: &mut TestAp
         window.within("settings").click("0-2", cx)
     });
     in_frame(cx, handle, |window, _| {
-        assert_eq!(appearance_dropdown(window, 0).as_deref(), Some("彩色"));
+        // 文件侧栏 first, then 文件列表 with the icons.
+        let icon_style = window
+            .within("settings")
+            .within("group-1")
+            .within("item-0")
+            .find("btn")
+            .label()
+            .map(str::to_string);
+        assert_eq!(icon_style.as_deref(), Some("彩色"));
         // The plain folder and file side by side first, then named ones.
         let origin = |window: &mut gpui_kit::Window, id: &str| {
             window

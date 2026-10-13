@@ -18,8 +18,8 @@ use crate::i18n::t;
 use crate::shared::{ClosableTabTitle, HostMark, LatencyLabel, RenamableTab, close_tab_items};
 
 use super::{
-    RemoteTerminalId, SharedRemoteTerminalTransportProvider, TerminalEvent, TerminalLifecycle,
-    TerminalMenuItems, TerminalNotice, TerminalStatus, TerminalView,
+    RemoteTerminalId, ReportedDirectory, SharedRemoteTerminalTransportProvider, TerminalEvent,
+    TerminalLifecycle, TerminalMenuItems, TerminalNotice, TerminalStatus, TerminalView,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -32,6 +32,8 @@ pub enum TerminalPanelEvent {
     PromptRequested(RemoteTerminalId, HostId, ConnectionPrompt),
     HostOsDetected(HostId, HostOs),
     Notice(RemoteTerminalId, TerminalNotice),
+    /// The shell reported another folder; the right sidebar's 文件 follows.
+    DirectoryChanged(RemoteTerminalId, ReportedDirectory),
 }
 
 /// A remote-host Dock panel backed by the shared terminal engine. The
@@ -104,6 +106,12 @@ impl TerminalPanel {
                     }
                     TerminalEvent::Notice(notice) => {
                         cx.emit(TerminalPanelEvent::Notice(this.id, notice.clone()));
+                    }
+                    TerminalEvent::DirectoryChanged(directory) => {
+                        cx.emit(TerminalPanelEvent::DirectoryChanged(
+                            this.id,
+                            directory.clone(),
+                        ));
                     }
                 },
             ),

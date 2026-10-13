@@ -12,7 +12,7 @@ use crate::app::ExplorerDispatch as _;
 use crate::{
     app::{
         CatalogIcon, ExplorerAction, ExplorerCommand, ExplorerShortcut, LOCAL_FILE_LIST_CONTEXT,
-        REMOTE_FILE_LIST_CONTEXT, ToggleHiddenFiles,
+        REMOTE_FILE_LIST_CONTEXT, ToggleDirectoryFollow, ToggleHiddenFiles,
     },
     host::{BookmarkSide, ConnectionState, HostId, HostStore},
     i18n::{UiLocale, t, tn},
@@ -26,6 +26,7 @@ use gpui_kit::component::{
     searchable_list::{SearchableGroup, SearchableListItem, SearchableVec},
     select::{Select, SelectEvent, SelectState},
     separator::Separator,
+    switch::Switch,
     table::{DataTable, TableDelegate as _, TableEvent, TableState},
     v_flex,
 };
@@ -196,6 +197,9 @@ pub struct FilePane {
     /// went wrong in its own status line, since the window's follows the
     /// terminal.
     compact: bool,
+    /// 目录跟随, shown at the end of the status line: only the sidebar's
+    /// remote pane has it, on or off.
+    follow: Option<bool>,
     /// A file operation on this pane is running.
     busy: bool,
     store: Entity<HostStore>,
@@ -295,6 +299,7 @@ impl FilePane {
             },
             transfer_enabled: false,
             compact: false,
+            follow: None,
             busy: false,
             store,
             dispatch,
@@ -490,6 +495,11 @@ impl FilePane {
         });
         cx.notify();
     }
+    /// Show 目录跟随 in the status line, on or off.
+    pub(super) fn set_follow(&mut self, follow: bool, cx: &mut Context<Self>) {
+        self.follow = Some(follow);
+        cx.notify();
+    }
     fn sync_listing(&mut self, cx: &mut Context<Self>) {
         let context = ListingContext {
             explorer: self.explorer,
@@ -579,15 +589,13 @@ impl FilePane {
             }
             parts.join(" · ").into()
         };
-        h_flex()
+        let text = h_flex()
             .id("pane-status")
             .test_support()
             .role(Role::Status)
             .aria_label(status.clone())
-            .px_2()
-            .py_1()
-            .border_t_1()
-            .border_color(cx.theme().border)
+            .flex_1()
+            .min_w_0()
             .text_xs()
             .text_color(if problem.is_some() {
                 cx.theme().danger
@@ -595,7 +603,35 @@ impl FilePane {
                 cx.theme().muted_foreground
             })
             // A long reason wraps rather than running off the sidebar.
-            .child(div().min_w_0().child(status))
+            .child(div().min_w_0().child(status));
+        h_flex()
+            .px_2()
+            .py_1()
+            .gap_2()
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .child(text)
+            .when_some(self.follow, |row, follow| {
+                let (dispatch, explorer) = (self.dispatch.clone(), self.explorer);
+                row.child(
+                    Switch::new("follow-terminal")
+                        .xsmall()
+                        .flex_shrink_0()
+                        .checked(follow)
+                        .label(t!("explorer.follow.label"))
+                        .tooltip(t!("explorer.follow.tooltip"))
+                        .on_click(move |_, window, cx| {
+                            let dispatch = dispatch.clone();
+                            window.defer(cx, move |window, cx| {
+                                dispatch.dispatch_action(
+                                    &ToggleDirectoryFollow(explorer),
+                                    window,
+                                    cx,
+                                )
+                            });
+                        }),
+                )
+            })
     }
 
     /// Pressing a row that is not selected selects it alone at once, as in

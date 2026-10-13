@@ -176,6 +176,18 @@ settings.local_terminal.keywords:
   zh-CN: shell,本地终端,命令,参数,bash,zsh,fish,PowerShell,cmd
   en: shell,local terminal,command,arguments,bash,zsh,fish,PowerShell,cmd
 
+settings.sftp.file_sidebar:
+  zh-CN: 文件侧栏
+  en: Files sidebar
+settings.sftp.detect_follow:
+  zh-CN: 自动检测目录配置
+  en: Detect folder reporting
+settings.sftp.detect_follow_description:
+  zh-CN: 打开「文件」侧栏时，自动检测远端 shell 是否已配置目录跟随，未配置时提示自动安装。
+  en: When the Files sidebar opens, check whether the host’s shell reports its folder for Files to follow, and offer to set it up if not.
+settings.sftp.follow_keywords:
+  zh-CN: 目录跟随,文件,侧栏,当前目录,OSC 7,bashrc,zshrc
+  en: follow,folder,files,sidebar,current directory,OSC 7,bashrc,zshrc
 settings.sftp.file_list:
   zh-CN: 文件列表
   en: File list

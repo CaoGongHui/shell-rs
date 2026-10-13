@@ -247,6 +247,11 @@ id_actions! {
     /// Show a tool in the right sidebar, or hide the sidebar if it is
     /// already showing that tool.
     ToggleTool(ToolKind);
+    /// 目录跟随 in a terminal's 文件: follow the terminal's folder, or stop.
+    ToggleDirectoryFollow(ExplorerId);
+    /// 自动配置 in 「启用目录跟随？」: set the terminal's shell up to report
+    /// its folder.
+    InstallDirectoryFollow(RemoteTerminalId);
     /// Unfold a part of the system monitor, or fold it away again.
     ToggleMonitorDetail(MonitorDetail);
     /// Sort the process list by memory or CPU, the most first; by the same

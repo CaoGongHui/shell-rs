@@ -34,8 +34,8 @@ use crate::app::{
     NewTemporaryConnection, OpenExplorer, OpenSettings, PasteTerminal, QuickConnect,
     ReconnectTerminal, RefreshCliIntegration, RemoveAgentSkill, RemoveCliCommand, RenameExplorer,
     RenameGroup, RenameTerminal, RestartLocalTerminal, SetFileSizeFormat, ToggleHiddenFiles,
-    ToggleHostPanel, ToggleTheme, ZoomIn, ZoomOut, ZoomReset, ZoomTerminalIn, ZoomTerminalOut,
-    ZoomTerminalReset,
+    ToggleHostPanel, ToggleTheme, ToolKind, ZoomIn, ZoomOut, ZoomReset, ZoomTerminalIn,
+    ZoomTerminalOut, ZoomTerminalReset,
 };
 use crate::cli::{CliIntegration, CliServer, IntegrationPaths, SshCliBackend};
 use crate::connection::{
@@ -166,6 +166,8 @@ pub struct Workspace {
     /// Each remote terminal's 文件, once shown: on the terminal's own
     /// connection, and gone with the terminal.
     pub(super) file_sidebars: HashMap<RemoteTerminalId, ExplorerId>,
+    /// 目录跟随: what each terminal's current connection was found to be.
+    pub(super) directory_follow: HashMap<RemoteTerminalId, super::follow::FollowState>,
     pub(super) local_terminals: HashMap<LocalTerminalId, Entity<LocalTerminalPanel>>,
     /// The settings tab, while it is open. There is only ever one.
     settings_tab: Option<Entity<SettingsPanel>>,
@@ -540,6 +542,7 @@ impl Workspace {
             terminals,
             explorers: HashMap::new(),
             file_sidebars: HashMap::new(),
+            directory_follow: HashMap::new(),
             local_terminals: HashMap::new(),
             settings_tab: None,
             settings,
@@ -655,7 +658,7 @@ impl Workspace {
     }
 
     /// The terminal whose 文件 an explorer is, if it is one.
-    fn sidebar_terminal(&self, explorer: ExplorerId) -> Option<RemoteTerminalId> {
+    pub(super) fn sidebar_terminal(&self, explorer: ExplorerId) -> Option<RemoteTerminalId> {
         self.file_sidebars
             .iter()
             .find(|(_, id)| **id == explorer)
@@ -683,6 +686,10 @@ impl Workspace {
         self._subscriptions.push(subscription);
         self.explorers.insert(id, panel.clone());
         self.file_sidebars.insert(terminal, id);
+        let follow = self.directory_follow_setting(cx);
+        panel.update(cx, |panel, cx| panel.set_follow(follow, cx));
+        // Where the terminal is, rather than home, if its shell said.
+        self.follow_current_directory(terminal, window, cx);
         Some(panel)
     }
 
@@ -2433,6 +2440,7 @@ fn new_terminal_panel(
                 this.cancel_prompts_for_terminal(*terminal_id, window, cx);
                 this.terminals.remove(terminal_id);
                 this.close_file_sidebar(*terminal_id, window, cx);
+                this.directory_follow.remove(terminal_id);
                 if this.active_tab == Some(CenterTab::Terminal(*terminal_id)) {
                     this.set_active_tab(None, window, cx);
                 }
@@ -2451,6 +2459,17 @@ fn new_terminal_panel(
             }
             TerminalPanelEvent::Connected(terminal_id, host_id) => {
                 this.count_connection(*host_id, false, cx);
+                // A new connection, maybe to another machine: its folder is
+                // what it reports from now on, and it is checked afresh,
+                // first, so the check runs before 文件's channel opens.
+                if let Some(panel) = this.file_sidebar(*terminal_id).cloned() {
+                    panel.update(cx, |panel, _| panel.forget_follow_target());
+                }
+                if this.tool_showing(cx) == Some(ToolKind::Files)
+                    && this.tool_terminal(cx).map(|shown| shown.id) == Some(*terminal_id)
+                {
+                    this.check_directory_follow(*terminal_id, window, cx);
+                }
                 // 文件 comes back with its terminal: a channel on the new
                 // connection, whatever the old one's state.
                 if let Some(panel) = this.file_sidebar(*terminal_id).cloned()
@@ -2479,6 +2498,9 @@ fn new_terminal_panel(
             }
             TerminalPanelEvent::Notice(terminal_id, notice) => {
                 this.on_terminal_notice(CenterTab::Terminal(*terminal_id), notice, window, cx)
+            }
+            TerminalPanelEvent::DirectoryChanged(terminal_id, directory) => {
+                this.follow_directory(*terminal_id, directory, window, cx)
             }
         },
     );
@@ -2785,6 +2807,8 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_toggle_host_panel))
             .on_action(cx.listener(Self::on_toggle_tool_sidebar))
             .on_action(cx.listener(Self::on_toggle_tool))
+            .on_action(cx.listener(Self::on_toggle_directory_follow))
+            .on_action(cx.listener(Self::on_install_directory_follow))
             .on_action(cx.listener(Self::on_toggle_monitor_detail))
             .on_action(cx.listener(Self::on_refresh_connections))
             .on_action(cx.listener(Self::on_refresh_processes))

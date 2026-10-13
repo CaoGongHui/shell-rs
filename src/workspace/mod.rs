@@ -7,6 +7,7 @@ mod cli_changes;
 mod credentials;
 mod dock_skin;
 mod editors;
+mod follow;
 mod forwards;
 mod front;
 mod links;

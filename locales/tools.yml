@@ -252,3 +252,23 @@ tools.process.killed:
 tools.process.end_failed:
   zh-CN: 无法结束 %{name}（PID %{pid}）：%{error}
   en: "Couldn’t end %{name} (PID %{pid}): %{error}"
+
+# Setting a host's shell up to report its folder, for 文件 to follow.
+tools.follow.title:
+  zh-CN: 启用目录跟随？
+  en: Turn on folder following?
+tools.follow.description:
+  zh-CN: ShellRS 没有在当前 %{shell} shell 使用的 %{file} 中检测到目录跟随配置（OSC 7）。是否现在自动配置？
+  en: ShellRS didn’t find folder reporting (OSC 7) in %{file}, which your %{shell} shell reads. Set it up now?
+tools.follow.set_up:
+  zh-CN: 自动配置
+  en: Set up
+tools.follow.done:
+  zh-CN: 已在 %{file} 中配置目录跟随
+  en: Folder following is set up in %{file}
+tools.follow.done_reconnect:
+  zh-CN: 已在 %{file} 中配置目录跟随，重新连接后生效
+  en: Folder following is set up in %{file}. It takes effect after you reconnect.
+tools.follow.failed:
+  zh-CN: 无法配置目录跟随：%{error}
+  en: "Couldn’t set up folder following: %{error}"

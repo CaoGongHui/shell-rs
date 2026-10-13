@@ -777,3 +777,11 @@ explorer.find.copy:
 explorer.find.copy_tip:
   zh-CN: 复制全部结果的路径
   en: Copy the paths of all results
+
+# 目录跟随 in the right sidebar's 文件.
+explorer.follow.label:
+  zh-CN: 目录跟随
+  en: Follow
+explorer.follow.tooltip:
+  zh-CN: 跟随终端的当前目录
+  en: Follow the terminal’s current folder

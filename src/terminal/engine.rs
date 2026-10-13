@@ -24,6 +24,7 @@ use crate::connection::{ConnectionPrompt, ConnectionPromptReply, Latency};
 use crate::host::HostOs;
 use crate::i18n::t;
 
+use super::directory::ReportedDirectory;
 use super::highlight::{
     HighlightColor, KeywordHit, LineWatcher, SharedHighlights, TerminalHighlights,
     advance_watching, current,
@@ -107,6 +108,8 @@ pub struct TerminalEngine {
     /// Where channels beside the shell open: the current runtime's
     /// connection, attached on every start.
     channels: TerminalChannels,
+    /// The folder the shell last reported on this connection.
+    directory: Option<ReportedDirectory>,
     reconnect_on_enter: bool,
     generation: u64,
     size: TerminalSize,
@@ -150,6 +153,7 @@ impl TerminalEngine {
             highlights,
             _highlights_observer: highlights_observer,
             channels,
+            directory: None,
             reconnect_on_enter: false,
             generation,
             size,
@@ -213,11 +217,20 @@ impl TerminalEngine {
                 self.append_reconnect_hint();
                 self.lifecycle = TerminalLifecycle::Exited { code, signal };
                 self.latency = None;
+                self.directory = None;
             }
             TerminalUiEventKind::Failed(error) => {
                 self.append_reconnect_hint();
                 self.lifecycle = TerminalLifecycle::Failed(error);
                 self.latency = None;
+                self.directory = None;
+            }
+            // Each prompt reports the folder again: only a change is news.
+            TerminalUiEventKind::Directory(directory) => {
+                if self.directory.as_ref() != Some(&directory) {
+                    self.directory = Some(directory.clone());
+                    return Some(TerminalEvent::DirectoryChanged(directory));
+                }
             }
             TerminalUiEventKind::Latency(latency) => self.latency = Some(latency),
             TerminalUiEventKind::Prompt(prompt) => {
@@ -267,6 +280,7 @@ impl TerminalEngine {
         self.lifecycle = TerminalLifecycle::Starting;
         self.title = None;
         self.latency = None;
+        self.directory = None;
         // The new emulator starts empty; matches in the old one mean nothing.
         self.search.replace(None);
         self.runtime = TerminalRuntime::start(
@@ -298,6 +312,7 @@ impl TerminalEngine {
         self.lifecycle = TerminalLifecycle::Closing;
         self.runtime.shutdown();
         self.channels.detach();
+        self.directory = None;
         cx.notify();
     }
 
@@ -305,6 +320,7 @@ impl TerminalEngine {
         self.generation = self.generation.saturating_add(1);
         self.runtime.shutdown();
         self.channels.detach();
+        self.directory = None;
         append_message(&self.runtime.term, message);
         self.append_reconnect_hint();
         self.lifecycle = TerminalLifecycle::Exited {
@@ -521,6 +537,11 @@ impl TerminalEngine {
         self.channels.clone()
     }
 
+    /// The folder the shell last reported on this connection, if it has.
+    pub fn directory(&self) -> Option<&ReportedDirectory> {
+        self.directory.as_ref()
+    }
+
     /// Run `command` beside the shell, on the terminal's own connection; see
     /// [`ExecRequest`]. `None` while the shell is not running, and so there
     /// is no connection to run it on.
@@ -716,6 +737,8 @@ pub enum TerminalEvent {
     HostOsDetected(HostOs),
     /// Something to show the user while they look elsewhere.
     Notice(TerminalNotice),
+    /// The shell reported another folder than the last one.
+    DirectoryChanged(ReportedDirectory),
 }
 
 struct TerminalRuntime {
@@ -802,6 +825,9 @@ impl TerminalRuntime {
                             }
                             for notice in notices.scan(&bytes) {
                                 parser_proxy.send(TerminalUiEventKind::Notice(notice));
+                            }
+                            if let Some(directory) = notices.take_directory() {
+                                parser_proxy.send(TerminalUiEventKind::Directory(directory));
                             }
                             feed_run(&parser_run, &bytes);
                             parser_proxy.wakeup();
@@ -1014,6 +1040,8 @@ enum TerminalUiEventKind {
     ClipboardStore(String),
     /// A notification a program asked for, by OSC 9 or 777.
     Notice(ProgramNotice),
+    /// The folder the shell reported, by OSC 7 or 1337.
+    Directory(ReportedDirectory),
     Bell,
     /// A finished line that a 关键字高亮 rule tells of.
     Keyword(KeywordHit),

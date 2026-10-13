@@ -3,9 +3,12 @@
 //! and VTE have it), the bell, or a line a 关键字高亮 rule tells of.
 //!
 //! Alacritty drops both OSC sequences, so the parser thread runs the output
-//! through `NoticeScanner` too.
+//! through `NoticeScanner` too. The same pass picks up the folder a shell
+//! reports (OSC 7 and 1337, see `directory`), which Alacritty drops as well.
 
 use alacritty_terminal::vte::{Parser, Perform};
+
+use super::directory::{ReportedDirectory, reported_directory};
 
 /// The longest title and body a notification shows, in characters.
 const TITLE_LIMIT: usize = 80;
@@ -68,6 +71,7 @@ impl ProgramNotice {
 pub struct NoticeScanner {
     parser: Parser,
     found: Vec<ProgramNotice>,
+    directory: Option<ReportedDirectory>,
 }
 
 impl Default for NoticeScanner {
@@ -75,6 +79,7 @@ impl Default for NoticeScanner {
         Self {
             parser: Parser::new(),
             found: Vec::new(),
+            directory: None,
         }
     }
 }
@@ -82,18 +87,32 @@ impl Default for NoticeScanner {
 impl NoticeScanner {
     /// The notifications that end in `bytes`.
     pub fn scan(&mut self, bytes: &[u8]) -> Vec<ProgramNotice> {
-        let mut found = Found(&mut self.found);
+        let mut found = Found {
+            notices: &mut self.found,
+            directory: &mut self.directory,
+        };
         self.parser.advance(&mut found, bytes);
         std::mem::take(&mut self.found)
     }
+
+    /// The last folder reported since the last time it was asked: only the
+    /// latest one matters.
+    pub fn take_directory(&mut self) -> Option<ReportedDirectory> {
+        self.directory.take()
+    }
 }
 
-struct Found<'a>(&'a mut Vec<ProgramNotice>);
+struct Found<'a> {
+    notices: &'a mut Vec<ProgramNotice>,
+    directory: &'a mut Option<ReportedDirectory>,
+}
 
 impl Perform for Found<'_> {
     fn osc_dispatch(&mut self, params: &[&[u8]], _: bool) {
         if let Some(notice) = program_notice(params) {
-            self.0.push(notice);
+            self.notices.push(notice);
+        } else if let Some(directory) = reported_directory(params) {
+            *self.directory = Some(directory);
         }
     }
 }
@@ -197,6 +216,18 @@ mod tests {
             scan(&[b"\x1b]777;noti", b"fy;t;", b"done\x1b", b"\\"]),
             [notice(Some("t"), "done")]
         );
+    }
+
+    #[test]
+    fn a_reported_folder_is_found_across_chunks_the_last_one_counting() {
+        let mut scanner = NoticeScanner::default();
+        assert!(scanner.scan(b"\x1b]7;file://web-01/srv/a").is_empty());
+        assert_eq!(scanner.take_directory(), None);
+        let notices = scanner.scan(b"%20b\x07\x1b]9;done\x07\x1b]7;file://web-01/tmp\x07");
+        assert_eq!(notices, [notice(None, "done")]);
+        let directory = scanner.take_directory().unwrap();
+        assert_eq!(directory.path, "/tmp");
+        assert_eq!(scanner.take_directory(), None);
     }
 
     #[test]

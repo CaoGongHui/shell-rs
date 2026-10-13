@@ -1,5 +1,7 @@
 //! 终端: shared terminal emulation, transports and Dock panels.
 
+mod directory;
+mod directory_setup;
 mod engine;
 mod exec;
 mod font;
@@ -19,6 +21,12 @@ mod terminal_view;
 mod theme;
 mod transport;
 
+pub use directory::ReportedDirectory;
+pub use directory_setup::{
+    FollowCheck, FollowSetup, check_command as directory_check_command,
+    install_command as directory_install_command, installed as directory_installed,
+    parse_check as parse_directory_check,
+};
 pub use engine::{TerminalCell, TerminalEngine, TerminalEvent, TerminalSnapshot};
 pub use exec::{ExecTarget, exec_answer};
 pub use font::{

@@ -418,6 +418,11 @@ impl TerminalView {
         self.engine.read(cx).generation()
     }
 
+    /// The folder the shell last reported on this connection, if it has.
+    pub fn directory(&self, cx: &App) -> Option<super::ReportedDirectory> {
+        self.engine.read(cx).directory().cloned()
+    }
+
     /// Where channels beside the shell open: this terminal's connection,
     /// whichever one it is on at the time.
     pub fn channels(&self, cx: &App) -> super::TerminalChannels {

@@ -100,6 +100,11 @@ pub struct ExplorerPanel {
     /// connection: the remote pane alone, with no tab of its own. The local
     /// pane is never shown, nor listed; it only holds where downloads go.
     sidebar: bool,
+    /// The sidebar's 目录跟随: it goes where the terminal's shell reports
+    /// it is, as `follow_directory` hears of it.
+    follow: bool,
+    /// A folder to go to once connected, reported while it was not.
+    follow_target: Option<String>,
     /// Where the user put the divider between the panes, and the one above
     /// the queue. Kept here, not in element state, which goes the first
     /// frame another tab is shown instead: coming back would reset them.
@@ -260,6 +265,8 @@ impl ExplorerPanel {
             custom_title: None,
             last_remote: true,
             sidebar,
+            follow: false,
+            follow_target: None,
             panes_split: cx.new(|_| ResizableState::default()),
             queue_split: cx.new(|_| ResizableState::default()),
             _subscriptions: subscriptions,
@@ -299,6 +306,36 @@ impl ExplorerPanel {
     /// The right sidebar's 文件 rather than an SFTP tab.
     pub fn is_sidebar(&self) -> bool {
         self.sidebar
+    }
+    /// 目录跟随 is on.
+    pub fn follows(&self) -> bool {
+        self.follow
+    }
+    /// Turn 目录跟随 on or off, which its switch in the status line shows.
+    pub fn set_follow(&mut self, follow: bool, cx: &mut Context<Self>) {
+        self.follow = follow;
+        if !follow {
+            self.follow_target = None;
+        }
+        self.remote
+            .update(cx, |pane, cx| pane.set_follow(follow, cx));
+        cx.notify();
+    }
+    /// The terminal connected again: what it reported before is history.
+    pub fn forget_follow_target(&mut self) {
+        self.follow_target = None;
+    }
+    /// Go where the terminal's shell reports it is, when following: now if
+    /// connected, else once connected. It never connects just for this.
+    pub fn follow_directory(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.follow {
+            return;
+        }
+        if self.state != ConnectionState::Connected {
+            self.follow_target = Some(path);
+        } else if self.remote.read(cx).path() != path {
+            self.navigate(true, path, LoadIntent::Visit, window, cx);
+        }
     }
     /// What the window's status line shows for this tab: its own connection,
     /// and what went wrong, remote side first.
@@ -493,9 +530,22 @@ impl ExplorerPanel {
             }
             SftpEvent::Connected { home } => {
                 self.state = ConnectionState::Connected;
+                let first = self.remote.read(cx).home().is_empty();
                 self.remote
                     .update(cx, |pane, _| pane.set_home(home.to_string()));
-                self.reload(true, window, cx);
+                // Where the terminal is, if it said while this connected;
+                // the first time without passing home in the history.
+                match self.follow_target.take() {
+                    Some(target) => {
+                        let intent = if first {
+                            LoadIntent::Reload
+                        } else {
+                            LoadIntent::Visit
+                        };
+                        self.navigate(true, target, intent, window, cx);
+                    }
+                    None => self.reload(true, window, cx),
+                }
                 cx.emit(ExplorerPanelEvent::StateChanged(self.id, self.host_id));
             }
             SftpEvent::Disconnected(message) => {

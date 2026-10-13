@@ -1,6 +1,7 @@
 //! 文件: the right sidebar's single remote pane beside an SSH terminal, on an
 //! SFTP channel of the terminal's own connection. It logs in nowhere, comes
-//! and goes with its terminal, and leaves SFTP tabs as they are.
+//! and goes with its terminal, and leaves SFTP tabs as they are; it follows
+//! the folder the terminal's shell reports (目录跟随).
 
 use crate::support::*;
 use shellrs::analytics::{Analytics, Counter, Signal};
@@ -24,9 +25,17 @@ struct Fixture {
 /// The seeded hosts, web-01 and staging-api with a terminal each, on fakes
 /// the test can look into.
 fn open(cx: &mut TestAppContext, sftp: FakeSftpProvider) -> Fixture {
+    open_with(cx, sftp, FakeTerminalFactory::default())
+}
+
+fn open_with(
+    cx: &mut TestAppContext,
+    sftp: FakeSftpProvider,
+    terminals: FakeTerminalFactory,
+) -> Fixture {
     init_app(cx);
     cx.update(|cx| cx.set_reduce_motion(true));
-    let terminals = Arc::new(FakeTerminalFactory::default());
+    let terminals = Arc::new(terminals);
     let sftp = Arc::new(sftp);
     let local = FakeLocalDirectory::default();
     let mut workspace = None;
@@ -409,4 +418,255 @@ async fn files_count_as_a_tool_not_as_an_sftp_connection(cx: &mut TestAppContext
         })
         .collect();
     assert_eq!(counted, [Counter::ToolFiles]);
+}
+
+/// What 目录跟随's check finds on a bash host whose ~/.bashrc does not
+/// report the folder yet, and on one whose shell does.
+const NOT_SET_UP: &str = "@@shell bash\n@@host web-01\n@@file .bashrc\n@@configured no\n";
+const SET_UP: &str = "@@shell bash\n@@host web-01\n@@file .bashrc\n@@configured yes\n";
+
+/// The first terminal's shell says it is in `folder`, as a prompt with the
+/// setup would: the fake shell prints back what it is sent, and a paste
+/// outside bracketed paste mode sends it as it is.
+fn report(cx: &mut TestAppContext, fixture: &Fixture, sequence: &str) {
+    cx.update(|cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string(sequence.to_string()));
+        let terminal = fixture
+            .workspace
+            .read(cx)
+            .remote_terminal(RemoteTerminalId(INITIAL_WEB_TERMINAL))
+            .expect("the terminal is open")
+            .read(cx)
+            .terminal()
+            .clone();
+        terminal.update(cx, |terminal, cx| terminal.paste_clipboard(cx));
+    });
+    cx.run_until_parked();
+}
+
+fn osc7(host: &str, path: &str) -> String {
+    format!("\x1b]7;file://{host}{path}\x07")
+}
+
+fn path(fixture: &Fixture, cx: &mut TestAppContext) -> String {
+    cx.update(|cx| {
+        sidebar(fixture, INITIAL_WEB_TERMINAL, cx)
+            .unwrap()
+            .read(cx)
+            .remote()
+            .read(cx)
+            .path()
+    })
+}
+
+async fn wait_for_ask(cx: &mut TestAppContext, fixture: &Fixture) {
+    cx.wait_for(
+        fixture.handle.into(),
+        Duration::from_secs(2),
+        |window, cx| {
+            window.render_frame(cx);
+            window
+                .try_find("ok")
+                .is_some_and(|button| button.label() == Some("自动配置"))
+        },
+    )
+    .await;
+}
+
+/// Let the check's answer come back, and whatever it starts settle.
+fn settle(cx: &mut TestAppContext) {
+    for _ in 0..10 {
+        cx.executor().advance_clock(Duration::from_millis(60));
+        cx.run_until_parked();
+    }
+}
+
+#[gpui_kit::test]
+async fn files_asks_once_per_connection_to_set_up_folder_reporting(cx: &mut TestAppContext) {
+    let fixture = open_with(
+        cx,
+        FakeSftpProvider::default(),
+        FakeTerminalFactory::answering(&[NOT_SET_UP]),
+    );
+    show_files(cx, &fixture, INITIAL_WEB_TERMINAL, FILES).await;
+    wait_for_ask(cx, &fixture).await;
+    assert!(fixture.terminals.exec_commands()[0].contains("@@configured"));
+    in_frame(cx, fixture.handle, |window, cx| window.click("cancel", cx));
+
+    // Not again on this connection, shown again or not.
+    in_frame(cx, fixture.handle, |window, cx| {
+        window.click("tool-files", cx)
+    });
+    in_frame(cx, fixture.handle, |window, cx| {
+        window.click("tool-files", cx)
+    });
+    settle(cx);
+    in_frame(cx, fixture.handle, |window, _| {
+        assert!(window.try_find("ok").is_none());
+    });
+    assert_eq!(fixture.terminals.exec_count(), 1);
+
+    // The next connection is asked about again.
+    in_frame(cx, fixture.handle, |window, cx| {
+        window.dispatch_action(
+            Box::new(ReconnectTerminal(RemoteTerminalId(INITIAL_WEB_TERMINAL))),
+            cx,
+        )
+    });
+    wait_for_ask(cx, &fixture).await;
+    assert_eq!(fixture.terminals.exec_count(), 2);
+}
+
+#[gpui_kit::test]
+async fn setting_up_appends_to_the_startup_file_and_sources_it(cx: &mut TestAppContext) {
+    let fixture = open_with(
+        cx,
+        FakeSftpProvider::default(),
+        FakeTerminalFactory::answering(&[NOT_SET_UP, "@@installed\n"]),
+    );
+    show_files(cx, &fixture, INITIAL_WEB_TERMINAL, FILES).await;
+    wait_for_ask(cx, &fixture).await;
+    in_frame(cx, fixture.handle, |window, cx| window.click("ok", cx));
+    settle(cx);
+    let commands = fixture.terminals.exec_commands();
+    assert_eq!(commands.len(), 2);
+    assert!(commands[1].contains(" sh .bashrc '"), "{}", commands[1]);
+    // Read again by the shell there, which reports from then on.
+    assert!(
+        fixture
+            .terminals
+            .written_text()
+            .contains(" source ~/.bashrc\r")
+    );
+    report(cx, &fixture, &osc7("web-01", "/srv/app"));
+    wait_for_path(cx, fixture.handle, FILES, "/srv/app").await;
+}
+
+#[gpui_kit::test]
+async fn a_terminal_in_a_full_screen_program_is_not_typed_into(cx: &mut TestAppContext) {
+    let fixture = open_with(
+        cx,
+        FakeSftpProvider::default(),
+        FakeTerminalFactory::answering(&[NOT_SET_UP, "@@installed\n"]),
+    );
+    show_files(cx, &fixture, INITIAL_WEB_TERMINAL, FILES).await;
+    wait_for_ask(cx, &fixture).await;
+    report(cx, &fixture, "\x1b[?1049h");
+    in_frame(cx, fixture.handle, |window, cx| window.click("ok", cx));
+    settle(cx);
+    assert_eq!(fixture.terminals.exec_count(), 2);
+    assert!(!fixture.terminals.written_text().contains("source"));
+}
+
+#[gpui_kit::test]
+async fn files_follows_its_hosts_folder_only_when_it_changes(cx: &mut TestAppContext) {
+    let fixture = open_with(
+        cx,
+        FakeSftpProvider::default(),
+        FakeTerminalFactory::answering(&[SET_UP]),
+    );
+    show_files(cx, &fixture, INITIAL_WEB_TERMINAL, FILES).await;
+    settle(cx);
+    // Its shell reports already: nothing to ask.
+    in_frame(cx, fixture.handle, |window, _| {
+        assert!(window.try_find("ok").is_none());
+        assert_eq!(window.find("follow-terminal").checked(), Some(true));
+    });
+    report(cx, &fixture, &osc7("web-01", "/srv"));
+    wait_for_path(cx, fixture.handle, FILES, "/srv").await;
+
+    // Browsing elsewhere stays put through prompts in the same folder.
+    in_frame(cx, fixture.handle, |window, cx| {
+        window.dispatch_action(
+            Box::new(ExplorerAction::new(
+                ExplorerId(FILES),
+                ExplorerCommand::Navigate {
+                    remote: true,
+                    path: "/tmp".into(),
+                },
+            )),
+            cx,
+        )
+    });
+    wait_for_path(cx, fixture.handle, FILES, "/tmp").await;
+    report(cx, &fixture, &osc7("web-01", "/srv"));
+    settle(cx);
+    assert_eq!(path(&fixture, cx), "/tmp");
+    // The host's name in another case is still this host.
+    report(cx, &fixture, &osc7("WEB-01", "/var/log"));
+    wait_for_path(cx, fixture.handle, FILES, "/var/log").await;
+
+    // A host ssh'd to inside the terminal is not this one.
+    report(cx, &fixture, &osc7("db-01", "/etc"));
+    settle(cx);
+    assert_eq!(path(&fixture, cx), "/var/log");
+    // iTerm2's report names no host.
+    report(cx, &fixture, "\x1b]1337;CurrentDir=/opt\x07");
+    wait_for_path(cx, fixture.handle, FILES, "/opt").await;
+
+    // Switched off, it stays where it is.
+    in_frame(cx, fixture.handle, |window, cx| {
+        window.click("follow-terminal", cx)
+    });
+    report(cx, &fixture, &osc7("web-01", "/home"));
+    settle(cx);
+    assert_eq!(path(&fixture, cx), "/opt");
+    in_frame(cx, fixture.handle, |window, _| {
+        assert_eq!(window.find("follow-terminal").checked(), Some(false));
+    });
+}
+
+#[gpui_kit::test]
+async fn files_opens_where_the_terminal_is(cx: &mut TestAppContext) {
+    let terminals = FakeTerminalFactory {
+        behavior: FakeBehavior::Prints("\x1b]7;file://web-01/srv/app\x07"),
+        ..FakeTerminalFactory::answering(&[SET_UP])
+    };
+    let fixture = open_with(cx, FakeSftpProvider::default(), terminals);
+    in_frame(cx, fixture.handle, |window, cx| {
+        window.activate_window();
+        window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx);
+    });
+    in_frame(cx, fixture.handle, |window, cx| {
+        window.click("tool-files", cx)
+    });
+    wait_for_path(cx, fixture.handle, FILES, "/srv/app").await;
+}
+
+#[gpui_kit::test]
+async fn with_the_setting_off_files_neither_asks_nor_follows_until_switched_on(
+    cx: &mut TestAppContext,
+) {
+    let fixture = open_with(
+        cx,
+        FakeSftpProvider::default(),
+        FakeTerminalFactory::answering(&[NOT_SET_UP]),
+    );
+    let settings = cx.update(|cx| fixture.workspace.read(cx).settings().clone());
+    cx.update(|cx| {
+        settings.update(cx, |settings, cx| {
+            settings.update(
+                |settings| settings.file_sidebar.detect_directory_follow = false,
+                cx,
+            )
+        })
+    });
+    show_files(cx, &fixture, INITIAL_WEB_TERMINAL, FILES).await;
+    report(cx, &fixture, &osc7("web-01", "/srv"));
+    settle(cx);
+    assert_eq!(fixture.terminals.exec_count(), 0);
+    assert_eq!(path(&fixture, cx), "/home/tester");
+    in_frame(cx, fixture.handle, |window, _| {
+        assert_eq!(window.find("follow-terminal").checked(), Some(false));
+    });
+
+    // Switched on: the host is looked at, without asking, and followed.
+    in_frame(cx, fixture.handle, |window, cx| {
+        window.click("follow-terminal", cx)
+    });
+    wait_for_path(cx, fixture.handle, FILES, "/srv").await;
+    assert_eq!(fixture.terminals.exec_count(), 1);
+    in_frame(cx, fixture.handle, |window, _| {
+        assert!(window.try_find("ok").is_none());
+    });
 }

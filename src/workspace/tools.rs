@@ -657,8 +657,12 @@ impl Workspace {
         let offered = self.offered_tools(cx).contains(&self.tools.read(cx).tool());
         let open = self.tool_sidebar_wanted && terminal.is_some() && offered;
         // A terminal's 文件 is made the first time it is shown, and kept.
+        // 目录跟随's check goes first: the terminal's channels open one at a
+        // time, so it is answered before 文件's opens and 文件 starts out in
+        // the terminal's folder.
         let files = match &terminal {
             Some(terminal) if open && self.tools.read(cx).tool() == ToolKind::Files => {
+                self.check_directory_follow(terminal.id, window, cx);
                 self.ensure_file_sidebar(terminal.id, window, cx)
             }
             _ => None,

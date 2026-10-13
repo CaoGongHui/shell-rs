@@ -38,6 +38,8 @@ pub struct AppSettings {
     pub show_hidden: ShowHiddenFiles,
     /// SFTP → 图标风格.
     pub file_icon_style: FileIconStyle,
+    /// SFTP → 文件侧栏.
+    pub file_sidebar: FileSidebarSettings,
     /// 终端 → 通知.
     pub notifications: NotificationSettings,
     /// 关键字高亮.
@@ -46,6 +48,24 @@ pub struct AppSettings {
     pub window: WindowSettings,
     /// 键盘快捷键: what the user changed of them.
     pub shortcuts: ShortcutOverrides,
+}
+
+/// SFTP → 文件侧栏: the right sidebar's 文件.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileSidebarSettings {
+    /// 自动检测目录配置: on showing 文件, see whether the host's shell reports
+    /// its folder and offer to set it up if not; also whether 文件 follows
+    /// the terminal's folder to begin with. On unless turned off.
+    pub detect_directory_follow: bool,
+}
+
+impl Default for FileSidebarSettings {
+    fn default() -> Self {
+        Self {
+            detect_directory_follow: true,
+        }
+    }
 }
 
 /// 应用 → 窗口: what the next launch restores of the main window. Both on
@@ -525,6 +545,13 @@ mod tests {
             serde_json::from_str(r#"{"show_hidden":{"remote":true}}"#).unwrap();
         assert!(settings.show_hidden.remote);
         assert!(!settings.show_hidden.local);
+        // 文件 looks for and follows the terminal's folder unless told not to.
+        assert!(AppSettings::default().file_sidebar.detect_directory_follow);
+        let settings: AppSettings = serde_json::from_str(r#"{"file_sidebar":{}}"#).unwrap();
+        assert!(settings.file_sidebar.detect_directory_follow);
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"file_sidebar":{"detect_directory_follow":false}}"#).unwrap();
+        assert!(!settings.file_sidebar.detect_directory_follow);
     }
 
     #[test]

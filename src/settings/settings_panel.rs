@@ -515,9 +515,36 @@ const FILE_ICON_PREVIEW: &[(&str, FileIconKind)] = &[
     ("backup.tar.gz", FileIconKind::File),
 ];
 
-/// SFTP: the file lists' icons, and how they look.
+/// SFTP: the right sidebar's 文件, and the file lists' icons and how they
+/// look.
 fn sftp_groups(panel: &SettingsPanel, _: &App) -> Vec<SettingGroup> {
+    let (follow_reader, follow_writer) = (panel.store.clone(), panel.store.clone());
     vec![
+        SettingGroup::new()
+            .title(t!("settings.sftp.file_sidebar"))
+            .items([SettingItem::new(
+                t!("settings.sftp.detect_follow"),
+                SettingField::switch(
+                    move |cx| {
+                        follow_reader
+                            .read(cx)
+                            .settings()
+                            .file_sidebar
+                            .detect_directory_follow
+                    },
+                    move |on, cx| {
+                        follow_writer.update(cx, |store, cx| {
+                            store.update(
+                                |settings| settings.file_sidebar.detect_directory_follow = on,
+                                cx,
+                            )
+                        });
+                    },
+                )
+                .default_value(true),
+            )
+            .description(t!("settings.sftp.detect_follow_description"))
+            .keywords(keywords(t!("settings.sftp.follow_keywords")))]),
         SettingGroup::new()
             .title(t!("settings.sftp.file_list"))
             .items([
