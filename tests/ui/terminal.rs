@@ -1226,6 +1226,117 @@ async fn the_scrollbar_scrolls_back_through_the_history(cx: &mut TestAppContext)
     assert!(!lines.contains("end"), "{lines}");
 }
 
+/// A selection dragged past the bottom takes the view down with it, step
+/// by step while the pointer stays out there, as in every editor; the wheel
+/// turned while dragging does the same. It stops once let go.
+#[gpui_kit::test]
+async fn a_selection_dragged_past_the_edge_scrolls_on(cx: &mut TestAppContext) {
+    use gpui_kit::{MouseDownEvent, MouseUpEvent, ScrollDelta, ScrollWheelEvent, TouchPhase};
+
+    let text: String = (1..=200).map(|line| format!("line {line}\r\n")).collect();
+    let (handle, workspace, _) = terminal_printing(cx, String::leak(text + "end"), "end").await;
+    let screen = |cx: &mut TestAppContext| cx.read(|cx| local_screen(&workspace, cx));
+    // The topmost numbered line on screen; the oldest line is the prompt.
+    let first_line = |cx: &mut TestAppContext| {
+        screen(cx).lines().find_map(|line| {
+            line.strip_prefix("line ")
+                .and_then(|number| number.trim().parse::<usize>().ok())
+        })
+    };
+
+    // To the oldest line, then press at the start of it.
+    let terminal = cx
+        .update_window(handle.into(), |_, window, _| {
+            window.find(("local-terminal", 1_u64)).bounds()
+        })
+        .unwrap();
+    in_frame(cx, handle, |window, cx| {
+        let top = point(terminal.right() + px(2.), terminal.top() + px(2.));
+        click_at(window, top, gpui_kit::Modifiers::none(), cx);
+    });
+    assert_eq!(first_line(cx), Some(1));
+    let start = point(terminal.left() + px(1.), terminal.top() + px(4.));
+    let below = point(terminal.left() + px(40.), terminal.bottom() + px(30.));
+    in_frame(cx, handle, |window, cx| {
+        window.dispatch_event(
+            MouseDownEvent {
+                button: MouseButton::Left,
+                position: start,
+                modifiers: Default::default(),
+                click_count: 1,
+                first_mouse: false,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.dispatch_event(
+            MouseMoveEvent {
+                position: below,
+                pressed_button: Some(MouseButton::Left),
+                modifiers: Default::default(),
+            }
+            .to_platform_input(),
+            cx,
+        );
+    });
+
+    // Held out there, it goes on scrolling down.
+    for _ in 0..5 {
+        cx.executor().advance_clock(Duration::from_millis(50));
+        cx.run_until_parked();
+    }
+    let scrolled = first_line(cx).expect("still in the history");
+    assert!(scrolled > 5, "scrolled to line {scrolled}");
+
+    // The wheel, still dragging, takes it further.
+    in_frame(cx, handle, |window, cx| {
+        window.dispatch_event(
+            ScrollWheelEvent {
+                position: point(terminal.left() + px(40.), terminal.bottom() - px(4.)),
+                delta: ScrollDelta::Lines(point(0., -5.)),
+                modifiers: Default::default(),
+                touch_phase: TouchPhase::Moved,
+            }
+            .to_platform_input(),
+            cx,
+        );
+    });
+    let wheeled = first_line(cx).expect("still in the history");
+    assert!(wheeled > scrolled, "{wheeled} after {scrolled}");
+
+    // Let go: what was selected runs from line 1 to the bottom of the view,
+    // and nothing scrolls any more.
+    in_frame(cx, handle, |window, cx| {
+        window.dispatch_event(
+            MouseUpEvent {
+                button: MouseButton::Left,
+                position: below,
+                modifiers: Default::default(),
+                click_count: 1,
+            }
+            .to_platform_input(),
+            cx,
+        );
+        window.dispatch_action(Box::new(CopyTerminal), cx);
+    });
+    let copied = cx
+        .update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
+        .expect("a selection");
+    assert!(copied.starts_with("run:1$"), "from the first row: {copied}");
+    assert!(copied.contains("\nline 1\nline 2\n"), "{copied}");
+    // Down to the bottom row, as far across as the pointer.
+    let last = screen(cx).lines().last().unwrap_or_default().to_string();
+    let end = copied.lines().last().unwrap_or_default();
+    assert!(
+        !end.is_empty() && last.starts_with(end),
+        "{end:?} of {last:?}"
+    );
+    let settled = first_line(cx);
+    cx.executor().advance_clock(Duration::from_millis(500));
+    cx.run_until_parked();
+    assert_eq!(first_line(cx), settled);
+}
+
 #[gpui_kit::test]
 async fn a_program_copies_to_the_local_clipboard(cx: &mut TestAppContext) {
     // 「你好」 in base64.

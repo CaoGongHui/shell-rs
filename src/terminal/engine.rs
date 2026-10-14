@@ -433,6 +433,31 @@ impl TerminalEngine {
         cx.notify();
     }
 
+    /// Scroll the view `lines` (into the history when positive), then
+    /// move the selection's end to `column` of the view's row `row`: a drag
+    /// held past the top or the bottom, or the wheel turned while dragging,
+    /// takes in what comes into view.
+    pub fn scroll_selection(
+        &mut self,
+        lines: i32,
+        row: usize,
+        column: Column,
+        side: Side,
+        cx: &mut gpui_kit::Context<Self>,
+    ) {
+        let mut term = self.runtime.term.lock();
+        if lines != 0 {
+            term.scroll_display(Scroll::Delta(lines));
+        }
+        let row = row.min(term.screen_lines().saturating_sub(1)) as i32;
+        let point = Point::new(Line(row - term.grid().display_offset() as i32), column);
+        if let Some(selection) = term.selection.as_mut() {
+            selection.update(point, side);
+        }
+        drop(term);
+        cx.notify();
+    }
+
     pub fn clear_selection(&mut self, cx: &mut gpui_kit::Context<Self>) {
         self.runtime.term.lock().selection = None;
         cx.notify();

@@ -50,6 +50,11 @@ const FIND_DEBOUNCE: Duration = Duration::from_millis(80);
 /// How long the pointer rests on a link before its address shows.
 const LINK_TOOLTIP_DELAY: Duration = Duration::from_millis(500);
 
+/// How often a selection drag held past the top or the bottom scrolls on,
+/// and the most lines a step takes, however far out the pointer is.
+const EDGE_SCROLL_INTERVAL: Duration = Duration::from_millis(50);
+const EDGE_SCROLL_MOST: i32 = 10;
+
 /// The key held to open a link with a click, as the tooltip names it.
 #[cfg(target_os = "macos")]
 const OPEN_LINK_KEY: &str = "⌘";
@@ -197,6 +202,24 @@ impl TerminalViewport {
         )
     }
 
+    /// How many lines a step scrolls with a selection drag at `position`:
+    /// none over the grid, up into the history (positive) above it, down
+    /// below it, the more the farther out, as every editor does.
+    fn edge_scroll(&self, position: gpui_kit::Point<Pixels>) -> i32 {
+        let top = self.geometry.bounds.top();
+        let bottom = top + self.geometry.line_height * self.rows as f32;
+        let line = self.geometry.line_height.as_f32().max(1.);
+        let lines =
+            |distance: Pixels| (1 + (distance.as_f32() / line) as i32).min(EDGE_SCROLL_MOST);
+        if position.y < top {
+            lines(top - position.y)
+        } else if position.y >= bottom {
+            -lines(position.y - bottom)
+        } else {
+            0
+        }
+    }
+
     fn grid_point(&self, position: gpui_kit::Point<Pixels>) -> (TerminalPoint, Side) {
         grid_point(
             position,
@@ -231,6 +254,11 @@ pub struct TerminalView {
     requested_size: TerminalSize,
     /// A selection drag is under way.
     selecting: bool,
+    /// A selection drag held past the top or the bottom: how many lines
+    /// each step scrolls, up when positive, and where across the edge row
+    /// the selection ends. The steps run while it is set.
+    edge_scroll: Option<(i32, Column, Side)>,
+    edge_scroll_task: Option<Task<()>>,
     scroll_accumulator: ScrollAccumulator,
     context_menu: Option<(Entity<PopupMenu>, gpui_kit::Point<Pixels>)>,
     context_menu_subscription: Option<Subscription>,
@@ -323,6 +351,8 @@ impl TerminalView {
             ime_cursor_bounds: None,
             requested_size: TerminalSize::DEFAULT,
             selecting: false,
+            edge_scroll: None,
+            edge_scroll_task: None,
             scroll_accumulator: ScrollAccumulator::default(),
             context_menu: None,
             context_menu_subscription: None,
@@ -646,11 +676,14 @@ impl TerminalView {
         self.engine.update(cx, |engine, cx| engine.resize(size, cx));
     }
 
+    /// The wheel. `cell` is the one under the pointer, nearest when it is
+    /// off the grid, and `side` which half of it.
     fn scroll(
         &mut self,
         delta: ScrollDelta,
         line_height: Pixels,
         cell: (usize, usize),
+        side: Side,
         modifiers: Modifiers,
         cx: &mut Context<Self>,
     ) {
@@ -683,6 +716,12 @@ impl TerminalView {
             for _ in 0..lines.unsigned_abs().min(12) {
                 self.engine.read(cx).write(sequence.to_vec());
             }
+        } else if self.selecting {
+            // Dragging, the selection follows the pointer into the text
+            // that scrolls under it.
+            self.engine.update(cx, |engine, cx| {
+                engine.scroll_selection(lines, cell.1, Column(cell.0), side, cx)
+            });
         } else {
             self.engine
                 .update(cx, |engine, cx| engine.scroll(lines, cx));
@@ -707,10 +746,60 @@ impl TerminalView {
             .update(cx, |engine, cx| engine.update_selection(point, side, cx));
     }
 
+    /// The pointer moved while dragging a selection: it ends there, and
+    /// held past the top or the bottom (`lines` from `edge_scroll`), the
+    /// view scrolls on by steps, taking the selection with it, until the
+    /// pointer comes back or lets go.
+    fn drag_selection(
+        &mut self,
+        point: TerminalPoint,
+        side: Side,
+        lines: i32,
+        cx: &mut Context<Self>,
+    ) {
+        self.update_selection(point, side, cx);
+        if lines == 0 {
+            self.stop_edge_scroll();
+            return;
+        }
+        self.edge_scroll = Some((lines, point.column, side));
+        if self.edge_scroll_task.is_some() {
+            return;
+        }
+        self.edge_scroll_task = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(EDGE_SCROLL_INTERVAL).await;
+                let Ok(true) = this.update(cx, |this, cx| this.step_edge_scroll(cx)) else {
+                    break;
+                };
+            }
+        }));
+    }
+
+    /// One step of a drag held past the edge; whether to go on.
+    fn step_edge_scroll(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some((lines, column, side)) = self.edge_scroll.filter(|_| self.selecting) else {
+            self.stop_edge_scroll();
+            return false;
+        };
+        // The row at the edge the pointer is past.
+        let row = if lines > 0 { 0 } else { usize::MAX };
+        self.engine.update(cx, |engine, cx| {
+            engine.scroll_selection(lines, row, column, side, cx)
+        });
+        true
+    }
+
+    fn stop_edge_scroll(&mut self) {
+        self.edge_scroll = None;
+        self.edge_scroll_task = None;
+    }
+
     /// The mouse let go of a selection. With 选中复制 on, what it took in
     /// goes to the clipboard; a click that selected nothing leaves it be.
     fn finish_selection(&mut self, cx: &mut Context<Self>) {
         self.selecting = false;
+        self.stop_edge_scroll();
         if TerminalInteraction::current(cx).copy_on_select {
             self.copy_selection(cx);
         }
@@ -1686,7 +1775,8 @@ impl Element for TerminalElement {
             }
             if event.dragging() {
                 let (point, side) = viewport.grid_point(event.position);
-                view.update(cx, |view, cx| view.update_selection(point, side, cx));
+                let lines = viewport.edge_scroll(event.position);
+                view.update(cx, |view, cx| view.drag_selection(point, side, lines, cx));
             } else {
                 // Let go where the window did not hear it.
                 view.update(cx, |view, cx| view.finish_selection(cx));
@@ -1712,11 +1802,13 @@ impl Element for TerminalElement {
                 return;
             }
             let cell = viewport.nearest_cell(event.position);
+            let (_, side) = viewport.grid_point(event.position);
             view.update(cx, |view, cx| {
                 view.scroll(
                     event.delta,
                     viewport.geometry.line_height,
                     cell,
+                    side,
                     event.modifiers,
                     cx,
                 )
