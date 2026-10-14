@@ -35,5 +35,5 @@ pub use private_key::{GeneratedKey, KeyAlgorithm, PastedKey, PastedKeyError, rea
 pub use quick_connect::{QuickChoice, QuickHost, open_quick_connect_dialog, quick_hosts};
 pub use secret_fields::SecretFields;
 pub use snippet::*;
-pub use ssh_link::{LinkKind, SshLink};
+pub use ssh_link::{LinkKind, SshLink, standard_url};
 pub use store::{HostStore, HostStoreEvent};

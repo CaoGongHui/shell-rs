@@ -13,6 +13,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::host::standard_url;
+
 /// A link to connect to, as the caller wrote it.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpenLink {
@@ -33,13 +35,14 @@ impl fmt::Debug for OpenLink {
     }
 }
 
-/// `url` with its password replaced, for logs. Never the text itself when
-/// it cannot be read: where the password ends is unknown then.
+/// `url` with its password replaced, for logs, read as the app reads it.
+/// Never the text itself when it cannot be read: where the password ends is
+/// unknown then.
 fn without_password(url: &str) -> String {
     if url.is_empty() {
         return String::new();
     }
-    match url::Url::parse(url) {
+    match url::Url::parse(&standard_url(url)) {
         Ok(mut parsed) => {
             if parsed.password().is_some() {
                 let _ = parsed.set_password(Some("***"));
@@ -276,5 +279,15 @@ mod tests {
             }
         );
         assert!(!unreadable.contains("hunter2"), "{unreadable}");
+        // A user name past the first `/`, as Xshell reads it.
+        let slashed = format!(
+            "{:?}",
+            OpenLink {
+                url: "ssh://ops@corp/10.20.0.9/root:hunter2@bastion:8013".into(),
+                tab: None,
+            }
+        );
+        assert!(!slashed.contains("hunter2"), "{slashed}");
+        assert!(slashed.contains("bastion:8013"), "{slashed}");
     }
 }

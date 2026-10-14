@@ -3,9 +3,10 @@
 //! how it opens WinSCP. ShellRS connects to it as an 外部连接: not saved,
 //! gone with its tabs, a terminal or an SFTP tab alone.
 
+use std::borrow::Cow;
 use std::fmt;
 
-use percent_encoding::percent_decode_str;
+use percent_encoding::{AsciiSet, percent_decode_str, utf8_percent_encode};
 use url::{Host as UrlHost, ParseError, Url};
 use zeroize::Zeroizing;
 
@@ -52,7 +53,7 @@ impl SshLink {
         if !link.contains("://") {
             return Err(malformed());
         }
-        let url = Url::parse(link).map_err(|error| match error {
+        let url = Url::parse(&standard_url(link)).map_err(|error| match error {
             ParseError::InvalidPort => t!("host.link.invalid_port").to_string(),
             ParseError::EmptyHost => t!("host.link.no_address").to_string(),
             _ => malformed(),
@@ -129,6 +130,33 @@ impl fmt::Debug for SshLink {
             .field("password", &self.password.as_ref().map(|_| "***"))
             .finish()
     }
+}
+
+/// What ends the user name and password for the URL standard.
+const USER_INFO_ENDS: &AsciiSet = &AsciiSet::EMPTY.add(b'/').add(b'?').add(b'#');
+
+/// `link` with the user name and password Xshell reads in an `ssh://` link
+/// encoded so the URL standard reads them too. Xshell takes them up to the
+/// last `@`, past any `/`: bastion hosts put the account and the target
+/// into the user name
+/// (`ssh://ops@corp.example/10.20.0.9/root/client:secret@bastion:8013`,
+/// issue #32). A `?` or `#` there, as passwords hold, stays in them alike.
+/// The standard ends them at the first of those, and WinSCP at the first
+/// `/`, so an `sftp://` link is left as it is: an `@` in its path stays in
+/// the path.
+pub fn standard_url(link: &str) -> Cow<'_, str> {
+    let Some((scheme, rest)) = link.split_once("://") else {
+        return Cow::Borrowed(link);
+    };
+    let Some(at) = rest.rfind('@') else {
+        return Cow::Borrowed(link);
+    };
+    let user_info = &rest[..at];
+    if !scheme.eq_ignore_ascii_case("ssh") || !user_info.contains(['/', '?', '#']) {
+        return Cow::Borrowed(link);
+    }
+    let user_info = utf8_percent_encode(user_info, USER_INFO_ENDS);
+    Cow::Owned(format!("{scheme}://{user_info}{}", &rest[at..]))
 }
 
 /// The text a link percent-encodes: `p%40ss` is `p@ss`.
@@ -212,6 +240,38 @@ mod tests {
         assert_eq!(link.user, "admin@root@10.1.1.1");
         assert_eq!(link.address, "jms.example.com");
         assert_eq!(link.port, 2222);
+    }
+
+    #[test]
+    fn an_ssh_user_name_and_password_run_to_the_last_at_sign_as_in_xshell() {
+        // A bastion host naming its account, the target and the target's
+        // account in one user name (issue #32).
+        let link = parse("ssh://ops@corp.example/10.20.0.9/root/client:pa55@bastion.example:8013");
+        assert_eq!(link.user, "ops@corp.example/10.20.0.9/root/client");
+        assert_eq!(link.password.as_deref().map(String::as_str), Some("pa55"));
+        assert_eq!(link.address, "bastion.example");
+        assert_eq!(link.port, 8013);
+        assert_eq!(link.name, "bastion.example");
+        assert_eq!(link.draft().user.as_ref(), link.user);
+        // Without a password, and with what the URL standard would end the
+        // password at.
+        let link = parse("ssh://ops@corp.example/10.20.0.9/root@[::1]:2200");
+        assert_eq!(link.user, "ops@corp.example/10.20.0.9/root");
+        assert_eq!((link.address.as_str(), link.port), ("::1", 2200));
+        let link = parse("SSH://root:p/a?s#s%40@db.example");
+        assert_eq!(link.user, "root");
+        assert_eq!(
+            link.password.as_deref().map(String::as_str),
+            Some("p/a?s#s@")
+        );
+        assert_eq!((link.address.as_str(), link.port), ("db.example", 22));
+    }
+
+    #[test]
+    fn an_sftp_link_ends_the_user_name_at_the_first_slash_as_in_winscp() {
+        let link = parse("sftp://root@files.example:2222/home/ops@corp/");
+        assert_eq!(link.user, "root");
+        assert_eq!((link.address.as_str(), link.port), ("files.example", 2222));
     }
 
     #[test]
