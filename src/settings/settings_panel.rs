@@ -28,6 +28,7 @@ use crate::app::{
 use crate::cli::{AgentKind, BinaryStatus, CliIntegration, IntegrationStatus, SkillStatus};
 use crate::explorer::{FileIcon, FileIconKind};
 use crate::i18n::t;
+use crate::sftp::{DEFAULT_PARALLEL_TRANSFERS, PARALLEL_TRANSFERS_RANGE};
 use crate::shared::{ClosableTabTitle, close_tab_items};
 use crate::terminal::{
     FONT_SIZE_RANGE, LINE_HEIGHT_RANGE, TerminalColors, TerminalFont, TerminalFontPreview,
@@ -515,11 +516,19 @@ const FILE_ICON_PREVIEW: &[(&str, FileIconKind)] = &[
     ("backup.tar.gz", FileIconKind::File),
 ];
 
-/// SFTP: the right sidebar's 文件, and the file lists' icons and how they
-/// look.
+/// SFTP: how many files move at once, the right sidebar's 文件, and the
+/// file lists' icons and how they look.
 fn sftp_groups(panel: &SettingsPanel, _: &App) -> Vec<SettingGroup> {
     let (follow_reader, follow_writer) = (panel.store.clone(), panel.store.clone());
     vec![
+        SettingGroup::new()
+            .title(t!("settings.sftp.transfers"))
+            .items([SettingItem::new(
+                t!("settings.sftp.parallel"),
+                parallel_transfers_field(&panel.store),
+            )
+            .description(t!("settings.sftp.parallel_description"))
+            .keywords(keywords(t!("settings.sftp.parallel_keywords")))]),
         SettingGroup::new()
             .title(t!("settings.sftp.file_sidebar"))
             .items([SettingItem::new(
@@ -1320,6 +1329,42 @@ fn font_size_field(store: &Entity<SettingsStore>) -> SettingField<SharedString> 
         },
     )
     .default_value(default.to_string())
+}
+
+/// 最大同时传输数量, a dropdown of whole numbers as the font size's is.
+fn parallel_transfers_field(store: &Entity<SettingsStore>) -> SettingField<SharedString> {
+    let options = PARALLEL_TRANSFERS_RANGE
+        .map(|count| {
+            let key = SharedString::from(count.to_string());
+            let label = if count == DEFAULT_PARALLEL_TRANSFERS {
+                t!("settings.default_option", value = count)
+            } else {
+                key.clone()
+            };
+            (key, label)
+        })
+        .collect();
+    let (reader, writer) = (store.clone(), store.clone());
+    SettingField::dropdown(
+        options,
+        move |cx| {
+            reader
+                .read(cx)
+                .settings()
+                .transfers
+                .parallel
+                .to_string()
+                .into()
+        },
+        move |count: SharedString, cx| {
+            if let Ok(count) = count.parse::<usize>() {
+                writer.update(cx, |store, cx| {
+                    store.update(|settings| settings.transfers.parallel = count, cx)
+                });
+            }
+        },
+    )
+    .default_value(DEFAULT_PARALLEL_TRANSFERS.to_string())
 }
 
 /// A number input over one number of the settings. The store rounds what

@@ -382,6 +382,10 @@ struct Answers {
 }
 impl Answers {
     fn new(choices: Vec<TransferChoice>) -> Self {
+        Self::answering(choices.into_iter().map(|choice| (choice, false)).collect())
+    }
+    /// Each choice with whether it goes for all the items like it.
+    fn answering(choices: Vec<(TransferChoice, bool)>) -> Self {
         let (events, receiver) = async_channel::unbounded();
         let (answers, rx) = async_channel::unbounded();
         let (cancel, watch) = watch::channel(false);
@@ -395,14 +399,10 @@ impl Answers {
                 match event {
                     SftpEvent::Question(q) => {
                         seen_questions.lock().unwrap().push(q.kind());
+                        let (choice, for_all) =
+                            choices.next().unwrap_or((TransferChoice::Cancel, false));
                         let _ = answers
-                            .send((
-                                q.id(),
-                                TransferAnswer::new(
-                                    choices.next().unwrap_or(TransferChoice::Cancel),
-                                    false,
-                                ),
-                            ))
+                            .send((q.id(), TransferAnswer::new(choice, for_all)))
                             .await;
                     }
                     SftpEvent::Progress(snapshot) => {
@@ -567,6 +567,150 @@ fn winscp_style_upload_finishes_without_a_verification_phase() {
     });
 }
 
+/// Files under 100 KB go straight to their names, as WinSCP sends them: no
+/// `.filepart`, no resume record, and several at once.
+#[test]
+fn small_files_go_straight_to_their_names_several_at_once() {
+    runtime().block_on(async {
+        let tmp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        let root = tmp.path().join("dist");
+        std::fs::create_dir_all(root.join("assets/js")).unwrap();
+        for i in 0..20 {
+            std::fs::write(
+                root.join(format!("assets/js/{i}.js")),
+                vec![i as u8; 1000 + i],
+            )
+            .unwrap();
+        }
+        std::fs::write(root.join("index.html"), b"<html>").unwrap();
+        let journal = tmp.path().join("journal");
+        let answers = Answers::new(vec![]);
+        let mut upload = batch(&root, Journal::new(journal.clone()), &answers.control).await;
+        let remote = Remote::new();
+
+        run(&mut upload, &remote, &answers.control).await.unwrap();
+
+        for i in 0..20 {
+            assert_eq!(
+                remote.bytes(&format!("/dest/dist/assets/js/{i}.js")),
+                vec![i as u8; 1000 + i]
+            );
+        }
+        assert_eq!(remote.bytes("/dest/dist/index.html"), b"<html>");
+        let local_time = SourceMetadata::read(&root.join("index.html"))
+            .await
+            .unwrap()
+            .modified_ns
+            / 1_000_000_000;
+        assert_eq!(
+            remote.nodes.borrow()["/dest/dist/index.html"]
+                .metadata
+                .modified()
+                .map(u128::from),
+            Some(local_time)
+        );
+        assert!(remote.max_in_flight.get() > 1, "one file at a time");
+        assert!(
+            !remote
+                .nodes
+                .borrow()
+                .keys()
+                .any(|p| p.ends_with(".filepart"))
+        );
+        assert!(!journal.exists());
+        assert_eq!(upload.meter.progress.succeeded(), 24);
+        assert!(answers.questions.lock().unwrap().is_empty());
+    });
+}
+
+/// Over files that are there, the first is asked about and “apply to all”
+/// answers the rest, though several are in flight at once.
+#[test]
+fn overwriting_small_files_asks_once_for_all_of_them() {
+    runtime().block_on(async {
+        let tmp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        let root = tmp.path().join("dist");
+        std::fs::create_dir(&root).unwrap();
+        let remote = Remote::new();
+        remote.dir("/dest/dist", 0o755);
+        for i in 0..12 {
+            std::fs::write(root.join(format!("{i}.txt")), format!("new {i}")).unwrap();
+            remote.file(&format!("/dest/dist/{i}.txt"), b"old");
+        }
+        let answers = Answers::answering(vec![(TransferChoice::Overwrite, true)]);
+        let mut upload = batch(
+            &root,
+            Journal::new(tmp.path().join("journal")),
+            &answers.control,
+        )
+        .await;
+
+        run(&mut upload, &remote, &answers.control).await.unwrap();
+
+        for i in 0..12 {
+            assert_eq!(
+                remote.bytes(&format!("/dest/dist/{i}.txt")),
+                format!("new {i}").into_bytes()
+            );
+        }
+        assert_eq!(
+            *answers.questions.lock().unwrap(),
+            vec![TransferQuestionKind::Conflict]
+        );
+        assert_eq!(upload.meter.progress.succeeded(), 13);
+    });
+}
+
+/// A small file cut off by a lost connection is written again whole by the
+/// next try, without asking again. Set aside instead, it is removed:
+/// nothing resumes it.
+#[test]
+fn a_small_file_cut_off_is_written_again_or_removed() {
+    runtime().block_on(async {
+        let tmp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        let source = tmp.path().join("file");
+        let data = vec![7; 50_000];
+        std::fs::write(&source, &data).unwrap();
+        let remote = Remote::new();
+        remote.file("/dest/file", b"old contents");
+        remote.fault.set(Some(Fault::Write(1)));
+        let answers = Answers::new(vec![TransferChoice::Overwrite]);
+        let mut upload = batch(
+            &source,
+            Journal::new(tmp.path().join("journal")),
+            &answers.control,
+        )
+        .await;
+        assert!(super::client::is_network_error(
+            &run(&mut upload, &remote, &answers.control)
+                .await
+                .unwrap_err()
+        ));
+        run(&mut upload, &remote, &answers.control).await.unwrap();
+        assert_eq!(remote.bytes("/dest/file"), data);
+        assert_eq!(
+            *answers.questions.lock().unwrap(),
+            vec![TransferQuestionKind::Conflict]
+        );
+        assert_eq!(upload.meter.progress.succeeded(), 1);
+
+        remote.nodes.borrow_mut().clear();
+        remote.writes.set(0);
+        remote.fault.set(Some(Fault::Write(1)));
+        let answers = Answers::new(vec![]);
+        let mut upload = batch(
+            &source,
+            Journal::new(tmp.path().join("journal")),
+            &answers.control,
+        )
+        .await;
+        assert!(run(&mut upload, &remote, &answers.control).await.is_err());
+        assert!(remote.nodes.borrow().contains_key("/dest/file"));
+        upload.discard(&remote).await.unwrap();
+        assert!(remote.nodes.borrow().is_empty());
+    });
+}
+
 #[test]
 fn resume_uses_remote_filepart_size_and_preserves_old_target() {
     runtime().block_on(async {
@@ -623,7 +767,7 @@ fn filepart_larger_than_source_requires_explicit_restart() {
     runtime().block_on(async {
         let tmp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         let source = tmp.path().join("file");
-        std::fs::write(&source, vec![1; 100_000]).unwrap();
+        std::fs::write(&source, vec![1; 200_000]).unwrap();
         let journal = Journal::new(tmp.path().join("journal"));
         let remote = Remote::new();
         remote.fault.set(Some(Fault::Write(2)));
@@ -652,7 +796,7 @@ fn winscp_style_resume_does_not_prevalidate_the_source_version() {
     runtime().block_on(async {
         let tmp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         let source = tmp.path().join("file");
-        let data = vec![1; 100_000];
+        let data = vec![1; 200_000];
         std::fs::write(&source, &data).unwrap();
         let journal = Journal::new(tmp.path().join("journal"));
         let remote = Remote::new();
@@ -668,13 +812,13 @@ fn winscp_style_resume_does_not_prevalidate_the_source_version() {
             .unwrap()
             .unwrap();
         let old_prefix = remote.bytes(record.temporary.as_str());
-        std::fs::write(&source, vec![2; 100_000]).unwrap();
+        std::fs::write(&source, vec![2; 200_000]).unwrap();
         let answers = Answers::new(vec![TransferChoice::Resume]);
         let mut resumed = batch(&source, journal, &answers.control).await;
 
         run(&mut resumed, &remote, &answers.control).await.unwrap();
 
-        let mut expected = vec![2; 100_000];
+        let mut expected = vec![2; 200_000];
         expected[..old_prefix.len()].copy_from_slice(&old_prefix);
         assert_eq!(remote.bytes("/dest/file"), expected);
         assert_eq!(
@@ -690,7 +834,7 @@ fn winscp_style_resume_detects_filepart_without_a_local_record() {
     runtime().block_on(async {
         let tmp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         let source = tmp.path().join("file");
-        let data = vec![3; 100_000];
+        let data = vec![3; 200_000];
         std::fs::write(&source, &data).unwrap();
         let remote = Remote::new();
         remote.file("/dest/file.filepart", &data[..32_768]);
@@ -719,7 +863,8 @@ fn lost_replies_at_backup_publish_and_close_are_reconciled() {
         for fault in [Fault::Rename(1), Fault::Rename(2), Fault::Close] {
             let tmp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
             let source = tmp.path().join("file");
-            std::fs::write(&source, b"new contents").unwrap();
+            let data = vec![9; 200_000];
+            std::fs::write(&source, &data).unwrap();
             let journal = Journal::new(tmp.path().join("journal"));
             let remote = Remote::new();
             remote.file("/dest/file", b"original");
@@ -730,7 +875,7 @@ fn lost_replies_at_backup_publish_and_close_are_reconciled() {
             let answers = Answers::new(vec![TransferChoice::Resume]);
             let mut resumed = batch(&source, journal.clone(), &answers.control).await;
             run(&mut resumed, &remote, &answers.control).await.unwrap();
-            assert_eq!(remote.bytes("/dest/file"), b"new contents");
+            assert_eq!(remote.bytes("/dest/file"), data);
             assert_eq!(remote.nodes.borrow().len(), 1);
             assert_eq!(resumed.meter.progress.succeeded(), 1);
         }
@@ -1087,7 +1232,7 @@ fn failed_compatibility_publish_restores_old_target_and_reports_failure() {
     runtime().block_on(async {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("file");
-        std::fs::write(&source, b"new").unwrap();
+        std::fs::write(&source, vec![5; 200_000]).unwrap();
         let remote = Remote::new();
         remote.file("/dest/file", b"original");
         remote.fault.set(Some(Fault::RejectRename(2)));
@@ -1118,7 +1263,7 @@ fn target_changed_during_upload_requires_another_conflict_answer() {
     runtime().block_on(async {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("file");
-        std::fs::write(&source, b"new").unwrap();
+        std::fs::write(&source, vec![5; 200_000]).unwrap();
         let remote = Remote::new();
         remote.file("/dest/file", b"original");
         remote.fault.set(Some(Fault::ChangeTargetOnClose));
@@ -1161,7 +1306,7 @@ fn target_removed_during_upload_still_requires_confirmation() {
     runtime().block_on(async {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("file");
-        std::fs::write(&source, b"new").unwrap();
+        std::fs::write(&source, vec![5; 200_000]).unwrap();
         let remote = Remote::new();
         remote.file("/dest/file", b"old");
         remote.fault.set(Some(Fault::RemoveTargetOnClose));
@@ -1554,17 +1699,15 @@ fn a_changed_remote_file_is_not_resumed_and_discard_cleans_up() {
                 .await
                 .is_err()
         );
-        remote.file("/file", b"rewritten");
+        let rewritten = vec![8; 150_000];
+        remote.file("/file", &rewritten);
         let answers = Answers::new(vec![TransferChoice::Restart]);
         let mut restarted =
             download_batch(&["/file"], tmp.path(), journal, &remote, &answers.control).await;
         run_download(&mut restarted, &remote, &answers.control)
             .await
             .unwrap();
-        assert_eq!(
-            std::fs::read(tmp.path().join("file")).unwrap(),
-            b"rewritten"
-        );
+        assert_eq!(std::fs::read(tmp.path().join("file")).unwrap(), rewritten);
         assert_eq!(
             *answers.questions.lock().unwrap(),
             vec![TransferQuestionKind::InvalidResume]
@@ -1577,7 +1720,7 @@ fn download_cancellation_keeps_the_partial_file() {
     runtime().block_on(async {
         let tmp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
         let remote = Remote::new();
-        remote.file("/file", &vec![1; 100_000]);
+        remote.file("/file", &vec![1; 200_000]);
         let answers = Answers::new(vec![]);
         let mut batch = download_batch(
             &["/file"],
@@ -1593,6 +1736,61 @@ fn download_cancellation_keeps_the_partial_file() {
             .unwrap_err();
         assert!(error.is::<super::control::Cancelled>());
         assert!(!tmp.path().join("file").exists());
+    });
+}
+
+/// A file under 100 KB is not resumed, as WinSCP resumes none: a partial
+/// file beside it is written over without asking, none is left behind when
+/// the connection drops, and no record is kept.
+#[test]
+fn a_small_download_keeps_no_record_and_asks_nothing_about_a_partial_file() {
+    runtime().block_on(async {
+        let tmp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
+        let out = tmp.path().join("out");
+        std::fs::create_dir(&out).unwrap();
+        let journal = tmp.path().join("journal");
+        let remote = Remote::new();
+        remote.file("/file", &vec![4; 50_000]);
+        std::fs::write(partial_path(&out.join("file")), b"stale").unwrap();
+        let answers = Answers::new(vec![]);
+        let mut batch = download_batch(
+            &["/file"],
+            &out,
+            DownloadJournal::new(journal.clone()),
+            &remote,
+            &answers.control,
+        )
+        .await;
+        run_download(&mut batch, &remote, &answers.control)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(out.join("file")).unwrap(), vec![4; 50_000]);
+        assert!(!partial_path(&out.join("file")).exists());
+        assert!(answers.questions.lock().unwrap().is_empty());
+
+        remote.file("/other", &vec![5; 50_000]);
+        remote.reads.set(0);
+        remote.fault.set(Some(Fault::Read(1)));
+        let mut batch = download_batch(
+            &["/other"],
+            &out,
+            DownloadJournal::new(journal.clone()),
+            &remote,
+            &answers.control,
+        )
+        .await;
+        assert!(
+            run_download(&mut batch, &remote, &answers.control)
+                .await
+                .is_err()
+        );
+        assert!(!partial_path(&out.join("other")).exists());
+        run_download(&mut batch, &remote, &answers.control)
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(out.join("other")).unwrap(), vec![5; 50_000]);
+        assert!(!journal.exists());
+        assert!(answers.questions.lock().unwrap().is_empty());
     });
 }
 

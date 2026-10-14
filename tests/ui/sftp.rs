@@ -376,10 +376,10 @@ async fn sftp_lists_take_color_icons_once_chosen_in_the_settings(cx: &mut TestAp
         window.within("settings").click("0-2", cx)
     });
     in_frame(cx, handle, |window, _| {
-        // 文件侧栏 first, then 文件列表 with the icons.
+        // 传输 first, then 文件侧栏, then 文件列表 with the icons.
         let icon_style = window
             .within("settings")
-            .within("group-1")
+            .within("group-2")
             .within("item-0")
             .find("btn")
             .label()

@@ -11,6 +11,8 @@ mod download;
 mod journal;
 mod meter;
 mod operations;
+mod parallel;
+pub use parallel::{DEFAULT_PARALLEL_TRANSFERS, PARALLEL_TRANSFERS_RANGE, set_parallel_transfers};
 mod speed;
 mod sync;
 mod upload;

@@ -19,8 +19,24 @@ pub(crate) struct TransferMeter {
     moved_bytes: u64,
     /// The size of the files that are done.
     finished_bytes: u64,
+    /// The items moving now, the longest running first: several go at once.
+    in_flight: Vec<InFlight>,
+    next_id: u64,
     last_emit: Instant,
 }
+
+/// An item that has begun and not yet settled.
+struct InFlight {
+    id: FileId,
+    source: String,
+    target: String,
+    bytes: u64,
+    total: u64,
+}
+
+/// Names an item in flight to the meter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FileId(u64);
 
 impl TransferMeter {
     pub fn new(direction: TransferDirection, total: usize, total_bytes: u64) -> Self {
@@ -34,6 +50,8 @@ impl TransferMeter {
             clock: TransferClock::default(),
             moved_bytes: 0,
             finished_bytes: 0,
+            in_flight: Vec::new(),
+            next_id: 0,
             last_emit: Instant::now(),
         }
     }
@@ -68,23 +86,45 @@ impl TransferMeter {
         self.emit(control);
     }
 
-    /// An item starts: it is the file in flight now, `size` bytes to move.
-    pub fn begin(&mut self, source: String, target: String, size: u64, control: &TransferControl) {
-        self.progress.current = target;
-        self.progress.current_source = source;
-        self.progress.current_bytes = 0;
-        self.progress.current_total = size;
+    /// An item starts, `size` bytes to move. The queue shows the item that
+    /// has been in flight longest.
+    pub fn begin(
+        &mut self,
+        source: String,
+        target: String,
+        size: u64,
+        control: &TransferControl,
+    ) -> FileId {
+        let id = FileId(self.next_id);
+        self.next_id += 1;
+        self.in_flight.push(InFlight {
+            id,
+            source,
+            target,
+            bytes: 0,
+            total: size,
+        });
+        self.show_current();
         self.emit(control);
+        id
     }
 
-    /// `length` more bytes went through, which leaves the file in flight at
+    /// `length` more bytes of `file` went through, which leaves it at
     /// `file_bytes`.
-    pub fn advance(&mut self, length: u64, file_bytes: u64, control: &TransferControl) {
+    pub fn advance(
+        &mut self,
+        file: FileId,
+        length: u64,
+        file_bytes: u64,
+        control: &TransferControl,
+    ) {
         self.moved_bytes += length;
+        if let Some(entry) = self.in_flight.iter_mut().find(|entry| entry.id == file) {
+            entry.bytes = file_bytes;
+        }
         let now = Instant::now();
         self.clock.record(now, self.moved_bytes);
-        self.progress.completed_bytes = self.finished_bytes.saturating_add(file_bytes);
-        self.progress.current_bytes = file_bytes;
+        self.show_current();
         self.progress.bytes_per_second = self.clock.speed();
         self.progress.elapsed = self.clock.elapsed(now);
         if self.last_emit.elapsed() >= EMIT_INTERVAL {
@@ -93,8 +133,15 @@ impl TransferMeter {
         }
     }
 
-    /// An item ended as `detail` says; `size` is what it had to move.
-    pub fn settle(&mut self, detail: TransferDetail, size: u64) {
+    /// `file` ended as `detail` says; `size` is what it had to move.
+    pub fn settle(
+        &mut self,
+        file: FileId,
+        detail: TransferDetail,
+        size: u64,
+        control: &TransferControl,
+    ) {
+        self.in_flight.retain(|entry| entry.id != file);
         match detail.outcome() {
             TransferOutcome::Done => {
                 self.progress.succeeded += 1;
@@ -110,11 +157,37 @@ impl TransferMeter {
             }
         }
         self.progress.details.push(detail);
+        self.show_current();
+        self.emit(control);
     }
 
-    /// The item is dealt with; on to the next one.
-    pub fn next(&mut self, control: &TransferControl) {
-        self.progress.completed_bytes = self.finished_bytes;
-        self.phase(TransferPhase::Transferring, control);
+    /// `file` goes without ending: scanning it again replaced it.
+    pub fn forget(&mut self, file: FileId) {
+        self.in_flight.retain(|entry| entry.id != file);
+        self.show_current();
+    }
+
+    /// The items in flight were broken off, by a lost connection or a stop:
+    /// the next run starts them over.
+    pub fn abandon(&mut self) {
+        self.in_flight.clear();
+        self.show_current();
+    }
+
+    /// Say where the batch is: what is done, and the item in flight longest.
+    /// Between items the last one stays up rather than flicker.
+    fn show_current(&mut self) {
+        self.progress.completed_bytes = self
+            .in_flight
+            .iter()
+            .fold(self.finished_bytes, |sum, entry| {
+                sum.saturating_add(entry.bytes)
+            });
+        if let Some(entry) = self.in_flight.first() {
+            self.progress.current.clone_from(&entry.target);
+            self.progress.current_source.clone_from(&entry.source);
+            self.progress.current_bytes = entry.bytes;
+            self.progress.current_total = entry.total;
+        }
     }
 }

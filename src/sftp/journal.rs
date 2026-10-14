@@ -186,16 +186,43 @@ async fn write_atomic(root: &Path, path: &Path, bytes: &[u8]) -> Result<()> {
     options.mode(0o600);
     let mut file = options.open(&temp).await?;
     file.write_all(bytes).await?;
-    file.sync_all().await?;
-    drop(file);
+    sync(file).await?;
     tokio::fs::rename(&temp, path)
         .await
         .context(t!("sftp.journal.unsaved"))?;
     #[cfg(unix)]
     {
-        tokio::fs::File::open(root).await?.sync_all().await?;
+        sync(tokio::fs::File::open(root).await?).await?;
     }
     Ok(())
+}
+
+/// Flush a file to the disk, as `sync_all` does, but on macOS with a plain
+/// `fsync`: std's `F_FULLFSYNC` also empties the drive's own cache, some
+/// 10 ms each time, which SQLite does not do there by default either.
+pub(crate) async fn sync(file: tokio::fs::File) -> std::io::Result<()> {
+    let file = file.into_std().await;
+    tokio::task::spawn_blocking(move || sync_file(&file))
+        .await
+        .map_err(std::io::Error::other)?
+}
+
+/// [`sync`], blocking.
+pub(crate) fn sync_file(file: &std::fs::File) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::fd::AsRawFd as _;
+        // SAFETY: the descriptor is the open file's own, for the call.
+        if unsafe { libc::fsync(file.as_raw_fd()) } == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        file.sync_all()
+    }
 }
 
 fn record_path(root: &Path, parts: [&[u8]; 3]) -> PathBuf {

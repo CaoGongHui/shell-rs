@@ -481,6 +481,40 @@ fn the_window_settings_are_on_until_turned_off(cx: &mut TestAppContext) {
     assert!(settings.remember_size && !settings.remember_position);
 }
 
+/// 设置 › SFTP › 传输: 最大同时传输数量 shows three, marked as the default,
+/// and then what the settings hold.
+#[gpui_kit::test]
+fn the_sftp_page_says_how_many_files_move_at_once(cx: &mut TestAppContext) {
+    let (handle, workspace) = open_workspace(cx);
+    in_frame(cx, handle, |window, cx| window.click("open-settings", cx));
+    // SFTP comes right after 终端.
+    in_frame(cx, handle, |window, cx| {
+        window.within("settings").click("0-2", cx)
+    });
+    let shown = |window: &mut gpui_kit::Window| {
+        window
+            .within("settings")
+            .within("group-0")
+            .within("item-0")
+            .find("btn")
+            .label()
+            .map(str::to_string)
+    };
+    in_frame(cx, handle, |window, _| {
+        assert_eq!(shown(window).as_deref(), Some("3（默认）"))
+    });
+    let settings = cx.update(|cx| workspace.read(cx).settings().clone());
+    cx.update(|cx| {
+        settings.update(cx, |settings, cx| {
+            settings.update(|settings| settings.transfers.parallel = 5, cx)
+        })
+    });
+    cx.run_until_parked();
+    in_frame(cx, handle, |window, _| {
+        assert_eq!(shown(window).as_deref(), Some("5"))
+    });
+}
+
 /// The 关键字高亮 rules, as the settings hold them.
 fn highlight_rules(
     workspace: &Entity<Workspace>,

@@ -5,6 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::app::ShortcutOverrides;
 use crate::explorer::{FileIconStyle, FileSizeFormat, ShowHiddenFiles};
 use crate::i18n::t;
+use crate::sftp::{DEFAULT_PARALLEL_TRANSFERS, PARALLEL_TRANSFERS_RANGE};
 use crate::terminal::{
     DEFAULT_FONT_SIZE, DEFAULT_LINE_HEIGHT, FONT_SIZE_RANGE, HighlightRule, LINE_HEIGHT_RANGE,
     RightClick, TerminalInteraction, TerminalTheme, default_rules,
@@ -36,6 +37,8 @@ pub struct AppSettings {
     /// 显示隐藏文件 in the SFTP lists, each side on its own, switched from
     /// their toolbars and menus.
     pub show_hidden: ShowHiddenFiles,
+    /// SFTP → 传输.
+    pub transfers: TransferSettings,
     /// SFTP → 图标风格.
     pub file_icon_style: FileIconStyle,
     /// SFTP → 文件侧栏.
@@ -48,6 +51,23 @@ pub struct AppSettings {
     pub window: WindowSettings,
     /// 键盘快捷键: what the user changed of them.
     pub shortcuts: ShortcutOverrides,
+}
+
+/// SFTP → 传输.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TransferSettings {
+    /// 最大同时传输数量: how many files of an upload or a download move at
+    /// once; the rest wait their turn.
+    pub parallel: usize,
+}
+
+impl Default for TransferSettings {
+    fn default() -> Self {
+        Self {
+            parallel: DEFAULT_PARALLEL_TRANSFERS,
+        }
+    }
 }
 
 /// SFTP → 文件侧栏: the right sidebar's 文件.
@@ -325,6 +345,10 @@ impl AppSettings {
     /// file nor a typed value can give the terminal a size of zero.
     pub fn normalized(mut self) -> Self {
         self.terminal_font = self.terminal_font.normalized();
+        self.transfers.parallel = self.transfers.parallel.clamp(
+            *PARALLEL_TRANSFERS_RANGE.start(),
+            *PARALLEL_TRANSFERS_RANGE.end(),
+        );
         self.local_terminal.shell = self
             .local_terminal
             .shell
@@ -552,6 +576,25 @@ mod tests {
         let settings: AppSettings =
             serde_json::from_str(r#"{"file_sidebar":{"detect_directory_follow":false}}"#).unwrap();
         assert!(!settings.file_sidebar.detect_directory_follow);
+    }
+
+    /// 最大同时传输数量: three unless the file says otherwise, and never
+    /// beyond what the settings page offers.
+    #[test]
+    fn transfers_run_three_at_once_unless_the_file_says_otherwise() {
+        assert_eq!(AppSettings::default().transfers.parallel, 3);
+        let settings: AppSettings = serde_json::from_str(r#"{"transfers":{}}"#).unwrap();
+        assert_eq!(settings.transfers.parallel, 3);
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"transfers":{"parallel":6}}"#).unwrap();
+        assert_eq!(settings.normalized().transfers.parallel, 6);
+        for (written, kept) in [(0, 1), (50, 10)] {
+            let settings = AppSettings {
+                transfers: TransferSettings { parallel: written },
+                ..AppSettings::default()
+            };
+            assert_eq!(settings.normalized().transfers.parallel, kept);
+        }
     }
 
     #[test]

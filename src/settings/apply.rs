@@ -13,7 +13,8 @@ use super::app_theme::{ui_theme, ui_theme_name};
 /// Bring the window in line with the settings: the theme chosen for the
 /// appearance, in the app and its terminals, the locale, the terminal font,
 /// mouse and highlight rules, the keyboard shortcuts, the SFTP size format and
-/// icons, and whether SFTP shows hidden files.
+/// icons, how many files SFTP moves at once, and whether it shows hidden
+/// files.
 /// Does nothing where they already agree, so it can run on every settings
 /// change and every change of the system appearance.
 pub fn apply(settings: AppSettings, window: &mut Window, cx: &mut App) {
@@ -97,6 +98,9 @@ pub fn apply(settings: AppSettings, window: &mut Window, cx: &mut App) {
         cx.set_global(settings.file_icon_style);
         window.refresh();
     }
+
+    // For the SFTP worker threads, which have no app to look in.
+    crate::sftp::set_parallel_transfers(settings.transfers.parallel);
 
     // The SFTP lists observe it and list their rows again.
     if cx.try_global::<ShowHiddenFiles>() != Some(&settings.show_hidden) {

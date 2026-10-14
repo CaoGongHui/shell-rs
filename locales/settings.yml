@@ -176,6 +176,18 @@ settings.local_terminal.keywords:
   zh-CN: shell,本地终端,命令,参数,bash,zsh,fish,PowerShell,cmd
   en: shell,local terminal,command,arguments,bash,zsh,fish,PowerShell,cmd
 
+settings.sftp.transfers:
+  zh-CN: 传输
+  en: Transfers
+settings.sftp.parallel:
+  zh-CN: 最大同时传输数量
+  en: Maximum concurrent transfers
+settings.sftp.parallel_description:
+  zh-CN: 同时进行上传和下载的任务数量，超出的任务将排队等待。
+  en: How many uploads and downloads run at the same time. The rest wait in the queue.
+settings.sftp.parallel_keywords:
+  zh-CN: 同时,并发,并行,上传,下载,队列,速度
+  en: concurrent,parallel,simultaneous,upload,download,queue,speed
 settings.sftp.file_sidebar:
   zh-CN: 文件侧栏
   en: Files sidebar
