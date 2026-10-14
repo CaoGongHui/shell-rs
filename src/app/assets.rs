@@ -80,7 +80,9 @@ icon_assets!(
         ExternalLink,
         Highlighter,
         GripVertical,
-        FileSearch
+        FileSearch,
+        SquareDashedText,
+        CopyPlus
     ]
 );
 

@@ -9,8 +9,8 @@ use gpui_kit::component::{
 use gpui_kit::*;
 
 use crate::app::{
-    CatalogIcon, CenterTab, CloseTerminal, ConnectHost, CopyHostAddress, DisconnectTerminal,
-    EditHost, OpenExplorer, ReconnectTerminal, RenameTerminal,
+    CatalogIcon, CenterTab, CloseTerminal, ConnectHost, CopyHostAddress, CopyHostId,
+    DisconnectTerminal, EditHost, OpenExplorer, ReconnectTerminal, RenameTerminal,
 };
 use crate::connection::{ConnectionPrompt, ConnectionPromptReply};
 use crate::host::{ConnectionState, HostId, HostOs, HostStore};
@@ -78,7 +78,7 @@ impl TerminalPanel {
                 window,
                 cx,
             );
-            terminal.set_menu_items(connection_menu_items(id, host_id));
+            terminal.set_menu_items(remote_menu_items(id, host_id, store.clone()));
             terminal.set_reconnect_action(ReconnectTerminal(id), cx);
             terminal
         });
@@ -314,9 +314,36 @@ impl Panel for TerminalPanel {
     }
 }
 
-/// The connection commands at the bottom of a remote terminal's context menu.
-fn connection_menu_items(id: RemoteTerminalId, host_id: HostId) -> TerminalMenuItems {
-    Rc::new(move |menu, lifecycle| {
+/// What a remote terminal adds to its context menu: copying the host's
+/// address and ID below 复制, and the connection's commands at the bottom.
+fn remote_menu_items(
+    id: RemoteTerminalId,
+    host_id: HostId,
+    store: Entity<HostStore>,
+) -> TerminalMenuItems {
+    let copy = Rc::new(move |menu: PopupMenu, cx: &App| {
+        // Named after what the address is, as in the tab's menu.
+        let copy_host = if store
+            .read(cx)
+            .host(host_id)
+            .is_some_and(|host| host.address_is_ip())
+        {
+            t!("terminal.remote.copy_ip")
+        } else {
+            t!("terminal.remote.copy_host_name")
+        };
+        menu.menu_with_icon(
+            copy_host,
+            Icon::new(CatalogIcon::ClipboardCopy),
+            Box::new(CopyHostAddress(host_id)),
+        )
+        .menu_with_icon(
+            t!("terminal.remote.copy_id"),
+            Icon::new(CatalogIcon::ClipboardCopy),
+            Box::new(CopyHostId(host_id)),
+        )
+    });
+    let commands = Rc::new(move |menu: PopupMenu, lifecycle: &TerminalLifecycle| {
         let connected = matches!(
             lifecycle,
             TerminalLifecycle::Starting | TerminalLifecycle::Running
@@ -337,7 +364,8 @@ fn connection_menu_items(id: RemoteTerminalId, host_id: HostId) -> TerminalMenuI
             Box::new(DisconnectTerminal(id)),
             !connected,
         )
-    })
+    });
+    TerminalMenuItems { copy, commands }
 }
 
 /// The commands of one remote terminal tab, as a snapshot taken while the tab

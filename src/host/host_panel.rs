@@ -813,7 +813,7 @@ pub fn host_menu(menu: PopupMenu, host: &Host) -> PopupMenu {
     )
     .menu_with_icon(
         t!("host.menu.duplicate"),
-        Icon::new(IconName::Copy),
+        Icon::new(CatalogIcon::CopyPlus),
         Box::new(DuplicateHost(id)),
     )
     .separator()

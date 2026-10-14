@@ -33,9 +33,9 @@ use crate::app::{
     MoveHostNode, NewChildGroup, NewGroup, NewHost, NewHostInGroup, NewLocalTerminal,
     NewTemporaryConnection, OpenExplorer, OpenSettings, PasteTerminal, QuickConnect,
     ReconnectTerminal, RefreshCliIntegration, RemoveAgentSkill, RemoveCliCommand, RenameExplorer,
-    RenameGroup, RenameTerminal, RestartLocalTerminal, SetFileSizeFormat, ToggleHiddenFiles,
-    ToggleHostPanel, ToggleTheme, ToolKind, ZoomIn, ZoomOut, ZoomReset, ZoomTerminalIn,
-    ZoomTerminalOut, ZoomTerminalReset,
+    RenameGroup, RenameTerminal, RestartLocalTerminal, SelectAllTerminal, SetFileSizeFormat,
+    ToggleHiddenFiles, ToggleHostPanel, ToggleTheme, ToolKind, ZoomIn, ZoomOut, ZoomReset,
+    ZoomTerminalIn, ZoomTerminalOut, ZoomTerminalReset,
 };
 use crate::cli::{CliIntegration, CliServer, IntegrationPaths, SshCliBackend};
 use crate::connection::{
@@ -1918,6 +1918,17 @@ impl Workspace {
         }
     }
 
+    fn on_select_all_terminal(
+        &mut self,
+        _: &SelectAllTerminal,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(terminal) = self.active_terminal(cx) {
+            terminal.update(cx, |terminal, cx| terminal.select_all(cx));
+        }
+    }
+
     fn on_find_in_terminal(
         &mut self,
         _: &FindInTerminal,
@@ -2799,6 +2810,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_restart_local_terminal))
             .on_action(cx.listener(Self::on_copy_terminal))
             .on_action(cx.listener(Self::on_paste_terminal))
+            .on_action(cx.listener(Self::on_select_all_terminal))
             .on_action(cx.listener(Self::on_find_in_terminal))
             .on_action(cx.listener(Self::on_find_next_in_terminal))
             .on_action(cx.listener(Self::on_find_previous_in_terminal))

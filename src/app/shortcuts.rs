@@ -81,7 +81,7 @@ macro_rules! shortcut {
 }
 
 /// The shortcuts of 设置 › 键盘快捷键, in the order the page lists them.
-pub static SHORTCUTS: [Shortcut; 25] = [
+pub static SHORTCUTS: [Shortcut; 26] = [
     shortcut!(
         "new-host",
         "app.shortcut.new_host",
@@ -238,6 +238,15 @@ pub static SHORTCUTS: [Shortcut; 25] = [
         "cmd-v",
         "ctrl-shift-v",
         PasteTerminal
+    ),
+    shortcut!(
+        "terminal-select-all",
+        "app.shortcut.terminal_select_all",
+        Terminal,
+        TERMINAL,
+        "cmd-a",
+        "ctrl-shift-a",
+        SelectAllTerminal
     ),
     shortcut!(
         "terminal-find",

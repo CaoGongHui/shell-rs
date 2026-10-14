@@ -460,8 +460,8 @@ explorer.tab.open_sftp:
   zh-CN: 打开 SFTP
   en: Open SFTP
 explorer.tab.copy_ip:
-  zh-CN: 复制 IP 地址
-  en: Copy IP address
+  zh-CN: 复制 IP
+  en: Copy IP
 explorer.tab.copy_host_name:
   zh-CN: 复制主机名
   en: Copy hostname

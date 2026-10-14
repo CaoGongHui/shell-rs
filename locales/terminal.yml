@@ -20,11 +20,14 @@ terminal.remote.disconnect:
   zh-CN: 断开连接
   en: Disconnect
 terminal.remote.copy_ip:
-  zh-CN: 复制 IP 地址
-  en: Copy IP address
+  zh-CN: 复制 IP
+  en: Copy IP
 terminal.remote.copy_host_name:
   zh-CN: 复制主机名
   en: Copy hostname
+terminal.remote.copy_id:
+  zh-CN: 复制 ID
+  en: Copy ID
 terminal.remote.rename:
   zh-CN: 重命名标签…
   en: Rename tab…
@@ -104,6 +107,9 @@ terminal.menu.copy:
 terminal.menu.paste:
   zh-CN: 粘贴
   en: Paste
+terminal.menu.select_all:
+  zh-CN: 全选
+  en: Select all
 terminal.menu.find:
   zh-CN: 查找…
   en: Find…

@@ -35,6 +35,8 @@ gpui_kit::actions!(
         CopyTerminal,
         /// Paste the clipboard into the active terminal.
         PasteTerminal,
+        /// Select all of the active terminal's text, the scrollback with it.
+        SelectAllTerminal,
         /// Open the active terminal's find bar, or select its query again.
         FindInTerminal,
         /// Focus the next match down (newer output) in the active terminal.

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use alacritty_terminal::Term;
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Line, Point, Side};
+use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::cell::Flags;
@@ -435,6 +435,11 @@ impl TerminalEngine {
 
     pub fn clear_selection(&mut self, cx: &mut gpui_kit::Context<Self>) {
         self.runtime.term.lock().selection = None;
+        cx.notify();
+    }
+
+    pub fn select_all(&mut self, cx: &mut gpui_kit::Context<Self>) {
+        select_all(&mut self.runtime.term.lock());
         cx.notify();
     }
 
@@ -1185,6 +1190,25 @@ fn end_overdue_sync(processor: &mut Processor, term: &mut AlacrittyTerm) -> bool
     overdue
 }
 
+/// Select the scrollback and the screen, from the first line with text to
+/// the last; the blank lines around them would only copy as empty lines.
+/// With no text at all, nothing.
+fn select_all(term: &mut AlacrittyTerm) {
+    let lines = term.topmost_line().0..=term.bottommost_line().0;
+    let has_text = |line: &i32| !term.grid()[Line(*line)].is_clear();
+    let first = lines.clone().find(has_text);
+    let last = lines.rev().find(has_text);
+    term.selection = first.zip(last).map(|(first, last)| {
+        let mut selection = Selection::new(
+            SelectionType::Simple,
+            Point::new(Line(first), Column(0)),
+            Side::Left,
+        );
+        selection.update(Point::new(Line(last), term.last_column()), Side::Right);
+        selection
+    });
+}
+
 fn sanitize_title(title: &str) -> Option<String> {
     let title: String = title
         .chars()
@@ -1692,6 +1716,22 @@ mod tests {
             .unwrap()
             .update(Point::new(Line(0), Column(3)), Side::Right);
         assert_eq!(term.selection_to_string().as_deref(), Some("ell"));
+    }
+
+    #[test]
+    fn select_all_takes_the_scrollback_without_the_blank_lines_around_the_text() {
+        let mut term = test_term(10, 3);
+        select_all(&mut term);
+        assert_eq!(term.selection, None);
+
+        // Two blank lines scroll off the top first; the cursor ends on a
+        // blank line below the text.
+        feed(&mut term, b"\r\n\r\none\r\n  two  \r\nthree\r\nfour\r\n");
+        select_all(&mut term);
+        assert_eq!(
+            term.selection_to_string().as_deref(),
+            Some("one\n  two\nthree\nfour")
+        );
     }
 
     #[test]

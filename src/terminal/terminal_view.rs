@@ -24,7 +24,7 @@ use unicode_width::UnicodeWidthChar as _;
 
 use crate::app::{
     CatalogIcon, ClearTerminal, CopyTerminal, DismissTerminalFind, FindInTerminal,
-    FindNextInTerminal, FindPreviousInTerminal, PasteTerminal,
+    FindNextInTerminal, FindPreviousInTerminal, PasteTerminal, SelectAllTerminal,
 };
 use crate::connection::{ConnectionPromptReply, Latency};
 use crate::i18n::{UiLocale, t};
@@ -81,9 +81,18 @@ fn reconnect_keystroke(event: &KeyDownEvent, lifecycle: &TerminalLifecycle) -> b
 /// drawn, so it follows the interface language.
 type TerminalLabel = Rc<dyn Fn(&App) -> SharedString>;
 
-/// The commands a terminal's owner adds to the bottom of its context menu,
-/// built from the terminal's lifecycle when the menu opens.
-pub type TerminalMenuItems = Rc<dyn Fn(PopupMenu, &TerminalLifecycle) -> PopupMenu>;
+/// What a terminal's owner adds to its context menu, built as the menu
+/// opens.
+#[derive(Clone)]
+pub struct TerminalMenuItems {
+    /// More to copy, below 复制.
+    pub copy: CopyItems,
+    /// The commands at the bottom, from the terminal's lifecycle.
+    pub commands: CommandItems,
+}
+
+pub type CopyItems = Rc<dyn Fn(PopupMenu, &App) -> PopupMenu>;
+pub type CommandItems = Rc<dyn Fn(PopupMenu, &TerminalLifecycle) -> PopupMenu>;
 
 /// The open find bar of one terminal.
 struct FindBar {
@@ -459,6 +468,16 @@ impl TerminalView {
         }
     }
 
+    /// Select all the text, the scrollback with it. With 选中复制 on, it
+    /// goes to the clipboard, as what the mouse selects does.
+    pub fn select_all(&mut self, cx: &mut Context<Self>) {
+        self.selecting = false;
+        self.engine.update(cx, |engine, cx| engine.select_all(cx));
+        if TerminalInteraction::current(cx).copy_on_select {
+            self.copy_selection(cx);
+        }
+    }
+
     pub fn paste_clipboard(&mut self, cx: &mut Context<Self>) {
         if !self.engine.read(cx).lifecycle().accepts_input() {
             return;
@@ -491,7 +510,7 @@ impl TerminalView {
         Ok(())
     }
 
-    /// Add the owner's commands below the terminal's own in the context menu.
+    /// Add the owner's items to the terminal's own in the context menu.
     pub fn set_menu_items(&mut self, items: TerminalMenuItems) {
         self.menu_items = Some(items);
     }
@@ -822,7 +841,7 @@ impl TerminalView {
                 .is_some();
         let action_context = self.focus_handle.clone();
         let owner_items = self.menu_items.clone();
-        let menu = PopupMenu::build(window, cx, move |menu, _, _| {
+        let menu = PopupMenu::build(window, cx, move |menu, _, cx| {
             let menu = menu
                 .action_context(action_context)
                 .menu_with_icon_and_disabled(
@@ -830,12 +849,22 @@ impl TerminalView {
                     Icon::new(IconName::Copy),
                     Box::new(CopyTerminal),
                     !has_selection,
-                )
+                );
+            let menu = match &owner_items {
+                Some(items) => (items.copy)(menu, cx),
+                None => menu,
+            };
+            let menu = menu
                 .menu_with_icon_and_disabled(
                     t!("terminal.menu.paste"),
                     Icon::new(CatalogIcon::ClipboardPaste),
                     Box::new(PasteTerminal),
                     !can_paste,
+                )
+                .menu_with_icon(
+                    t!("terminal.menu.select_all"),
+                    Icon::new(CatalogIcon::SquareDashedText),
+                    Box::new(SelectAllTerminal),
                 )
                 .separator()
                 .menu_with_icon(
@@ -850,7 +879,7 @@ impl TerminalView {
                     !can_clear,
                 );
             match &owner_items {
-                Some(items) => items(menu.separator(), &lifecycle),
+                Some(items) => (items.commands)(menu.separator(), &lifecycle),
                 None => menu,
             }
         });

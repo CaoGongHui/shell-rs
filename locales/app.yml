@@ -53,6 +53,9 @@ app.shortcut.terminal_copy:
 app.shortcut.terminal_paste:
   zh-CN: 粘贴
   en: Paste
+app.shortcut.terminal_select_all:
+  zh-CN: 全选
+  en: Select all
 app.shortcut.terminal_find:
   zh-CN: 查找
   en: Find

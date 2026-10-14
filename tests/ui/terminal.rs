@@ -2,6 +2,7 @@
 //! the font and the size, links, the mouse for programs and their copies.
 
 use crate::support::*;
+use shellrs::app::{CopyTerminal, SelectAllTerminal};
 use shellrs::terminal::RightClick;
 
 fn open_workspace_with_factory(
@@ -518,6 +519,86 @@ async fn copy_on_select_puts_what_the_mouse_selects_on_the_clipboard(cx: &mut Te
             Some("run:1$ alpha.txt 会议纪要.md".into())
         );
     });
+}
+
+/// 全选 takes the scrollback too, without the blank lines below the text.
+/// It only selects; with 选中复制 on, selecting is copying.
+#[gpui_kit::test]
+async fn select_all_takes_the_scrollback_too(cx: &mut TestAppContext) {
+    let lines: Vec<String> = (1..=80).map(|line| format!("第 {line} 行")).collect();
+    let printed: &'static str = Box::leak(format!("{}\r\n", lines.join("\r\n")).into_boxed_str());
+    let (handle, workspace, _) = terminal_printing(cx, printed, "第 80 行").await;
+    assert!(
+        !cx.update(|cx| local_screen(&workspace, cx))
+            .contains("第 1 行")
+    );
+    let everything = format!("run:1$ alpha.txt 会议纪要.md\n{}", lines.join("\n"));
+    let clipboard = |cx: &mut TestAppContext| {
+        cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
+    };
+    let dispatch = |cx: &mut TestAppContext, action: Box<dyn gpui_kit::Action>| {
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            window.dispatch_action(action, cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+    };
+
+    cx.update(|cx| cx.write_to_clipboard(ClipboardItem::new_string("原剪贴板".into())));
+    dispatch(cx, Box::new(SelectAllTerminal));
+    assert_eq!(clipboard(cx).as_deref(), Some("原剪贴板"));
+    dispatch(cx, Box::new(CopyTerminal));
+    assert_eq!(clipboard(cx), Some(everything.clone()));
+
+    let settings = cx.update(|cx| workspace.read(cx).settings().clone());
+    cx.update(|cx| {
+        settings.update(cx, |settings, cx| {
+            settings.update(
+                |settings| settings.terminal_interaction.copy_on_select = true,
+                cx,
+            )
+        });
+        cx.write_to_clipboard(ClipboardItem::new_string("原剪贴板".into()));
+    });
+    dispatch(cx, Box::new(SelectAllTerminal));
+    assert_eq!(clipboard(cx), Some(everything));
+}
+
+/// Below 复制, a remote terminal's menu copies its host's address and ID.
+#[gpui_kit::test]
+async fn a_remote_terminals_menu_copies_the_host_address_and_id(cx: &mut TestAppContext) {
+    let (handle, workspace) = open_workspace(cx);
+    let public_id = workspace.read_with(cx, |workspace, cx| {
+        let store = workspace.store().read(cx);
+        store.host(HostId(WEB_01)).unwrap().public_id.to_string()
+    });
+    let pick = |cx: &mut TestAppContext, item: usize| {
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            window.right_click(("terminal", INITIAL_WEB_TERMINAL), cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            let mut popup = window.within("popup-menu");
+            let labels: Vec<_> = (0..5_usize)
+                .map(|item| popup.find(item).label().map(str::to_owned))
+                .collect();
+            assert_eq!(
+                labels,
+                ["复制", "复制 IP", "复制 ID", "粘贴", "全选"].map(|label| Some(label.to_owned()))
+            );
+            popup.click(item, cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text()))
+    };
+
+    assert_eq!(pick(cx, 1).as_deref(), Some("10.0.1.12"));
+    assert_eq!(pick(cx, 2), Some(public_id));
 }
 
 #[gpui_kit::test]

@@ -375,11 +375,11 @@ host.menu.edit_host:
   zh-CN: 编辑主机…
   en: Edit host…
 host.menu.duplicate:
-  zh-CN: 复制
+  zh-CN: 创建副本
   en: Duplicate
 host.menu.copy_ip:
-  zh-CN: 复制 IP 地址
-  en: Copy IP address
+  zh-CN: 复制 IP
+  en: Copy IP
 host.menu.copy_host_name:
   zh-CN: 复制主机名
   en: Copy hostname
