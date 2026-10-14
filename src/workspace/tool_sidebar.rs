@@ -1,5 +1,5 @@
 use gpui_kit::component::{
-    ActiveTheme as _, Icon, IconName, Placement, Selectable as _, Sizable as _,
+    ActiveTheme as _, Placement, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     dock::{BasePanel, Panel, PanelControl, PanelEvent},
     h_flex, v_flex,
@@ -7,12 +7,12 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::app::{CatalogIcon, DOCKER_ICON, ToggleTool, ToolKind};
+use crate::app::{ToggleTool, ToolKind};
 use crate::docker::{Container, DockerObject, DockerPanel, ObjectSummary};
 use crate::explorer::ExplorerPanel;
+use crate::gpu::GpuPanel;
 use crate::history::HistoryPanel;
 use crate::host::{HostId, HostOs, HostStore, SnippetCategoryId};
-use crate::i18n::t;
 use crate::monitor::{MonitorDetail, MonitorPanel};
 use crate::netstat::NetstatPanel;
 use crate::processes::{Process, ProcessDetails, ProcessPanel, ProcessSort};
@@ -21,35 +21,6 @@ use crate::snippets::SnippetPanel;
 use crate::terminal::{ExecTarget, RemoteTerminalId, TerminalView};
 
 impl ToolKind {
-    pub fn label(self) -> SharedString {
-        match self {
-            ToolKind::Snippets => t!("tools.kind.snippets"),
-            ToolKind::History => t!("tools.kind.history"),
-            ToolKind::Files => t!("tools.kind.files"),
-            ToolKind::Docker => "Docker".into(),
-            ToolKind::Services => t!("tools.kind.services"),
-            ToolKind::Processes => t!("tools.kind.processes"),
-            ToolKind::Connections => t!("tools.kind.connections"),
-            ToolKind::Monitor => t!("tools.kind.monitor"),
-        }
-    }
-
-    /// Lucide glyphs, but for Docker, which goes by its whale: a box said
-    /// nothing about Docker.
-    fn icon(self) -> Icon {
-        Icon::new(match self {
-            ToolKind::Snippets => CatalogIcon::CodeXml,
-            ToolKind::History => CatalogIcon::RotateCcwClock,
-            // Not the SFTP button's folder tree, which opens a tab.
-            ToolKind::Files => return Icon::new(IconName::Folder),
-            ToolKind::Docker => return Icon::default().path(DOCKER_ICON),
-            ToolKind::Services => CatalogIcon::ServerCog,
-            ToolKind::Processes => CatalogIcon::ListFilter,
-            ToolKind::Connections => CatalogIcon::Network,
-            ToolKind::Monitor => CatalogIcon::Activity,
-        })
-    }
-
     /// Whether the tool runs commands or SFTP on a channel of its own beside
     /// the terminal, which a terminal a bastion host opened cannot have.
     /// Command snippets only type into the terminal.
@@ -64,7 +35,8 @@ impl ToolKind {
             ToolKind::Services
             | ToolKind::Processes
             | ToolKind::Connections
-            | ToolKind::Monitor => os.is_none_or(HostOs::is_linux),
+            | ToolKind::Monitor
+            | ToolKind::Gpu => os.is_none_or(HostOs::is_linux),
             ToolKind::Snippets | ToolKind::Files => true,
             // Wherever `sh` runs `docker`: Linux, and a Mac with Docker
             // Desktop; and bash's history file wherever `sh` reads it.
@@ -83,6 +55,7 @@ impl ToolKind {
             ToolKind::Processes => "tool-processes",
             ToolKind::Connections => "tool-connections",
             ToolKind::Monitor => "tool-monitor",
+            ToolKind::Gpu => "tool-gpu",
         }
     }
 }
@@ -127,6 +100,7 @@ pub struct ToolSidebar {
     services: Entity<ServicePanel>,
     processes: Entity<ProcessPanel>,
     netstat: Entity<NetstatPanel>,
+    gpu: Entity<GpuPanel>,
     focus_handle: FocusHandle,
 }
 
@@ -151,7 +125,8 @@ impl ToolSidebar {
             docker: cx.new(|_| DockerPanel::new(dispatch.clone())),
             services: cx.new(|cx| ServicePanel::new(dispatch.clone(), window, cx)),
             processes: cx.new(|cx| ProcessPanel::new(dispatch.clone(), window, cx)),
-            netstat: cx.new(|cx| NetstatPanel::new(dispatch, window, cx)),
+            netstat: cx.new(|cx| NetstatPanel::new(dispatch.clone(), window, cx)),
+            gpu: cx.new(|cx| GpuPanel::new(dispatch, cx)),
             focus_handle: cx.focus_handle(),
         }
     }
@@ -245,10 +220,30 @@ impl ToolSidebar {
             .update(cx, |processes, cx| processes.refresh(cx));
     }
 
-    /// Read the processes again in a moment, once one was told to end.
+    /// Read the processes again in a moment, once one was told to end:
+    /// those of 进程管理, or of GPU/NPU when it is the one showing.
     pub fn refresh_processes_soon(&mut self, cx: &mut Context<Self>) {
-        self.processes
-            .update(cx, |processes, cx| processes.refresh_soon(cx));
+        if self.tool == ToolKind::Gpu {
+            self.gpu.update(cx, |gpu, cx| gpu.refresh_soon(cx));
+        } else {
+            self.processes
+                .update(cx, |processes, cx| processes.refresh_soon(cx));
+        }
+    }
+
+    /// GPU/NPU's 刷新.
+    pub fn refresh_gpu(&mut self, cx: &mut Context<Self>) {
+        self.gpu.update(cx, |gpu, cx| gpu.refresh(cx));
+    }
+
+    /// Unfold a device of GPU/NPU, or fold it away.
+    pub fn toggle_gpu_device(&mut self, key: &str, cx: &mut Context<Self>) {
+        self.gpu.update(cx, |gpu, cx| gpu.toggle(key, cx));
+    }
+
+    /// GPU/NPU's 全部展开 and 全部收起.
+    pub fn toggle_all_gpu_devices(&mut self, cx: &mut Context<Self>) {
+        self.gpu.update(cx, |gpu, cx| gpu.toggle_all(cx));
     }
 
     /// 进程管理's sort buttons.
@@ -260,6 +255,17 @@ impl ToolSidebar {
     /// A process of the host in front, as 进程管理 last showed it.
     pub fn process(&self, pid: u32, cx: &App) -> Option<Process> {
         self.processes.read(cx).process(pid)
+    }
+
+    /// The name and owner of a process of the host in front, for the
+    /// question before ending it: as the tool showing listed it, 进程管理
+    /// or GPU/NPU.
+    pub fn process_label(&self, pid: u32, cx: &App) -> Option<(String, Option<String>)> {
+        if self.tool == ToolKind::Gpu {
+            return self.gpu.read(cx).process(pid);
+        }
+        let process = self.process(pid, cx)?;
+        Some((process.name, process.user))
     }
 
     /// The same with its family, for its details.
@@ -274,13 +280,14 @@ impl ToolSidebar {
             view: terminal.view.clone(),
         });
         let showing = |tool| self.shown && self.tool == tool;
-        let (monitor, netstat, processes, services, docker, history) = (
+        let (monitor, netstat, processes, services, docker, history, gpu) = (
             showing(ToolKind::Monitor),
             showing(ToolKind::Connections),
             showing(ToolKind::Processes),
             showing(ToolKind::Services),
             showing(ToolKind::Docker),
             showing(ToolKind::History),
+            showing(ToolKind::Gpu),
         );
         self.history.update(cx, |panel, cx| {
             panel.set_target(target.clone(), history, cx)
@@ -296,6 +303,8 @@ impl ToolSidebar {
         self.processes.update(cx, |panel, cx| {
             panel.set_target(target.clone(), processes, cx)
         });
+        self.gpu
+            .update(cx, |panel, cx| panel.set_target(target.clone(), gpu, cx));
         self.netstat
             .update(cx, |panel, cx| panel.set_target(target, netstat, cx));
     }
@@ -425,6 +434,7 @@ impl Render for ToolSidebar {
                     ToolKind::Processes => self.processes.clone().into_any_element(),
                     ToolKind::Connections => self.netstat.clone().into_any_element(),
                     ToolKind::Monitor => self.monitor.clone().into_any_element(),
+                    ToolKind::Gpu => self.gpu.clone().into_any_element(),
                 };
                 sidebar.child(div().flex_1().min_h_0().child(panel))
             })

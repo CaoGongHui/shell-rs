@@ -39,6 +39,7 @@ use crate::update::{Phase, Tone, UpdateSnapshot, UpdateStep, Updater, build_info
 use super::highlight_rules::HighlightRulesEditor;
 use super::local_shell_editor::{LocalShellEditor, local_shell_field};
 use super::shortcuts_editor::{ShortcutsEditor, shortcut_groups};
+use super::sidebar_tools::sidebar_tools_group;
 use super::terminal_themes::{app_follows_item, terminal_theme_item};
 use super::{
     AppSettings, Choice, INTERFACE_FONT_SIZE_RANGE, NotificationSettings, SettingsStore,
@@ -421,6 +422,7 @@ fn terminal_groups(panel: &SettingsPanel, cx: &App) -> Vec<SettingGroup> {
                 .keywords(keywords(t!("settings.terminal.preview_keywords"))),
             ]),
         interaction_group(store),
+        sidebar_tools_group(store),
         notification_group(store),
         local_terminal_group(panel),
     ]

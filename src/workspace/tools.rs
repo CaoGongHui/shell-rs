@@ -22,9 +22,10 @@ use gpui_kit::*;
 use crate::analytics::Counter;
 use crate::app::{
     CenterTab, ControlContainers, ControlService, CopyCommand, EndProcess, EnterCommand,
-    RefreshConnections, RefreshDocker, RefreshHistory, RefreshProcesses, RefreshServices,
-    RemoveDockerObject, ShowDockerObject, ShowProcess, ShowService, SortProcesses,
-    ToggleDockerProject, ToggleMonitorDetail, ToggleTool, ToggleToolSidebar, ToolKind,
+    RefreshConnections, RefreshDocker, RefreshGpu, RefreshHistory, RefreshProcesses,
+    RefreshServices, RemoveDockerObject, ShowDockerObject, ShowProcess, ShowService, SortProcesses,
+    ToggleAllGpuDevices, ToggleDockerProject, ToggleGpuDevice, ToggleMonitorDetail, ToggleTool,
+    ToggleToolSidebar, ToolKind,
 };
 use crate::docker::{
     self, ContainerCommand, ContainerSubject, DockerObject, open_container_dialog,
@@ -69,8 +70,9 @@ impl Workspace {
     }
 
     /// The tools the switch offers for the SSH terminal in front; none
-    /// without one. An external connection (a bastion host's link) gets only
-    /// those that run nothing beside the terminal.
+    /// without one. Those 侧栏功能 leaves on, that work on the host: an
+    /// external connection (a bastion host's link) gets only those that run
+    /// nothing beside the terminal.
     pub(super) fn offered_tools(&self, cx: &App) -> Vec<ToolKind> {
         let Some(terminal) = self.tool_terminal(cx) else {
             return Vec::new();
@@ -78,10 +80,46 @@ impl Workspace {
         let store = self.store.read(cx);
         let os = store.host(terminal.host).and_then(|host| host.os);
         let shell_only = store.is_external(terminal.host);
+        let shown = self.settings().read(cx).settings().sidebar_tools;
         ToolKind::ALL
             .into_iter()
-            .filter(|tool| tool.works_on(os) && !(shell_only && tool.runs_commands()))
+            .filter(|tool| {
+                shown.shows(*tool) && tool.works_on(os) && !(shell_only && tool.runs_commands())
+            })
             .collect()
+    }
+
+    /// GPU/NPU's 刷新: read the host's devices again, and go on reading.
+    pub(super) fn on_refresh_gpu(
+        &mut self,
+        _: &RefreshGpu,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.tools.update(cx, |tools, cx| tools.refresh_gpu(cx));
+    }
+
+    /// GPU/NPU's 全部展开 and 全部收起.
+    pub(super) fn on_toggle_all_gpu_devices(
+        &mut self,
+        _: &ToggleAllGpuDevices,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.tools
+            .update(cx, |tools, cx| tools.toggle_all_gpu_devices(cx));
+    }
+
+    /// A click on a device of GPU/NPU: its details, or no more.
+    pub(super) fn on_toggle_gpu_device(
+        &mut self,
+        action: &ToggleGpuDevice,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = action.0.clone();
+        self.tools
+            .update(cx, |tools, cx| tools.toggle_gpu_device(&key, cx));
     }
 
     /// The tool the right sidebar is showing, `None` while it is hidden.
@@ -541,11 +579,10 @@ impl Workspace {
             return;
         };
         let EndProcess { pid, force } = *action;
-        let Some(process) = self.tools.read(cx).process(pid, cx) else {
+        let Some((name, user)) = self.tools.read(cx).process_label(pid, cx) else {
             return;
         };
-        let name = process.name;
-        let user = process.user.unwrap_or_else(|| "—".into());
+        let user = user.unwrap_or_else(|| "—".into());
         let (title, description, verb) = if force {
             (
                 t!("tools.process.kill.title", name = name),

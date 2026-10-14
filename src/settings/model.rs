@@ -2,7 +2,9 @@ use gpui_kit::component::ThemeMode;
 use gpui_kit::{SharedString, WindowAppearance};
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::app::ShortcutOverrides;
+use std::collections::BTreeMap;
+
+use crate::app::{ShortcutOverrides, ToolKind};
 use crate::explorer::{FileIconStyle, FileSizeFormat, ShowHiddenFiles};
 use crate::i18n::t;
 use crate::sftp::{DEFAULT_PARALLEL_TRANSFERS, PARALLEL_TRANSFERS_RANGE};
@@ -27,6 +29,8 @@ pub struct AppSettings {
     pub terminal_font: TerminalFontSettings,
     /// 终端 → 终端交互.
     pub terminal_interaction: TerminalInteraction,
+    /// 终端 → 侧栏功能: which tools the right sidebar offers.
+    pub sidebar_tools: SidebarTools,
     /// 终端 → 本地终端.
     pub local_terminal: LocalTerminalSettings,
     pub external_cli: ExternalCliSettings,
@@ -108,6 +112,58 @@ impl Default for FileSidebarSettings {
     fn default() -> Self {
         Self {
             detect_directory_follow: true,
+        }
+    }
+}
+
+/// 终端 → 侧栏功能: the tools the user offers in the right sidebar or takes
+/// out of it, by `ToolKind::key`; a tool not in it has its default. So a
+/// tool added later comes with its own default, and a key this version does
+/// not know (a newer one's tool) is kept for the version that does. A value
+/// that is not a yes or no is dropped on its own.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct SidebarTools(BTreeMap<String, bool>);
+
+impl<'de> Deserialize<'de> for SidebarTools {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let values = BTreeMap::<String, serde_json::Value>::deserialize(deserializer)?;
+        Ok(Self(
+            values
+                .into_iter()
+                .filter_map(|(key, value)| Some((key, value.as_bool()?)))
+                .collect(),
+        ))
+    }
+}
+
+impl SidebarTools {
+    pub fn shows(&self, tool: ToolKind) -> bool {
+        self.0
+            .get(tool.key())
+            .copied()
+            .unwrap_or(tool.shown_by_default())
+    }
+
+    /// Offer `tool`, or not. Its default is stored as no change.
+    pub fn set(&mut self, tool: ToolKind, shown: bool) {
+        if shown == tool.shown_by_default() {
+            self.0.remove(tool.key());
+        } else {
+            self.0.insert(tool.key().to_owned(), shown);
+        }
+    }
+
+    /// Whether every tool this version knows has its default.
+    pub fn is_default(&self) -> bool {
+        ToolKind::ALL
+            .iter()
+            .all(|tool| self.shows(*tool) == tool.shown_by_default())
+    }
+
+    /// Every tool this version knows back to its default.
+    pub fn reset(&mut self) {
+        for tool in ToolKind::ALL {
+            self.0.remove(tool.key());
         }
     }
 }
@@ -611,6 +667,56 @@ mod tests {
         let settings: AppSettings =
             serde_json::from_str(r#"{"file_sidebar":{"detect_directory_follow":false}}"#).unwrap();
         assert!(!settings.file_sidebar.detect_directory_follow);
+    }
+
+    /// 侧栏功能: every tool but GPU/NPU until the user says otherwise, and
+    /// only what differs from that in the file.
+    #[test]
+    fn the_sidebar_offers_its_usual_tools_until_told_otherwise() {
+        let tools = AppSettings::default().sidebar_tools;
+        assert!(tools.is_default());
+        assert!(tools.shows(ToolKind::Monitor));
+        assert!(!tools.shows(ToolKind::Gpu));
+
+        let mut tools = SidebarTools::default();
+        tools.set(ToolKind::Gpu, true);
+        tools.set(ToolKind::Docker, false);
+        assert!(!tools.is_default());
+        assert_eq!(
+            serde_json::to_value(&tools).unwrap(),
+            serde_json::json!({"docker": false, "gpu": true})
+        );
+        // Back to its default is no change at all.
+        tools.set(ToolKind::Docker, true);
+        assert_eq!(
+            serde_json::to_value(&tools).unwrap(),
+            serde_json::json!({"gpu": true})
+        );
+        tools.reset();
+        assert_eq!(tools, SidebarTools::default());
+
+        // A newer version's tool is kept; a value that is no yes or no
+        // costs only itself.
+        let settings: AppSettings = serde_json::from_str(
+            r#"{"sidebar_tools":{"gpu":true,"k8s":true,"docker":"no","history":false}}"#,
+        )
+        .unwrap();
+        let tools = settings.sidebar_tools;
+        assert!(tools.shows(ToolKind::Gpu));
+        assert!(tools.shows(ToolKind::Docker));
+        assert!(!tools.shows(ToolKind::History));
+        assert_eq!(
+            serde_json::to_value(&tools).unwrap(),
+            serde_json::json!({"gpu": true, "history": false, "k8s": true})
+        );
+        let mut tools = tools;
+        tools.reset();
+        assert!(tools.is_default());
+        assert_eq!(
+            serde_json::to_value(&tools).unwrap(),
+            serde_json::json!({"k8s": true}),
+            "not this version's to reset"
+        );
     }
 
     /// 界面字号: gpui-kit's 16 until changed, whole pixels within 12–20.

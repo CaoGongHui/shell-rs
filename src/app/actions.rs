@@ -1,8 +1,11 @@
 //! Every user command, so toolbar buttons, menus and key bindings dispatch
 //! the same action and cannot disagree.
 
+use gpui_kit::component::{Icon, IconName};
 use gpui_kit::*;
 
+use super::{CatalogIcon, DOCKER_ICON};
+use crate::i18n::t;
 use crate::{
     cli::AgentKind,
     docker::{ContainerCommand, ContainerSubject, DockerObject},
@@ -66,6 +69,11 @@ gpui_kit::actions!(
         RefreshDocker,
         /// Read the bash history of the SSH terminal's host again.
         RefreshHistory,
+        /// Read the GPUs and NPUs of the SSH terminal's host again, and go
+        /// on reading them after a failure stopped it.
+        RefreshGpu,
+        /// 全部展开 in GPU/NPU, or 全部收起 when every device is unfolded.
+        ToggleAllGpuDevices,
         /// Open the new-snippet dialog, for a snippet of no category.
         NewSnippet,
         /// Open the new-category dialog of 命令片段.
@@ -256,6 +264,9 @@ id_actions! {
     InstallDirectoryFollow(RemoteTerminalId);
     /// Unfold a part of the system monitor, or fold it away again.
     ToggleMonitorDetail(MonitorDetail);
+    /// Unfold a device of GPU/NPU to its details, or fold them away again,
+    /// by its key.
+    ToggleGpuDevice(String);
     /// Sort the process list by memory or CPU, the most first; by the same
     /// again, the other way.
     SortProcesses(ProcessSort);
@@ -396,10 +407,11 @@ pub enum ToolKind {
     Processes,
     Connections,
     Monitor,
+    Gpu,
 }
 
 impl ToolKind {
-    pub const ALL: [ToolKind; 8] = [
+    pub const ALL: [ToolKind; 9] = [
         ToolKind::Snippets,
         ToolKind::History,
         ToolKind::Files,
@@ -408,7 +420,61 @@ impl ToolKind {
         ToolKind::Processes,
         ToolKind::Connections,
         ToolKind::Monitor,
+        ToolKind::Gpu,
     ];
+
+    /// What `settings.json` calls the tool in 侧栏功能. Never changed once
+    /// released: a renamed key would bring a hidden tool back.
+    pub fn key(self) -> &'static str {
+        match self {
+            ToolKind::Snippets => "snippets",
+            ToolKind::History => "history",
+            ToolKind::Files => "files",
+            ToolKind::Docker => "docker",
+            ToolKind::Services => "services",
+            ToolKind::Processes => "processes",
+            ToolKind::Connections => "connections",
+            ToolKind::Monitor => "monitor",
+            ToolKind::Gpu => "gpu",
+        }
+    }
+
+    /// Whether the sidebar offers the tool until the user says otherwise.
+    /// Not GPU/NPU: most hosts have neither.
+    pub fn shown_by_default(self) -> bool {
+        !matches!(self, ToolKind::Gpu)
+    }
+
+    pub fn label(self) -> SharedString {
+        match self {
+            ToolKind::Snippets => t!("tools.kind.snippets"),
+            ToolKind::History => t!("tools.kind.history"),
+            ToolKind::Files => t!("tools.kind.files"),
+            ToolKind::Docker => "Docker".into(),
+            ToolKind::Services => t!("tools.kind.services"),
+            ToolKind::Processes => t!("tools.kind.processes"),
+            ToolKind::Connections => t!("tools.kind.connections"),
+            ToolKind::Monitor => t!("tools.kind.monitor"),
+            ToolKind::Gpu => "GPU/NPU".into(),
+        }
+    }
+
+    /// Lucide glyphs, but for Docker, which goes by its whale: a box said
+    /// nothing about Docker.
+    pub fn icon(self) -> Icon {
+        Icon::new(match self {
+            ToolKind::Snippets => CatalogIcon::CodeXml,
+            ToolKind::History => CatalogIcon::RotateCcwClock,
+            // Not the SFTP button's folder tree, which opens a tab.
+            ToolKind::Files => return Icon::new(IconName::Folder),
+            ToolKind::Docker => return Icon::default().path(DOCKER_ICON),
+            ToolKind::Services => CatalogIcon::ServerCog,
+            ToolKind::Processes => CatalogIcon::ListFilter,
+            ToolKind::Connections => CatalogIcon::Network,
+            ToolKind::Monitor => CatalogIcon::Activity,
+            ToolKind::Gpu => CatalogIcon::Gpu,
+        })
+    }
 }
 
 /// Which tabs of a tab bar a batch close takes, relative to one tab.

@@ -168,7 +168,7 @@ async fn local_terminals_run_the_shell_the_settings_name(cx: &mut TestAppContext
     // Tall enough for the whole of 终端, whose groups the page's list
     // draws only near the view.
     let (handle, workspace) =
-        open_workspace_with_local_terminals(cx, local.clone(), size(px(1280.), px(1600.)));
+        open_workspace_with_local_terminals(cx, local.clone(), size(px(1280.), px(2400.)));
     let settings = cx.update(|cx| workspace.read(cx).settings().clone());
 
     // Until one is named, the system's default shell.

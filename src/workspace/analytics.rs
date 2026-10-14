@@ -123,6 +123,7 @@ impl Workspace {
             ToolKind::Processes => Counter::ToolProcesses,
             ToolKind::Connections => Counter::ToolNetstat,
             ToolKind::Monitor => Counter::ToolMonitor,
+            ToolKind::Gpu => Counter::ToolGpu,
         });
     }
 

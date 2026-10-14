@@ -74,6 +74,7 @@ pub enum Counter {
     ToolProcesses,
     ToolNetstat,
     ToolMonitor,
+    ToolGpu,
     /// A snippet, or a command from the history, put into a terminal.
     CommandSnippet,
     CommandHistory,
@@ -99,7 +100,7 @@ pub enum Counter {
 }
 
 impl Counter {
-    pub const ALL: [Counter; 46] = [
+    pub const ALL: [Counter; 47] = [
         Self::Ssh,
         Self::SshJump,
         Self::SshProxy,
@@ -129,6 +130,7 @@ impl Counter {
         Self::ToolProcesses,
         Self::ToolNetstat,
         Self::ToolMonitor,
+        Self::ToolGpu,
         Self::CommandSnippet,
         Self::CommandHistory,
         Self::Find,
@@ -179,6 +181,7 @@ impl Counter {
             Self::ToolProcesses => "tool_processes",
             Self::ToolNetstat => "tool_netstat",
             Self::ToolMonitor => "tool_monitor",
+            Self::ToolGpu => "tool_gpu",
             Self::CommandSnippet => "command_snippet",
             Self::CommandHistory => "command_history",
             Self::Find => "find",

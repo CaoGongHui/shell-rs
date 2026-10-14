@@ -134,6 +134,64 @@ settings.right_click.menu:
   zh-CN: 显示菜单
   en: Show menu
 
+settings.sidebar_tools.title:
+  zh-CN: 侧栏功能
+  en: Sidebar tools
+settings.sidebar_tools.description:
+  zh-CN: 点击图标，或把它拖到另一排，即可显示或隐藏。主机系统用不了的工具不显示，例如 Windows 主机上的系统监控；外部调用打开的连接只显示命令片段。
+  en: Click an icon, or drag it to the other row, to show or hide it; A tool the host’s system can’t run doesn’t appear, such as Monitor on a Windows host, and an external connection shows only Snippets.
+settings.sidebar_tools.reset:
+  zh-CN: 恢复默认
+  en: Restore defaults
+settings.sidebar_tools.shown:
+  zh-CN: 显示在右侧栏
+  en: In the sidebar
+settings.sidebar_tools.hidden:
+  zh-CN: 不显示
+  en: Not shown
+settings.sidebar_tools.shown_empty:
+  zh-CN: 所有工具都已隐藏，右侧栏不会出现。把图标拖到这里即可显示。
+  en: Every tool is hidden, so the right sidebar doesn’t appear. Drag an icon here to show it.
+settings.sidebar_tools.hidden_empty:
+  zh-CN: 不用的工具可以拖到这里，或点一下它的图标。
+  en: Drag a tool you don’t use here, or click its icon.
+settings.sidebar_tools.click_to_hide:
+  zh-CN: 点击或拖到「不显示」即可隐藏
+  en: Click, or drag to “Not shown”, to hide it
+settings.sidebar_tools.click_to_show:
+  zh-CN: 点击或拖到「显示在右侧栏」即可显示
+  en: Click, or drag to “In the sidebar”, to show it
+settings.sidebar_tools.snippets:
+  zh-CN: 保存常用命令，点一下输入或执行。
+  en: Commands you keep, typed or run with a click.
+settings.sidebar_tools.history:
+  zh-CN: 主机上 bash 的历史命令。
+  en: The host’s bash history.
+settings.sidebar_tools.files:
+  zh-CN: 终端连接上的远程文件列表，可以跟随终端目录。
+  en: The host’s files over the terminal’s connection, following its folder.
+settings.sidebar_tools.docker:
+  zh-CN: 容器、卷、镜像和网络。
+  en: Containers, volumes, images and networks.
+settings.sidebar_tools.services:
+  zh-CN: systemd 服务的状态和启停。
+  en: systemd services, and starting and stopping them.
+settings.sidebar_tools.processes:
+  zh-CN: 进程的内存和 CPU，可以结束进程。
+  en: Processes with their memory and CPU, and ending them.
+settings.sidebar_tools.connections:
+  zh-CN: TCP、UDP 连接和监听端口。
+  en: TCP and UDP connections and listening ports.
+settings.sidebar_tools.monitor:
+  zh-CN: CPU、内存、网络和磁盘。
+  en: CPU, memory, network and disks.
+settings.sidebar_tools.gpu:
+  zh-CN: AI 主机的 GPU 和 NPU：利用率、显存、温度和计算进程。支持 NVIDIA 和华为昇腾。
+  en: An AI host’s GPUs and NPUs, with their utilization, memory, temperature and compute processes. NVIDIA and Huawei Ascend.
+settings.sidebar_tools.keywords:
+  zh-CN: 侧栏,右侧栏,工具,显示,隐藏,显卡,GPU,NPU
+  en: sidebar,tools,show,hide,GPU,NPU
+
 settings.notifications.title:
   zh-CN: 通知
   en: Notifications

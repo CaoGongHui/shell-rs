@@ -407,6 +407,8 @@ impl Workspace {
                 this.sync_cli_server(cx);
                 this.sync_updater(cx);
                 this.sync_analytics(window, cx);
+                // 侧栏功能 may have taken a tool out, or put one back.
+                this.sync_tool_sidebar(window, cx);
             }),
             cx.subscribe_in(
                 &updater,
@@ -2819,6 +2821,9 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_toggle_host_panel))
             .on_action(cx.listener(Self::on_toggle_tool_sidebar))
             .on_action(cx.listener(Self::on_toggle_tool))
+            .on_action(cx.listener(Self::on_refresh_gpu))
+            .on_action(cx.listener(Self::on_toggle_gpu_device))
+            .on_action(cx.listener(Self::on_toggle_all_gpu_devices))
             .on_action(cx.listener(Self::on_toggle_directory_follow))
             .on_action(cx.listener(Self::on_install_directory_follow))
             .on_action(cx.listener(Self::on_toggle_monitor_detail))

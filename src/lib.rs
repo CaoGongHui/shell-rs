@@ -17,6 +17,7 @@ pub mod docker;
 pub mod editor;
 pub mod explorer;
 pub mod forward;
+pub mod gpu;
 pub mod history;
 pub mod host;
 pub mod i18n;

@@ -15,6 +15,7 @@ mod docker;
 mod editor;
 mod file_sidebar;
 mod forward;
+mod gpu;
 mod history;
 mod host_dialog;
 mod host_tree;

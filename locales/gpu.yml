@@ -1,0 +1,108 @@
+_version: 2
+
+# GPU/NPU: an AI host's NVIDIA GPUs and Huawei Ascend NPUs.
+
+gpu.panel.summary.one:
+  en: "%{count} device"
+gpu.panel.summary.other:
+  zh-CN: 共 %{count} 个设备
+  en: "%{count} devices"
+gpu.panel.uptime:
+  zh-CN: 已运行 %{duration}
+  en: up %{duration}
+gpu.panel.refresh:
+  zh-CN: 刷新（自动每 %{seconds} 秒一次）
+  en: Refresh (automatically every %{seconds} s)
+gpu.panel.driver:
+  zh-CN: 驱动 %{version}
+  en: Driver %{version}
+gpu.panel.paused:
+  zh-CN: 已停止自动读取，点刷新按钮重试。
+  en: Reading stopped. Click Refresh to try again.
+gpu.panel.not_connected:
+  zh-CN: 终端没有连接。连接后这里显示主机的 GPU 和 NPU。
+  en: The terminal isn’t connected. Once it is, the host’s GPUs and NPUs show here.
+gpu.panel.no_tools:
+  zh-CN: 这台主机上没有 nvidia-smi 或 npu-smi。目前支持 NVIDIA GPU 和华为昇腾 NPU。
+  en: This host has neither nvidia-smi nor npu-smi. NVIDIA GPUs and Huawei Ascend NPUs are supported.
+gpu.panel.no_devices:
+  zh-CN: 没有找到设备
+  en: No devices found
+
+gpu.overview.utilization:
+  zh-CN: 平均利用率
+  en: Average utilization
+gpu.overview.memory:
+  zh-CN: 显存
+  en: Memory
+gpu.overview.temperature:
+  zh-CN: 最高温度
+  en: Highest temperature
+gpu.overview.power:
+  zh-CN: 总功耗
+  en: Total power
+
+gpu.devices.title:
+  zh-CN: 设备
+  en: Devices
+gpu.devices.utilization:
+  zh-CN: 利用率
+  en: Usage
+gpu.devices.memory:
+  zh-CN: 显存
+  en: Memory
+gpu.devices.unfold_all:
+  zh-CN: 全部展开
+  en: Expand all
+gpu.devices.fold_all:
+  zh-CN: 全部收起
+  en: Collapse all
+gpu.device.label:
+  zh-CN: "%{device} · %{name} · 利用率 %{utilization} · 显存 %{memory} · %{temperature} · %{power}"
+  en: "%{device} · %{name} · Utilization %{utilization} · Memory %{memory} · %{temperature} · %{power}"
+
+# A device unfolded.
+gpu.detail.model:
+  zh-CN: 型号
+  en: Model
+gpu.detail.bus:
+  zh-CN: 总线 ID
+  en: Bus ID
+gpu.detail.pstate:
+  zh-CN: 性能状态
+  en: Performance state
+gpu.detail.power:
+  zh-CN: 功耗
+  en: Power
+gpu.detail.fan:
+  zh-CN: 风扇
+  en: Fan
+gpu.detail.health:
+  zh-CN: 健康状态
+  en: Health
+gpu.health.ok:
+  zh-CN: 正常
+  en: OK
+gpu.health.ecc.one:
+  en: "%{count} uncorrectable ECC error"
+gpu.health.ecc.other:
+  zh-CN: "%{count} 个 ECC 不可纠正错误"
+  en: "%{count} uncorrectable ECC errors"
+
+gpu.processes.title:
+  zh-CN: 计算进程
+  en: Compute processes
+gpu.processes.empty:
+  zh-CN: 没有计算进程
+  en: No compute processes
+gpu.process.label:
+  zh-CN: "%{title} · %{device} · PID %{pid} · %{user} · 显存 %{memory}"
+  en: "%{title} · %{device} · PID %{pid} · %{user} · Memory %{memory}"
+
+# Why a tool gave no answer.
+gpu.error.timed_out:
+  zh-CN: "%{tool} 在 %{seconds} 秒内没有回答，已被停止。"
+  en: "%{tool} didn’t answer within %{seconds} s and was stopped."
+gpu.error.status:
+  zh-CN: "%{tool} 出错退出（状态 %{status}）。"
+  en: "%{tool} exited with status %{status}."

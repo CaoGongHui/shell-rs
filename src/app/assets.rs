@@ -11,6 +11,8 @@ icon_assets!(
     ExtraIcons,
     [
         Server,
+        Gpu,
+        ChevronsDownUp,
         Terminal,
         Upload,
         Download,
