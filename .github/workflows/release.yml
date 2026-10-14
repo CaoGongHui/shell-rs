@@ -212,27 +212,44 @@ jobs:
 
   linux:
     needs: verify
-    # Ubuntu 22.04's glibc (2.35) is the oldest the AppImage runs on.
-    runs-on: ubuntu-22.04
+    # Built in Ubuntu 20.04 so the AppImage runs on its glibc (2.31) and
+    # later: Ubuntu 20.04, Debian 11, and the newer ones (issue #28).
+    # GitHub has no 20.04 runners any more, hence the container.
+    runs-on: ubuntu-latest
+    container: ubuntu:20.04
     timeout-minutes: 120
     env:
       VERSION: ${{ needs.verify.outputs.version }}
       SHELLRS_UPDATE_CHANNEL: ${{ needs.verify.outputs.channel }}
       SHELLRS_COMMIT: ${{ github.sha }}
+      DEBIAN_FRONTEND: noninteractive
     steps:
-      - uses: actions/checkout@v4
       - name: Build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake clang pkg-config libfontconfig-dev \
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git file \
+            build-essential cmake clang pkg-config libfontconfig-dev \
             libfreetype-dev libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
             libx11-xcb-dev libxcb1-dev libvulkan-dev libdbus-1-dev libssl-dev
+      - uses: actions/checkout@v4
+      - name: Rust
+        run: |
+          curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - run: rustup toolchain install
+      # Its own cache: build scripts compiled on a newer glibc do not run here.
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ubuntu-20.04
       - name: Build
         run: |
           export SHELLRS_BUILD_DATE=$(date -u +%Y-%m-%d)
           cargo build --release --locked --bin shellrs
+      - name: Needs glibc 2.31 at most
+        run: |
+          needed=$(objdump -T target/release/shellrs | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          echo "The binary needs $needed"
+          test "$(printf '%s\n' "$needed" GLIBC_2.31 | sort -V | tail -1)" = GLIBC_2.31
       - name: AppImage
         run: |
           curl -fsSL -o "$RUNNER_TEMP/appimagetool" \
