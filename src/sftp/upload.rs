@@ -182,31 +182,33 @@ impl UploadBatch {
     }
     pub async fn run<F: RemoteFs>(&mut self, fs: &F, control: &TransferControl) -> Result<()> {
         self.meter.phase(TransferPhase::Transferring, control);
-        let upload = Upload {
-            fs,
-            control,
-            endpoint: &self.endpoint,
-            host_key: &self.host_key,
-            journal: &self.journal,
-            preserve_mode: self.preserve_mode,
-            sync: self.sync,
-            items: RefCell::new(&mut self.items),
-            meter: RefCell::new(&mut self.meter),
-            all_conflicts: RefCell::new(&mut self.all_conflicts),
-            approved_resumes: RefCell::new(&mut self.approved_resumes),
-            blocked_directories: RefCell::new(&mut self.blocked_directories),
-            made_directories: RefCell::new(&mut self.made_directories),
-            written: RefCell::new(&mut self.written),
-            asking: tokio::sync::Mutex::new(()),
+        // Its borrows of the batch end with the block.
+        let result = {
+            let upload = Upload {
+                fs,
+                control,
+                endpoint: &self.endpoint,
+                host_key: &self.host_key,
+                journal: &self.journal,
+                preserve_mode: self.preserve_mode,
+                sync: self.sync,
+                items: RefCell::new(&mut self.items),
+                meter: RefCell::new(&mut self.meter),
+                all_conflicts: RefCell::new(&mut self.all_conflicts),
+                approved_resumes: RefCell::new(&mut self.approved_resumes),
+                blocked_directories: RefCell::new(&mut self.blocked_directories),
+                made_directories: RefCell::new(&mut self.made_directories),
+                written: RefCell::new(&mut self.written),
+                asking: tokio::sync::Mutex::new(()),
+            };
+            parallel::run(
+                &mut self.pending,
+                parallel::parallel_transfers,
+                |next, running| upload.waits(next, running),
+                |index| upload.item(index),
+            )
+            .await
         };
-        let result = parallel::run(
-            &mut self.pending,
-            parallel::parallel_transfers,
-            |next, running| upload.waits(next, running),
-            |index| upload.item(index),
-        )
-        .await;
-        drop(upload);
         self.meter.abandon();
         result?;
         self.meter.phase(TransferPhase::Completed, control);

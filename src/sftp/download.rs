@@ -201,28 +201,30 @@ impl DownloadBatch {
 
     pub async fn run<F: RemoteFs>(&mut self, fs: &F, control: &TransferControl) -> Result<()> {
         self.meter.phase(TransferPhase::Transferring, control);
-        let download = Download {
-            fs,
-            control,
-            endpoint: &self.endpoint,
-            host_key: &self.host_key,
-            journal: &self.journal,
-            preserve_mode: self.preserve_mode,
-            items: RefCell::new(&mut self.items),
-            meter: RefCell::new(&mut self.meter),
-            all_conflicts: RefCell::new(&mut self.all_conflicts),
-            approved_resumes: RefCell::new(&mut self.approved_resumes),
-            blocked_directories: RefCell::new(&mut self.blocked_directories),
-            asking: tokio::sync::Mutex::new(()),
+        // Its borrows of the batch end with the block.
+        let result = {
+            let download = Download {
+                fs,
+                control,
+                endpoint: &self.endpoint,
+                host_key: &self.host_key,
+                journal: &self.journal,
+                preserve_mode: self.preserve_mode,
+                items: RefCell::new(&mut self.items),
+                meter: RefCell::new(&mut self.meter),
+                all_conflicts: RefCell::new(&mut self.all_conflicts),
+                approved_resumes: RefCell::new(&mut self.approved_resumes),
+                blocked_directories: RefCell::new(&mut self.blocked_directories),
+                asking: tokio::sync::Mutex::new(()),
+            };
+            parallel::run(
+                &mut self.pending,
+                parallel::parallel_transfers,
+                |next, running| download.waits(next, running),
+                |index| download.item(index),
+            )
+            .await
         };
-        let result = parallel::run(
-            &mut self.pending,
-            parallel::parallel_transfers,
-            |next, running| download.waits(next, running),
-            |index| download.item(index),
-        )
-        .await;
-        drop(download);
         self.meter.abandon();
         result?;
         self.meter.phase(TransferPhase::Completed, control);
