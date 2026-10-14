@@ -1060,6 +1060,22 @@ async fn links_open_with_the_command_key_and_show_where_they_lead(cx: &mut TestA
     assert_eq!(cx.opened_url().as_deref(), Some("https://example.com/docs"));
 }
 
+/// A program that asks for the background and then for the cursor, as
+/// termenv does (ollama), hears the answers in that order: it takes a
+/// cursor report coming first to mean no color is coming, and the color
+/// that comes after would reach the shell as typed text.
+#[gpui_kit::test]
+async fn a_program_hears_its_queries_answered_in_the_order_asked(cx: &mut TestAppContext) {
+    let (handle, _, factory) = terminal_printing(cx, "\x1b]11;?\x1b\\\x1b[6nasked", "asked").await;
+    cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
+        factory.written_text().contains('R')
+    })
+    .await;
+    let written = factory.written_text();
+    assert!(written.starts_with("\x1b]11;rgb:"), "{written:?}");
+    assert!(written.ends_with("\x1b\\\x1b[2;1R"), "{written:?}");
+}
+
 /// Wait until the fake shell has been sent `expected`, which it records on
 /// its own thread, and forget it.
 async fn take_written(

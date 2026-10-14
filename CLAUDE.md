@@ -398,6 +398,7 @@ cargo test -- --ignored                     # 会读写真实钥匙串的测试�
   - `settings.json` 里读不了的规则单条丢掉（`readable_rules`），否则整个设置文件会回退成默认值。
   - 规则表的输入框和取色器状态归 `HighlightRulesEditor`（行 id 不随位置变，拖动后字段跟着走），每次改动整表写回设置；设置被别处改了才重建行。
 - **同步更新（DEC 2026）要解析线程自己收尾**：vte 只管攒住 `\e[?2026h` 之后的输出，超时（150 ms）后调 `stop_sync` 是调用方的事，alacritty 自己的事件循环就是这么做的。解析线程等输出时带着截止时间（`receive`，用 `async_io` 的定时器），到点就画出来；输出一直不停时在 `advance` 前补查；退出、出错追加提示前也先 `stop_sync`。否则程序死在一帧中间、连接断在一帧中间时，屏幕会一直冻住。
+- **程序的查询在解析线程上按顺序回答**：光标位置、DA、窗口尺寸、颜色（OSC 4 / 10 / 11 / 12）的回答都先攒在 `TerminalEventProxy`，每段输出解析完由 `answer` 一次写出。颜色要先看程序自己设的色，只有攥着 `Term` 的解析线程读得到；主题由引擎观察 `TerminalColors` 放进共用的槽。别把颜色交回 UI 线程答：termenv（ollama 等）先问 OSC 11 再问光标，先收到光标报告就当终端不支持，晚到的颜色回答会被 shell 当成输入（提示符后多出 `11;rgb:…`）。
 - **OSC 52 只写不读**（`Osc52::OnlyCopy`），只认剪贴板 `c`，主选择区忽略。
 - **通知**：OSC 9 / 777 由 `terminal/notices.rs` 的扫描器在解析线程上认（alacritty 会丢掉），同一趟也认 OSC 7 / 1337 目录报告（每块输出只留最后一个，引擎只在变了时发 `DirectoryChanged`，重连、断开、退出时清空），OSC 9 里「数字;」开头的是 ConEmu 的命令，不算通知。投递在 `workspace/notices.rs`：窗口不在前台走 GPUI 的 `show_system_notification`（tag 是 `terminal:local:<id>` / `terminal:remote:<id>`，点击回调按 tag 切标签），在前台走应用内通知。`shellrs::init` 里的 `set_app_identity` 用 bundle id，测试平台没有它就不发系统通知；macOS 上 `cargo run` 没有 bundle，看不到系统通知。
 

@@ -35,7 +35,7 @@ use super::run::{BusyReason, RunFailure, RunHandle};
 use super::search::{MatchMarker, SearchDirection, SearchMark, SearchPosition, TerminalSearch};
 use super::{
     ExecRequest, ExecResult, SharedTerminalTransportFactory, TerminalChannels, TerminalColors,
-    TerminalLifecycle, TerminalSize, TerminalStatus, TerminalTransportCommand,
+    TerminalLifecycle, TerminalSize, TerminalStatus, TerminalTheme, TerminalTransportCommand,
     TerminalTransportEvent,
 };
 
@@ -105,6 +105,10 @@ pub struct TerminalEngine {
     /// lines against them; swapped when the settings change them.
     highlights: SharedHighlights,
     _highlights_observer: gpui_kit::Subscription,
+    /// The theme, shared with the parser thread, which answers the colors
+    /// programs ask for from it.
+    theme: SharedTheme,
+    _theme_observer: gpui_kit::Subscription,
     /// Where channels beside the shell open: the current runtime's
     /// connection, attached on every start.
     channels: TerminalChannels,
@@ -126,12 +130,14 @@ impl TerminalEngine {
         // burst of terminal bytes results in a single render notification.
         let (event_sender, event_receiver) = mpsc::channel();
         let highlights = Arc::new(Mutex::new(TerminalHighlights::current(cx)));
+        let theme = Arc::new(Mutex::new(TerminalColors::current(cx)));
         let runtime = TerminalRuntime::start(
             generation,
             size,
             factory.create(),
             event_sender.clone(),
             highlights.clone(),
+            theme.clone(),
         );
         let channels = TerminalChannels::default();
         channels.attach(runtime.commands.clone());
@@ -141,6 +147,10 @@ impl TerminalEngine {
                 .lock()
                 .unwrap_or_else(|error| error.into_inner()) = TerminalHighlights::current(cx);
             cx.notify();
+        });
+        let theme_observer = cx.observe_global::<TerminalColors>(|this, cx| {
+            *this.theme.lock().unwrap_or_else(|error| error.into_inner()) =
+                TerminalColors::current(cx);
         });
         let mut this = Self {
             factory,
@@ -152,6 +162,8 @@ impl TerminalEngine {
             url_search: RefCell::new(url_search()),
             highlights,
             _highlights_observer: highlights_observer,
+            theme,
+            _theme_observer: theme_observer,
             channels,
             directory: None,
             reconnect_on_enter: false,
@@ -239,12 +251,6 @@ impl TerminalEngine {
             TerminalUiEventKind::HostOs(os) => {
                 return Some(TerminalEvent::HostOsDetected(os));
             }
-            TerminalUiEventKind::ColorRequest(index, formatter) => {
-                // A color the program set itself, or else the theme's.
-                let color = self.runtime.term.lock().colors()[index]
-                    .unwrap_or_else(|| TerminalColors::current(cx).query_color(index));
-                self.runtime.write(formatter(color).into_bytes());
-            }
             TerminalUiEventKind::ClipboardStore(text) => {
                 cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text));
             }
@@ -289,6 +295,7 @@ impl TerminalEngine {
             self.factory.create(),
             self.event_sender.clone(),
             self.highlights.clone(),
+            self.theme.clone(),
         );
         self.channels.attach(self.runtime.commands.clone());
         cx.notify();
@@ -758,6 +765,7 @@ impl TerminalRuntime {
         transport: Box<dyn super::TerminalTransport>,
         ui_events: mpsc::Sender<TerminalUiEvent>,
         highlights: SharedHighlights,
+        theme: SharedTheme,
     ) -> Self {
         let (commands, command_receiver) = mpsc::channel();
         let (transport_events, transport_receiver) = async_channel::unbounded();
@@ -769,6 +777,8 @@ impl TerminalRuntime {
             ui_events: ui_events.clone(),
             size: shared_size.clone(),
             wakeup_pending: wakeup_pending.clone(),
+            replies: Arc::default(),
+            theme,
         };
         let parser_proxy = proxy.clone();
         let config = terminal_config();
@@ -795,7 +805,11 @@ impl TerminalRuntime {
                         Received::Event(event) => event,
                         Received::Closed => break,
                         Received::Overdue => {
-                            processor.stop_sync(&mut *parser_term.lock());
+                            {
+                                let mut term = parser_term.lock();
+                                processor.stop_sync(&mut *term);
+                                parser_proxy.answer(&term);
+                            }
                             parser_proxy.wakeup();
                             continue;
                         }
@@ -813,12 +827,14 @@ impl TerminalRuntime {
                                 // Output that never pauses gives the wait no
                                 // chance to see the time is up.
                                 end_overdue_sync(&mut processor, &mut term);
-                                advance_watching(
+                                let lines = advance_watching(
                                     &mut processor,
                                     &mut term,
                                     &bytes,
                                     watcher.is_watching(),
-                                )
+                                );
+                                parser_proxy.answer(&term);
+                                lines
                             };
                             if let Some(hit) = watcher.check(lines, Instant::now()) {
                                 parser_proxy.send(TerminalUiEventKind::Keyword(hit));
@@ -955,6 +971,22 @@ pub struct TerminalEventProxy {
     ui_events: mpsc::Sender<TerminalUiEvent>,
     size: Arc<Mutex<TerminalSize>>,
     wakeup_pending: Arc<AtomicBool>,
+    /// What the output just parsed asks of the terminal, in the order it
+    /// asks, until `answer`.
+    replies: Arc<Mutex<Vec<Reply>>>,
+    theme: SharedTheme,
+}
+
+/// The theme a terminal's parser thread answers color queries from,
+/// swapped by the engine when `TerminalColors` changes.
+type SharedTheme = Arc<Mutex<&'static TerminalTheme>>;
+
+/// An answer to a query in the output.
+enum Reply {
+    Bytes(Vec<u8>),
+    /// OSC 4, 10, 11 or 12. The answer needs the colors the program set,
+    /// which only the one holding the terminal can read.
+    Color(usize, Arc<dyn Fn(Rgb) -> String + Send + Sync>),
 }
 
 impl EventListener for TerminalEventProxy {
@@ -962,14 +994,8 @@ impl EventListener for TerminalEventProxy {
         match event {
             Event::Title(title) => self.send(TerminalUiEventKind::Title(title)),
             Event::ResetTitle => self.send(TerminalUiEventKind::ResetTitle),
-            Event::ColorRequest(index, formatter) => {
-                self.send(TerminalUiEventKind::ColorRequest(index, formatter));
-            }
-            Event::PtyWrite(text) => {
-                let _ = self
-                    .commands
-                    .send(TerminalTransportCommand::Write(text.into_bytes()));
-            }
+            Event::ColorRequest(index, formatter) => self.reply(Reply::Color(index, formatter)),
+            Event::PtyWrite(text) => self.reply(Reply::Bytes(text.into_bytes())),
             Event::TextAreaSizeRequest(formatter) => {
                 let size = *self.size.lock().unwrap_or_else(|error| error.into_inner());
                 let response = formatter(WindowSize {
@@ -978,9 +1004,7 @@ impl EventListener for TerminalEventProxy {
                     cell_width: size.cell_width(),
                     cell_height: size.cell_height(),
                 });
-                let _ = self
-                    .commands
-                    .send(TerminalTransportCommand::Write(response.into_bytes()));
+                self.reply(Reply::Bytes(response.into_bytes()));
             }
             Event::Bell => {
                 self.send(TerminalUiEventKind::Bell);
@@ -1002,6 +1026,44 @@ impl EventListener for TerminalEventProxy {
 }
 
 impl TerminalEventProxy {
+    fn reply(&self, reply: Reply) {
+        self.replies
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(reply);
+    }
+
+    /// Send the answers to what the output parsed into `term` asked, at
+    /// once and in the order asked. Programs read them in that order:
+    /// termenv (ollama, Charm's tools) asks for the background by OSC 11
+    /// and then for the cursor, which every terminal answers, and takes a
+    /// cursor report coming first to mean no OSC 11 answer is coming. The
+    /// shell would then read that answer as typed text.
+    fn answer(&self, term: &AlacrittyTerm) {
+        let replies = std::mem::take(
+            &mut *self
+                .replies
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()),
+        );
+        if replies.is_empty() {
+            return;
+        }
+        let theme = *self.theme.lock().unwrap_or_else(|error| error.into_inner());
+        let mut bytes = Vec::new();
+        for reply in replies {
+            match reply {
+                Reply::Bytes(reply) => bytes.extend(reply),
+                Reply::Color(index, formatter) => {
+                    // A color the program set itself, or else the theme's.
+                    let color = term.colors()[index].unwrap_or_else(|| theme.query_color(index));
+                    bytes.extend(formatter(color).into_bytes());
+                }
+            }
+        }
+        let _ = self.commands.send(TerminalTransportCommand::Write(bytes));
+    }
+
     /// Queue an event for the UI thread, stamped with this run's generation.
     fn send(&self, kind: TerminalUiEventKind) {
         let _ = self.ui_events.send(TerminalUiEvent {
@@ -1035,7 +1097,6 @@ enum TerminalUiEventKind {
     Prompt(ConnectionPrompt),
     HostOs(HostOs),
     Latency(Latency),
-    ColorRequest(usize, Arc<dyn Fn(Rgb) -> String + Send + Sync>),
     /// A program's copy, by OSC 52.
     ClipboardStore(String),
     /// A notification a program asked for, by OSC 9 or 777.
@@ -1223,21 +1284,69 @@ mod tests {
         mpsc::Receiver<TerminalUiEvent>,
     ) {
         let size = TerminalSize::new(columns, rows, 8, 16);
+        let (proxy, command_receiver, ui_receiver) = test_proxy(size);
+        let term = AlacrittyTerm::new(terminal_config(), &size, proxy);
+        (term, command_receiver, ui_receiver)
+    }
+
+    /// What a terminal of `size` with the light theme reports through,
+    /// with what it writes back to the program and what it tells the UI.
+    fn test_proxy(
+        size: TerminalSize,
+    ) -> (
+        TerminalEventProxy,
+        mpsc::Receiver<TerminalTransportCommand>,
+        mpsc::Receiver<TerminalUiEvent>,
+    ) {
         let (commands, command_receiver) = mpsc::channel();
         let (ui_events, ui_receiver) = mpsc::channel();
-        let config = terminal_config();
-        let term = AlacrittyTerm::new(
-            config,
-            &size,
-            TerminalEventProxy {
-                generation: 1,
-                commands,
-                ui_events,
-                size: Arc::new(Mutex::new(size)),
-                wakeup_pending: Arc::new(AtomicBool::new(false)),
-            },
+        let proxy = TerminalEventProxy {
+            generation: 1,
+            commands,
+            ui_events,
+            size: Arc::new(Mutex::new(size)),
+            wakeup_pending: Arc::new(AtomicBool::new(false)),
+            replies: Arc::default(),
+            theme: Arc::new(Mutex::new(TerminalTheme::default_for(
+                gpui_kit::component::ThemeMode::Light,
+            ))),
+        };
+        (proxy, command_receiver, ui_receiver)
+    }
+
+    /// The answers go back together once the output is parsed, in the
+    /// order asked, the colors too: termenv asks for the background and
+    /// then for the cursor, and reads the answers in that order.
+    #[test]
+    fn queries_are_answered_in_the_order_asked() {
+        let size = TerminalSize::new(20, 4, 8, 16);
+        let (proxy, commands, _) = test_proxy(size);
+        let mut term = AlacrittyTerm::new(terminal_config(), &size, proxy.clone());
+        feed(&mut term, b"ab\x1b]11;?\x1b\\\x1b[6n\x1b]4;1;?\x07");
+        assert!(commands.try_iter().next().is_none());
+        proxy.answer(&term);
+        let written: Vec<_> = commands
+            .try_iter()
+            .map(|command| match command {
+                TerminalTransportCommand::Write(bytes) => String::from_utf8(bytes).unwrap(),
+                _ => panic!("only writes"),
+            })
+            .collect();
+        assert_eq!(
+            written,
+            ["\x1b]11;rgb:ffff/ffff/ffff\x1b\\\x1b[1;3R\x1b]4;1;rgb:dcdc/2626/2626\x07"]
         );
-        (term, command_receiver, ui_receiver)
+
+        // A color the program set is the one it hears back.
+        feed(&mut term, b"\x1b]11;rgb:12/34/56\x07\x1b]11;?\x07");
+        proxy.answer(&term);
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(TerminalTransportCommand::Write(bytes)) if bytes == b"\x1b]11;rgb:1212/3434/5656\x07"
+        ));
+        // Nothing asked, nothing written.
+        proxy.answer(&term);
+        assert!(commands.try_recv().is_err());
     }
 
     /// Each link on screen: the text of its cells and where it leads.
@@ -1779,6 +1888,9 @@ mod tests {
             Box::new(ScriptedTransport(script)),
             ui_events,
             Arc::default(),
+            Arc::new(Mutex::new(TerminalTheme::default_for(
+                gpui_kit::component::ThemeMode::Light,
+            ))),
         )
     }
 
