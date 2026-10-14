@@ -192,7 +192,20 @@ fn the_zoom_keys_size_a_terminals_text_and_the_interface_elsewhere(cx: &mut Test
                 .size
         })
     };
-    let interface_size = |cx: &mut TestAppContext| cx.update(|cx| cx.theme().font_size.as_f32());
+    // What the interface is drawn at, and what 外观 › 界面字号 holds.
+    let interface_size = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            let saved = workspace
+                .read(cx)
+                .settings()
+                .read(cx)
+                .settings()
+                .interface
+                .font_size;
+            assert_eq!(cx.theme().font_size.as_f32(), saved);
+            saved
+        })
+    };
     in_frame(cx, handle, |window, cx| {
         window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx)
     });
@@ -220,10 +233,26 @@ fn the_zoom_keys_size_a_terminals_text_and_the_interface_elsewhere(cx: &mut Test
     press(primary("0"), cx);
     assert_eq!((terminal_size(cx), interface_size(cx)), (13., 16.));
 
-    // Elsewhere, the interface.
+    // Elsewhere, the interface: two pixels a step, kept in the settings.
     in_frame(cx, handle, |window, cx| window.click("open-settings", cx));
     press(primary("="), cx);
     assert_eq!((terminal_size(cx), interface_size(cx)), (13., 18.));
+    // No larger than 设置 › 外观 › 界面字号 goes.
+    for _ in 0..3 {
+        press(primary("="), cx);
+    }
+    assert_eq!(interface_size(cx), 20.);
     press(primary("0"), cx);
     assert_eq!((terminal_size(cx), interface_size(cx)), (13., 16.));
+    // The settings' own one pixel steps, which the keys step on from.
+    let settings = cx.update(|cx| workspace.read(cx).settings().clone());
+    cx.update(|cx| {
+        settings.update(cx, |settings, cx| {
+            settings.update(|settings| settings.interface.font_size = 15., cx)
+        })
+    });
+    cx.run_until_parked();
+    assert_eq!(interface_size(cx), 15.);
+    press(primary("-"), cx);
+    assert_eq!(interface_size(cx), 13.);
 }

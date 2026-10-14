@@ -20,6 +20,8 @@ use crate::update::Channel;
 pub struct AppSettings {
     pub language: InterfaceLanguage,
     pub appearance: Appearance,
+    /// 外观 → 常规 → 界面字号.
+    pub interface: InterfaceSettings,
     /// 外观 → 终端主题.
     pub terminal_theme: TerminalThemeSettings,
     pub terminal_font: TerminalFontSettings,
@@ -51,6 +53,28 @@ pub struct AppSettings {
     pub window: WindowSettings,
     /// 键盘快捷键: what the user changed of them.
     pub shortcuts: ShortcutOverrides,
+}
+
+/// What 界面字号 offers, in pixels.
+pub const INTERFACE_FONT_SIZE_RANGE: std::ops::RangeInclusive<f32> = 12.0..=20.0;
+/// gpui-kit's own base font, which the interface had before it could change.
+pub const DEFAULT_INTERFACE_FONT_SIZE: f32 = 16.0;
+
+/// 外观 → 常规.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InterfaceSettings {
+    /// 界面字号: the base font in pixels, which the interface's text and
+    /// spacing follow. Terminals have their own.
+    pub font_size: f32,
+}
+
+impl Default for InterfaceSettings {
+    fn default() -> Self {
+        Self {
+            font_size: DEFAULT_INTERFACE_FONT_SIZE,
+        }
+    }
 }
 
 /// SFTP → 传输.
@@ -345,6 +369,17 @@ impl AppSettings {
     /// file nor a typed value can give the terminal a size of zero.
     pub fn normalized(mut self) -> Self {
         self.terminal_font = self.terminal_font.normalized();
+        // Whole pixels in range; what is not a number gives the default.
+        let size = self.interface.font_size;
+        self.interface.font_size = if size.is_finite() {
+            size.clamp(
+                *INTERFACE_FONT_SIZE_RANGE.start(),
+                *INTERFACE_FONT_SIZE_RANGE.end(),
+            )
+            .round()
+        } else {
+            DEFAULT_INTERFACE_FONT_SIZE
+        };
         self.transfers.parallel = self.transfers.parallel.clamp(
             *PARALLEL_TRANSFERS_RANGE.start(),
             *PARALLEL_TRANSFERS_RANGE.end(),
@@ -576,6 +611,27 @@ mod tests {
         let settings: AppSettings =
             serde_json::from_str(r#"{"file_sidebar":{"detect_directory_follow":false}}"#).unwrap();
         assert!(!settings.file_sidebar.detect_directory_follow);
+    }
+
+    /// 界面字号: gpui-kit's 16 until changed, whole pixels within 12–20.
+    #[test]
+    fn the_interface_font_stays_as_it_was_until_changed() {
+        assert_eq!(AppSettings::default().interface.font_size, 16.);
+        let settings: AppSettings = serde_json::from_str(r#"{"interface":{}}"#).unwrap();
+        assert_eq!(settings.interface.font_size, 16.);
+        for (written, kept) in [
+            (14., 14.),
+            (14.6, 15.),
+            (8., 12.),
+            (30., 20.),
+            (f32::NAN, 16.),
+        ] {
+            let settings = AppSettings {
+                interface: InterfaceSettings { font_size: written },
+                ..AppSettings::default()
+            };
+            assert_eq!(settings.normalized().interface.font_size, kept, "{written}");
+        }
     }
 
     /// 最大同时传输数量: three unless the file says otherwise, and never

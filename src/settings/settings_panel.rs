@@ -40,7 +40,10 @@ use super::highlight_rules::HighlightRulesEditor;
 use super::local_shell_editor::{LocalShellEditor, local_shell_field};
 use super::shortcuts_editor::{ShortcutsEditor, shortcut_groups};
 use super::terminal_themes::{app_follows_item, terminal_theme_item};
-use super::{AppSettings, Choice, NotificationSettings, SettingsStore, WindowSettings};
+use super::{
+    AppSettings, Choice, INTERFACE_FONT_SIZE_RANGE, NotificationSettings, SettingsStore,
+    WindowSettings,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettingsPanelEvent {
@@ -328,6 +331,17 @@ fn appearance_groups(panel: &SettingsPanel, _: &App) -> Vec<SettingGroup> {
                         |settings, appearance| settings.appearance = appearance,
                     ),
                 ),
+                SettingItem::new(
+                    t!("settings.appearance.font_size"),
+                    font_size_field(
+                        store,
+                        INTERFACE_FONT_SIZE_RANGE,
+                        |settings| settings.interface.font_size,
+                        |settings, size| settings.interface.font_size = size,
+                    ),
+                )
+                .description(t!("settings.appearance.font_size_description"))
+                .keywords(keywords(t!("settings.appearance.font_size_keywords"))),
             ]),
         SettingGroup::new()
             .title(t!("settings.appearance.theme"))
@@ -359,8 +373,16 @@ fn terminal_groups(panel: &SettingsPanel, cx: &App) -> Vec<SettingGroup> {
             .items([
                 SettingItem::new(t!("settings.terminal.family"), font_family_field(panel, cx))
                     .description(t!("settings.terminal.family_description")),
-                SettingItem::new(t!("settings.terminal.size"), font_size_field(store))
-                    .description(t!("settings.terminal.size_description")),
+                SettingItem::new(
+                    t!("settings.terminal.size"),
+                    font_size_field(
+                        store,
+                        FONT_SIZE_RANGE,
+                        |settings| settings.terminal_font.size,
+                        |settings, size| settings.terminal_font.size = size,
+                    ),
+                )
+                .description(t!("settings.terminal.size_description")),
                 SettingItem::new(
                     t!("settings.terminal.line_height"),
                     number_field(
@@ -1288,15 +1310,17 @@ fn font_family_field(panel: &SettingsPanel, cx: &App) -> SettingField<SharedStri
     .default_value(default_family)
 }
 
-/// The terminal font size, a dropdown of whole pixels. Not a number input:
-/// that clamps to its minimum as each digit is typed, so 「14」 would turn
-/// into 10 at its 「1」.
-fn font_size_field(store: &Entity<SettingsStore>) -> SettingField<SharedString> {
-    let default = AppSettings::default().terminal_font.size;
-    let (start, end) = (
-        *FONT_SIZE_RANGE.start() as u32,
-        *FONT_SIZE_RANGE.end() as u32,
-    );
+/// A font size, a dropdown of the whole pixels in `range`. Not a number
+/// input: that clamps to its minimum as each digit is typed, so 「14」 would
+/// turn into 10 at its 「1」.
+fn font_size_field(
+    store: &Entity<SettingsStore>,
+    range: std::ops::RangeInclusive<f32>,
+    read: fn(&AppSettings) -> f32,
+    write: fn(&mut AppSettings, f32),
+) -> SettingField<SharedString> {
+    let default = read(&AppSettings::default());
+    let (start, end) = (*range.start() as u32, *range.end() as u32);
     let options = (start..=end)
         .map(|size| {
             let key = SharedString::from(size.to_string());
@@ -1311,19 +1335,11 @@ fn font_size_field(store: &Entity<SettingsStore>) -> SettingField<SharedString> 
     let (reader, writer) = (store.clone(), store.clone());
     SettingField::scrollable_dropdown(
         options,
-        move |cx| {
-            reader
-                .read(cx)
-                .settings()
-                .terminal_font
-                .size
-                .to_string()
-                .into()
-        },
+        move |cx| read(&reader.read(cx).settings()).to_string().into(),
         move |size: SharedString, cx| {
             if let Ok(size) = size.parse::<f32>() {
                 writer.update(cx, |store, cx| {
-                    store.update(|settings| settings.terminal_font.size = size, cx)
+                    store.update(|settings| write(settings, size), cx)
                 });
             }
         },

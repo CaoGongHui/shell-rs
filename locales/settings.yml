@@ -68,6 +68,15 @@ settings.appearance.language:
 settings.appearance.mode:
   zh-CN: 应用外观
   en: Appearance
+settings.appearance.font_size:
+  zh-CN: 界面字号
+  en: Interface font size
+settings.appearance.font_size_description:
+  zh-CN: 以像素计，界面的文字和间距随之缩放。终端的字号在「终端」里单独设置。
+  en: In pixels. The app’s text and spacing follow it. Terminals have their own font size, under Terminal.
+settings.appearance.font_size_keywords:
+  zh-CN: 字体,字号,文字,大小,缩放,界面
+  en: font,text,size,zoom,scale,interface
 settings.appearance.theme:
   zh-CN: 主题
   en: Theme

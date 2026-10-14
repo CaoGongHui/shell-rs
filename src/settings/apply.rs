@@ -11,7 +11,8 @@ use super::AppSettings;
 use super::app_theme::{ui_theme, ui_theme_name};
 
 /// Bring the window in line with the settings: the theme chosen for the
-/// appearance, in the app and its terminals, the locale, the terminal font,
+/// appearance, in the app and its terminals, the interface's font size, the
+/// locale, the terminal font,
 /// mouse and highlight rules, the keyboard shortcuts, the SFTP size format and
 /// icons, how many files SFTP moves at once, and whether it shows hidden
 /// files.
@@ -33,6 +34,15 @@ pub fn apply(settings: AppSettings, window: &mut Window, cx: &mut App) {
         Theme::change(mode, Some(window), cx);
         // The theme change resets the list hover to the theme's own.
         crate::app::deepen_list_hover(cx);
+    }
+
+    // 界面字号: the base font the interface's sizes follow. After the theme,
+    // whose change keeps it.
+    let font_size = px(settings.interface.font_size);
+    if cx.theme().font_size != font_size {
+        Theme::global_mut(cx).font_size = font_size;
+        Theme::sync_base(cx);
+        window.refresh();
     }
 
     let colors = TerminalColors::new(chosen);

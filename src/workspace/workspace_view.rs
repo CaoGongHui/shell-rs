@@ -6,7 +6,7 @@ use std::{
 };
 
 use gpui_kit::component::{
-    ActiveTheme as _, Root, Sizable as _, Theme, TitleBar, WindowExt as _,
+    ActiveTheme as _, Root, Sizable as _, TitleBar, WindowExt as _,
     button::ButtonVariant,
     dialog::DialogButtonProps,
     dock::{DockArea, DockEvent, DockLayout, DockPlacement, PanelId, TabGroup, panel_handle},
@@ -58,8 +58,8 @@ use crate::host::{
 };
 use crate::i18n::t;
 use crate::settings::{
-    Appearance, SettingsPanel, SettingsPanelEvent, SettingsStore, SettingsStoreEvent,
-    WindowSettings,
+    Appearance, DEFAULT_INTERFACE_FONT_SIZE, SettingsPanel, SettingsPanelEvent, SettingsStore,
+    SettingsStoreEvent, WindowSettings,
 };
 use crate::sftp::{
     SftpRoute, SharedLocalDirectoryProvider, SharedSftpTransportProvider, SshSftpTransportProvider,
@@ -88,11 +88,8 @@ use super::{
 
 const DOCK_ID: &str = "shellrs-dock";
 const DOCK_VERSION: usize = 1;
-/// Interface zoom bounds for the base font, in pixels (the theme's unit).
-const FONT_SIZE_MIN: f32 = 12.;
-const FONT_SIZE_MAX: f32 = 20.;
-const FONT_SIZE_DEFAULT: f32 = 16.;
-const FONT_SIZE_STEP: f32 = 2.;
+/// How far the zoom keys move 界面字号 a press, in pixels.
+const INTERFACE_ZOOM_STEP: f32 = 2.;
 /// Paint order of the notification layer. gpui-base draws a dialog, backdrop
 /// and all, deferred at priority `10 + its layer` (the dock skin's start page
 /// at 0); anything lower lands under the backdrop, dimmed, and a click on it
@@ -2356,25 +2353,28 @@ impl Workspace {
             .update(cx, |sidebar, cx| sidebar.focus_search(window, cx));
     }
 
-    fn set_font_size(&mut self, size: f32, window: &mut Window, cx: &mut Context<Self>) {
-        // The base font is the interface zoom axis; it anchors the rem scale.
-        Theme::global_mut(cx).font_size = px(size.clamp(FONT_SIZE_MIN, FONT_SIZE_MAX));
-        Theme::sync_base(cx);
-        window.refresh();
+    /// The interface larger or smaller, through the settings (外观 › 界面字号),
+    /// which keep it in range and for the next launch; applying them sizes
+    /// the interface.
+    fn change_interface_font_size(&mut self, size: impl FnOnce(f32) -> f32, cx: &mut App) {
+        self.settings.update(cx, |store, cx| {
+            store.update(
+                |settings| settings.interface.font_size = size(settings.interface.font_size),
+                cx,
+            )
+        });
     }
 
-    fn on_zoom_in(&mut self, _: &ZoomIn, window: &mut Window, cx: &mut Context<Self>) {
-        let size = cx.theme().font_size.as_f32() + FONT_SIZE_STEP;
-        self.set_font_size(size, window, cx);
+    fn on_zoom_in(&mut self, _: &ZoomIn, _: &mut Window, cx: &mut Context<Self>) {
+        self.change_interface_font_size(|size| size + INTERFACE_ZOOM_STEP, cx);
     }
 
-    fn on_zoom_out(&mut self, _: &ZoomOut, window: &mut Window, cx: &mut Context<Self>) {
-        let size = cx.theme().font_size.as_f32() - FONT_SIZE_STEP;
-        self.set_font_size(size, window, cx);
+    fn on_zoom_out(&mut self, _: &ZoomOut, _: &mut Window, cx: &mut Context<Self>) {
+        self.change_interface_font_size(|size| size - INTERFACE_ZOOM_STEP, cx);
     }
 
-    fn on_zoom_reset(&mut self, _: &ZoomReset, window: &mut Window, cx: &mut Context<Self>) {
-        self.set_font_size(FONT_SIZE_DEFAULT, window, cx);
+    fn on_zoom_reset(&mut self, _: &ZoomReset, _: &mut Window, cx: &mut Context<Self>) {
+        self.change_interface_font_size(|_| DEFAULT_INTERFACE_FONT_SIZE, cx);
     }
 
     /// The terminals' text a pixel larger or smaller, through the settings
