@@ -48,7 +48,7 @@ async fn a_serial_host_is_made_from_its_device_and_line(cx: &mut TestAppContext)
             Some(true)
         );
         assert!(window.find("host-address").visible());
-        window.within("host-protocol").click(1usize, cx);
+        window.within("host-protocol").click(2usize, cx);
     });
     in_frame(cx, handle, |window, cx| {
         // Nothing of an SSH host's: no address, login or route.
@@ -165,13 +165,13 @@ async fn a_serial_host_keeps_its_protocol_and_reconnects_at_a_new_rate(cx: &mut 
     });
     in_frame(cx, handle, |window, cx| {
         let mut protocols = window.within("host-protocol");
-        assert_eq!(protocols.find(1usize).selected(), Some(true));
+        assert_eq!(protocols.find(2usize).selected(), Some(true));
         // SSH cannot be chosen any more.
         protocols.click(0usize, cx);
     });
     in_frame(cx, handle, |window, cx| {
         assert_eq!(
-            window.within("host-protocol").find(1usize).selected(),
+            window.within("host-protocol").find(2usize).selected(),
             Some(true)
         );
         assert_eq!(
@@ -255,7 +255,7 @@ async fn a_serial_port_is_connected_to_without_saving_it(cx: &mut TestAppContext
         window.click("temporary-connection", cx)
     });
     in_frame(cx, handle, |window, cx| {
-        window.within("host-protocol").click(1usize, cx)
+        window.within("host-protocol").click(2usize, cx)
     });
     in_frame(cx, handle, |window, cx| {
         window.click("host-serial-device", cx);

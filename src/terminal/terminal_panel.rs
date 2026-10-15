@@ -14,7 +14,7 @@ use crate::app::{
     DisconnectTerminal, EditHost, OpenExplorer, ReconnectTerminal, RenameTerminal, SendBreak,
 };
 use crate::connection::{ConnectionPrompt, ConnectionPromptReply};
-use crate::host::{ConnectionState, HostId, HostOs, HostStore};
+use crate::host::{ConnectionState, HostId, HostOs, HostStore, ProtocolKind};
 use crate::i18n::t;
 use crate::shared::{ClosableTabTitle, HostMark, LatencyLabel, RenamableTab, close_tab_items};
 
@@ -38,17 +38,18 @@ pub enum TerminalPanelEvent {
 }
 
 /// A remote-host Dock panel backed by the shared terminal engine: an SSH
-/// host's, or a serial host's. The transport is created from the latest
-/// saved host on every connection.
+/// host's, a Telnet host's or a serial host's. The transport is created from
+/// the latest saved host on every connection.
 pub struct TerminalPanel {
     id: RemoteTerminalId,
     host_id: HostId,
     store: Entity<HostStore>,
     terminal: Entity<TerminalView>,
     transports: HostTerminalTransports,
-    /// A serial host's: no SFTP, no address to copy, a line to break. A
-    /// host's protocol never changes.
-    serial: bool,
+    /// What the host is: only SSH has SFTP, only a serial port has no
+    /// address to copy, and only SSH no break to send. A host's protocol
+    /// never changes.
+    protocol: ProtocolKind,
     tab_group: Option<WeakEntity<TabGroup>>,
     /// A title the user gave this tab, to tell apart several connections to
     /// the same host. Lives as long as the tab, like the rest of the layout.
@@ -74,7 +75,7 @@ impl TerminalPanel {
             let connection = store.connection_of(&host);
             (host, connection)
         };
-        let serial = host.is_serial();
+        let protocol = host.kind();
         let terminal = cx.new(|cx| {
             let name = host.name.clone();
             let mut terminal = TerminalView::new(
@@ -84,7 +85,7 @@ impl TerminalPanel {
                 window,
                 cx,
             );
-            terminal.set_menu_items(remote_menu_items(id, host_id, serial, store.clone()));
+            terminal.set_menu_items(remote_menu_items(id, host_id, protocol, store.clone()));
             terminal.set_reconnect_action(ReconnectTerminal(id), cx);
             terminal
         });
@@ -129,7 +130,7 @@ impl TerminalPanel {
             store,
             terminal,
             transports,
-            serial,
+            protocol,
             tab_group: None,
             custom_title: None,
             _subscriptions: subscriptions,
@@ -156,7 +157,7 @@ impl TerminalPanel {
             host_is_ip: store
                 .host(self.host_id)
                 .is_some_and(|host| host.address_is_ip()),
-            serial: self.serial,
+            protocol: self.protocol,
             running: self.lifecycle(cx) == TerminalLifecycle::Running,
             editable: !store.is_temporary(self.host_id),
             group: self.tab_group.clone(),
@@ -195,9 +196,9 @@ impl TerminalPanel {
         });
     }
 
-    /// 发送 Break, for a serial host's terminal.
+    /// 发送 Break, for a Telnet or serial host's terminal.
     pub fn send_break(&self, cx: &App) {
-        if self.serial {
+        if self.protocol.sends_break() {
             self.terminal.read(cx).send_break(cx);
         }
     }
@@ -283,7 +284,7 @@ impl Panel for TerminalPanel {
             address,
             os,
         )
-        .serial(self.serial)
+        .protocol(self.protocol)
         .connection_state(state)
         .small();
         ClosableTabTitle::new(("terminal-tab", id.0), mark, self.tab_title(cx))
@@ -307,7 +308,7 @@ impl Panel for TerminalPanel {
         let host_id = self.host_id;
         let terminal_id = self.id;
         let reconnect_dispatch = self.focus_handle(cx);
-        let sftp = (!self.serial).then(|| {
+        let sftp = self.protocol.is_ssh().then(|| {
             Button::new(("sftp", terminal_id.0))
                 .icon(Icon::new(CatalogIcon::FolderTree))
                 .label("SFTP")
@@ -341,11 +342,11 @@ impl Panel for TerminalPanel {
 
 /// What a remote terminal adds to its context menu: copying the host's
 /// address and ID below 复制, and the connection's commands at the bottom.
-/// A serial host has no address to copy and no SFTP to open.
+/// Only an SSH host has SFTP to open, and a serial host no address to copy.
 fn remote_menu_items(
     id: RemoteTerminalId,
     host_id: HostId,
-    serial: bool,
+    protocol: ProtocolKind,
     store: Entity<HostStore>,
 ) -> TerminalMenuItems {
     let copy = Rc::new(move |menu: PopupMenu, cx: &App| {
@@ -359,7 +360,7 @@ fn remote_menu_items(
         } else {
             t!("terminal.remote.copy_host_name")
         };
-        menu.when(!serial, |menu| {
+        menu.when(protocol.has_address(), |menu| {
             menu.menu_with_icon(
                 copy_host,
                 Icon::new(CatalogIcon::ClipboardCopy),
@@ -377,7 +378,7 @@ fn remote_menu_items(
             lifecycle,
             TerminalLifecycle::Starting | TerminalLifecycle::Running
         );
-        menu.when(!serial, |menu| {
+        menu.when(protocol.is_ssh(), |menu| {
             menu.menu_with_icon(
                 t!("terminal.remote.open_sftp"),
                 Icon::new(CatalogIcon::FolderTree),
@@ -407,9 +408,9 @@ struct TabMenu {
     id: RemoteTerminalId,
     host_id: HostId,
     host_is_ip: bool,
-    /// A serial host's tab: 发送 Break where an SSH host's has SFTP and its
-    /// address.
-    serial: bool,
+    /// What the host is: an SSH host's tab has SFTP, a Telnet or serial
+    /// host's 发送 Break, and all but a serial host's the address.
+    protocol: ProtocolKind,
     /// Whether the terminal is connected, which a break needs.
     running: bool,
     /// A saved host; a temporary one has nothing to edit.
@@ -458,25 +459,30 @@ impl TabMenu {
                 Icon::new(CatalogIcon::Plug),
                 Box::new(ConnectHost(host_id)),
             );
-        menu = if self.serial {
-            menu.menu_with_icon_and_disabled(
-                t!("terminal.remote.send_break"),
-                Icon::new(CatalogIcon::Zap),
-                Box::new(SendBreak(id)),
-                !self.running,
-            )
-        } else {
-            menu.menu_with_icon(
-                t!("terminal.remote.open_sftp"),
-                Icon::new(CatalogIcon::FolderTree),
-                Box::new(OpenExplorer(host_id)),
-            )
-            .menu_with_icon(
-                copy_host,
-                Icon::new(IconName::Copy),
-                Box::new(CopyHostAddress(host_id)),
-            )
-        };
+        let protocol = self.protocol;
+        menu = menu
+            .when(protocol.sends_break(), |menu| {
+                menu.menu_with_icon_and_disabled(
+                    t!("terminal.remote.send_break"),
+                    Icon::new(CatalogIcon::Zap),
+                    Box::new(SendBreak(id)),
+                    !self.running,
+                )
+            })
+            .when(protocol.is_ssh(), |menu| {
+                menu.menu_with_icon(
+                    t!("terminal.remote.open_sftp"),
+                    Icon::new(CatalogIcon::FolderTree),
+                    Box::new(OpenExplorer(host_id)),
+                )
+            })
+            .when(protocol.has_address(), |menu| {
+                menu.menu_with_icon(
+                    copy_host,
+                    Icon::new(IconName::Copy),
+                    Box::new(CopyHostAddress(host_id)),
+                )
+            });
         menu = menu.menu_with_icon(
             t!("terminal.remote.reconnect"),
             Icon::new(CatalogIcon::RefreshCw),

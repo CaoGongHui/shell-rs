@@ -5,10 +5,12 @@
 
 use std::path::Path;
 
+use gpui_kit::SharedString;
+
 use crate::host::{
     AuthKind, Credential, CredentialDraft, CredentialId, CredentialKind, DataBits, FlowControl,
-    GroupId, Host, HostDraft, HostId, HostStore, Parity, PastedKey, Protocol, ProxyKind,
-    ProxySettings, Route, SSH_PORT, SerialSettings, StopBits,
+    GroupId, Host, HostConnection, HostDraft, HostId, HostStore, Parity, PastedKey, Protocol,
+    ProxyKind, ProxySettings, Route, SSH_PORT, SerialSettings, StopBits, TELNET_PORT,
 };
 use crate::i18n::t;
 use crate::secrets::SecretRef;
@@ -16,7 +18,7 @@ use crate::secrets::SecretRef;
 use super::protocol::{
     AuthChoice, CliError, CredentialDetails, CredentialFields, CredentialKindChoice, ErrorCode,
     FlowControlChoice, HostDetails, HostFields, HostInfo, ParityChoice, ProtocolChoice,
-    ProxyChoice, RouteDetails, RouteFields, Secret, SerialDetails, SerialFields,
+    ProxyChoice, RouteDetails, RouteFields, Secret, SerialDetails, SerialFields, TelnetDetails,
 };
 
 /// A change a CLI request asks for, made on the UI thread one at a time.
@@ -63,7 +65,7 @@ pub fn host_info(host: &Host, store: &HostStore) -> HostInfo {
         id: host.public_id.to_string(),
         name: host.name.to_string(),
         group: group_path(host.group, store),
-        protocol: protocol_choice(host.protocol),
+        protocol: protocol_choice(&host.protocol),
         user: host.user.to_string(),
         host: host.address.to_string(),
         port: host.port,
@@ -73,9 +75,10 @@ pub fn host_info(host: &Host, store: &HostStore) -> HostInfo {
     }
 }
 
-fn protocol_choice(protocol: Protocol) -> ProtocolChoice {
+fn protocol_choice(protocol: &Protocol) -> ProtocolChoice {
     match protocol {
         Protocol::Ssh => ProtocolChoice::Ssh,
+        Protocol::Telnet(_) => ProtocolChoice::Telnet,
         Protocol::Serial(_) => ProtocolChoice::Serial,
     }
 }
@@ -103,6 +106,7 @@ pub fn host_details(host: &Host, store: &HostStore) -> HostDetails {
             password_saved: None,
             route: None,
             serial: Some(serial_details(host.address.as_ref(), line)),
+            telnet: None,
             notes: host.notes.to_string(),
             os: None,
             temporary: store.is_temporary(host.id),
@@ -139,11 +143,12 @@ pub fn host_details(host: &Host, store: &HostStore) -> HostDetails {
             password_saved: None,
         },
     };
+    let prompt = |prompt: &SharedString| (!prompt.is_empty()).then(|| prompt.to_string());
     HostDetails {
         id: host.public_id.to_string(),
         name: host.name.to_string(),
         group: group_path(host.group, store),
-        protocol: ProtocolChoice::Ssh,
+        protocol: protocol_choice(&host.protocol),
         host: Some(host.address.to_string()),
         port: Some(host.port),
         user: Some(host.user.to_string()),
@@ -152,8 +157,16 @@ pub fn host_details(host: &Host, store: &HostStore) -> HostDetails {
         password_saved: None,
         route: Some(route),
         serial: None,
+        telnet: host.protocol.telnet().map(|telnet| TelnetDetails {
+            user_prompt: prompt(&telnet.user_prompt),
+            password_prompt: prompt(&telnet.password_prompt),
+        }),
         notes: host.notes.to_string(),
-        os: host.os.map(|os| os.as_str().to_string()),
+        os: host
+            .is_ssh()
+            .then_some(host.os)
+            .flatten()
+            .map(|os| os.as_str().to_string()),
         temporary: store.is_temporary(host.id),
     }
 }
@@ -178,17 +191,24 @@ fn serial_details(device: &str, line: SerialSettings) -> SerialDetails {
 }
 
 /// The entries behind a host's `password_saved` fields: its own password
-/// when it logs in with one (a temporary host's is in memory), and its
-/// proxy's when the proxy has a user. A serial host has neither.
+/// when it logs in with one (a temporary host's is in memory; a Telnet
+/// host's, typed by its 自动登录), and its proxy's when the proxy has a
+/// user. A serial host has neither.
 pub fn host_secrets(host: &Host, store: &HostStore) -> HostSecrets {
-    if host.is_serial() {
-        return HostSecrets::default();
-    }
-    let login = store.login_of(host);
-    HostSecrets {
-        password: (host.credential.is_none() && host.auth == AuthKind::Password)
-            .then_some(login.password),
-        proxy: login.route.proxy_password(),
+    let own = host.credential.is_none() && host.auth == AuthKind::Password;
+    match store.connection_of(host) {
+        HostConnection::Ssh(login) => HostSecrets {
+            password: own.then_some(login.password),
+            proxy: login.route.proxy_password(),
+        },
+        HostConnection::Telnet(login) => HostSecrets {
+            password: login
+                .auto_login
+                .and_then(|auto_login| auto_login.password)
+                .filter(|_| own),
+            proxy: login.route.proxy_password(),
+        },
+        HostConnection::Serial(_) => HostSecrets::default(),
     }
 }
 
@@ -387,23 +407,42 @@ pub fn plan_host(
 ) -> Result<HostPlan, CliError> {
     let current = existing.and_then(|id| store.saved_host(id));
     let protocol = match (current, fields.protocol) {
-        (Some(host), Some(asked)) if asked != protocol_choice(host.protocol) => {
+        (Some(host), Some(asked)) if asked != protocol_choice(&host.protocol) => {
             return Err(bad(t!("cli.host.protocol_fixed")));
         }
-        (Some(host), _) => protocol_choice(host.protocol),
+        (Some(host), _) => protocol_choice(&host.protocol),
         (None, Some(asked)) => asked,
         (None, None) if fields.serial.is_some() => ProtocolChoice::Serial,
+        (None, None) if fields.telnet.is_some() => ProtocolChoice::Telnet,
         (None, None) => ProtocolChoice::Ssh,
     };
+    let telnet = protocol == ProtocolChoice::Telnet;
+    if !telnet && fields.telnet.is_some() {
+        return Err(bad(t!("cli.host.telnet_on_other")));
+    }
     if protocol == ProtocolChoice::Serial {
         return plan_serial_host(fields, current, store);
     }
     if fields.serial.is_some() {
         return Err(bad(t!("cli.host.serial_on_ssh")));
     }
-    let mut draft = current
-        .map(Host::draft)
-        .unwrap_or_else(|| HostDraft::new("", "", SSH_PORT, "", AuthKind::default(), None));
+    let mut draft = current.map(Host::draft).unwrap_or_else(|| {
+        if telnet {
+            HostDraft::telnet("", "", TELNET_PORT, None)
+        } else {
+            HostDraft::new("", "", SSH_PORT, "", AuthKind::default(), None)
+        }
+    });
+    if let Some(prompts) = fields.telnet {
+        let mut settings = draft.protocol.telnet().cloned().unwrap_or_default();
+        if let Some(prompt) = prompts.user_prompt {
+            settings.user_prompt = prompt.unwrap_or_default().into();
+        }
+        if let Some(prompt) = prompts.password_prompt {
+            settings.password_prompt = prompt.unwrap_or_default().into();
+        }
+        draft.protocol = Protocol::Telnet(settings);
+    }
     if let Some(name) = fields.name {
         draft.name = name.into();
     }
@@ -427,6 +466,10 @@ pub fn plan_host(
         Some(Some(id)) => Some(find_credential(store, id)?),
         _ => None,
     };
+    // A Telnet host's 自动登录 types a password: a key is no use to it.
+    if telnet && named.is_some_and(|credential| credential.kind != CredentialKind::Password) {
+        return Err(bad(t!("cli.host.telnet_credential_kind")));
+    }
     let credential = match (fields.auth, named) {
         (Some(AuthChoice::Password | AuthChoice::NoPassword), Some(_)) => {
             return Err(bad(t!("cli.host.credential_with_own_auth")));
@@ -450,9 +493,13 @@ pub fn plan_host(
         }
         (auth, None) => {
             let previous = draft.credential.and_then(|id| store.credential(id));
+            // A user or a password for a Telnet host without 自动登录
+            // turns it on.
+            let logs_in = fields.user.is_some() || matches!(fields.password, Some(Some(_)));
             draft.auth = match (auth, previous) {
                 (Some(AuthChoice::NoPassword), _) => AuthKind::NoPassword,
                 (Some(_), _) => AuthKind::Password,
+                (None, None) if telnet && logs_in => AuthKind::Password,
                 // Off its credential without saying how: as when the
                 // credential is deleted.
                 (None, Some(previous)) => previous.kind.without_credential(),
@@ -622,6 +669,9 @@ fn jump_hosts(
         }
         if hop.is_serial() {
             return Err(bad(t!("cli.host.jump_serial", id = id)));
+        }
+        if !hop.is_ssh() {
+            return Err(bad(t!("cli.host.jump_telnet", id = id)));
         }
         if Some(hop.id) == own {
             return Err(bad(t!("cli.host.jump_self")));
@@ -1163,6 +1213,94 @@ mod tests {
         assert_eq!(
             plan.password.unwrap().1,
             SecretChange::Set(Secret::new("hunter2"))
+        );
+    }
+
+    #[test]
+    fn a_telnet_host_logs_in_only_when_told_and_only_with_a_password() {
+        let (mut store, web, credential) = store();
+        let plan = plan_host(
+            fields(serde_json::json!({ "protocol": "telnet", "host": "10.0.0.5" })),
+            None,
+            &store,
+        )
+        .unwrap();
+        assert_eq!(plan.draft.port, 23);
+        assert_eq!(
+            plan.draft.auth,
+            AuthKind::NoPassword,
+            "no 自动登录 unless asked"
+        );
+        assert_eq!(plan.draft.user.as_ref(), "");
+        assert_eq!(plan.password, None);
+
+        // A user or a password turns 自动登录 on; the prompts imply Telnet.
+        let plan = plan_host(
+            fields(serde_json::json!({
+                "host": "10.0.0.6",
+                "user": "admin",
+                "password": "hunter2",
+                "telnet": { "user_prompt": "账号：", "password_prompt": null }
+            })),
+            None,
+            &store,
+        )
+        .unwrap();
+        assert_eq!(plan.draft.auth, AuthKind::Password);
+        assert_eq!(
+            plan.draft.protocol.telnet().unwrap().user_prompt.as_ref(),
+            "账号："
+        );
+        let (entry, change) = plan.password.clone().unwrap();
+        assert_eq!(entry, SecretRef::password("admin", "10.0.0.6", 23));
+        assert_eq!(change, SecretChange::Set(Secret::new("hunter2")));
+        let switch = store.insert_unnotified(plan.draft);
+
+        // What show prints goes back in, prompts and all.
+        let shown =
+            serde_json::to_value(host_details(store.host(switch).unwrap(), &store)).unwrap();
+        assert_eq!(shown["protocol"], "telnet");
+        assert_eq!(shown["telnet"]["user_prompt"], "账号：");
+        assert!(shown["telnet"].get("password_prompt").is_none());
+        let plan = plan_host(host_fields(shown).unwrap(), Some(switch), &store).unwrap();
+        assert_eq!(plan.draft, store.host(switch).unwrap().draft());
+
+        // A password credential is its 自动登录's; a key is not.
+        let plan = plan_host(
+            fields(serde_json::json!({ "credential": credential })),
+            Some(switch),
+            &store,
+        )
+        .unwrap();
+        assert_eq!(plan.draft.user.as_ref(), "deploy");
+        let key = store.insert_credential_unnotified(
+            CredentialDraft::new("钥匙", CredentialKind::Key, "root").with_key_path("/tmp/id"),
+        );
+        let key = store.credential(key).unwrap().keychain_id.to_string();
+        let plan =
+            |json: serde_json::Value, host: Option<HostId>| plan_host(fields(json), host, &store);
+        assert_eq!(
+            refused(plan(serde_json::json!({ "credential": key }), Some(switch))),
+            bad("Telnet 主机只能使用密码凭据")
+        );
+        assert_eq!(
+            refused(plan(
+                serde_json::json!({ "telnet": { "user_prompt": "x" } }),
+                Some(web)
+            )),
+            bad("只有 Telnet 主机有 telnet")
+        );
+        assert_eq!(
+            refused(plan(serde_json::json!({ "protocol": "ssh" }), Some(switch))),
+            bad("协议在创建后不能更改")
+        );
+        let id = store.host(switch).unwrap().public_id.to_string();
+        assert_eq!(
+            refused(plan(
+                serde_json::json!({ "route": { "type": "jump", "hosts": [id] } }),
+                Some(web)
+            )),
+            bad(&format!("跳板只能是 SSH 主机：{id} 是 Telnet 主机"))
         );
     }
 

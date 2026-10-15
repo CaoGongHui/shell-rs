@@ -27,7 +27,7 @@ use crate::app::ConnectHost;
 use crate::i18n::t;
 use crate::shared::HostMark;
 
-use super::{HostId, HostOs, HostStore};
+use super::{HostId, HostOs, HostStore, ProtocolKind};
 
 /// Whether several hosts can be chosen (Tab, ⌘A, ⌘-click) and connected to
 /// together (⇧↵), with the keys in the footer. Off for now (the user's
@@ -48,7 +48,7 @@ pub struct QuickHost {
     pub group: Option<SharedString>,
     pub notes: SharedString,
     pub os: Option<HostOs>,
-    pub serial: bool,
+    pub protocol: ProtocolKind,
 }
 
 impl QuickHost {
@@ -92,7 +92,7 @@ pub fn quick_hosts(store: &HostStore) -> Vec<QuickHost> {
             .map(|group| SharedString::from(store.group_path(group))),
         notes: host.notes.clone(),
         os: host.os,
-        serial: host.is_serial(),
+        protocol: host.kind(),
     };
     let mut hosts: Vec<QuickHost> = store
         .recent_hosts()
@@ -300,7 +300,7 @@ impl ListDelegate for QuickConnectList {
                                 host.address.clone(),
                                 host.os,
                             )
-                            .serial(host.serial)
+                            .protocol(host.protocol)
                             .without_tooltip()
                             .small(),
                         )
@@ -505,7 +505,7 @@ mod tests {
             group: Some("公司 / CI".into()),
             notes: "构建服务器".into(),
             os: None,
-            serial: false,
+            protocol: crate::host::ProtocolKind::Ssh,
         }
     }
 

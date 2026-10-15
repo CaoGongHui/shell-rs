@@ -59,9 +59,11 @@ pub(crate) use transport::send_event;
 pub use transport::{
     ChannelStream, ExecRequest, ExecResult, FixedLocalTerminalTransportProvider,
     FixedRemoteTerminalTransportProvider, FixedSerialTerminalTransportProvider,
-    HostTerminalTransports, LocalTerminalTransportProvider, RemoteTerminalTransportProvider,
-    SerialTerminalTransportProvider, SftpChannel, SftpChannelRequest,
-    SharedLocalTerminalTransportProvider, SharedRemoteTerminalTransportProvider,
-    SharedSerialTerminalTransportProvider, SharedTerminalTransportFactory, TerminalChannels,
-    TerminalTransport, TerminalTransportCommand, TerminalTransportEvent, TerminalTransportFactory,
+    FixedTelnetTerminalTransportProvider, HostTerminalTransports, LocalTerminalTransportProvider,
+    RemoteTerminalTransportProvider, SerialTerminalTransportProvider, SftpChannel,
+    SftpChannelRequest, SharedLocalTerminalTransportProvider,
+    SharedRemoteTerminalTransportProvider, SharedSerialTerminalTransportProvider,
+    SharedTelnetTerminalTransportProvider, SharedTerminalTransportFactory,
+    TelnetTerminalTransportProvider, TerminalChannels, TerminalTransport, TerminalTransportCommand,
+    TerminalTransportEvent, TerminalTransportFactory,
 };

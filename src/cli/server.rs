@@ -29,7 +29,7 @@ use super::protocol::{
     PROTOCOL_VERSION, Reply, Request, TerminalContext, TransferCounters, TransferSummary,
     VersionOnly, parse_json, read_frame, write_frame, write_json,
 };
-use crate::host::{Host, HostLogin, HostStore, matches_query};
+use crate::host::{Host, HostLogin, HostStore, ProtocolKind, matches_query};
 use crate::i18n::t;
 use crate::secrets::SecretRef;
 use crate::ssh::ExecStream;
@@ -942,16 +942,22 @@ fn run_error(failure: RunFailure, host: &str) -> CliError {
     }
 }
 
-/// [`find`] for a request that runs over SSH, which a serial host has not.
+/// [`find`] for a request that runs over SSH, which a Telnet or serial host
+/// has not.
 fn find_ssh(shared: &Shared, id: &str) -> Result<CliTarget, CliError> {
     let target = find(shared, id)?;
-    if target.host.is_serial() {
-        return Err(CliError::new(
+    let name = &target.host.name;
+    match target.host.kind() {
+        ProtocolKind::Ssh => Ok(target),
+        ProtocolKind::Telnet => Err(CliError::new(
             ErrorCode::NotSsh,
-            t!("cli.server.not_ssh", name = target.host.name),
-        ));
+            t!("cli.server.not_ssh_telnet", name = name),
+        )),
+        ProtocolKind::Serial => Err(CliError::new(
+            ErrorCode::NotSsh,
+            t!("cli.server.not_ssh", name = name),
+        )),
     }
-    Ok(target)
 }
 
 fn find(shared: &Shared, id: &str) -> Result<CliTarget, CliError> {

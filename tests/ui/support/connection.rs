@@ -25,6 +25,7 @@ pub fn open_workspace_with_tester(
                 store,
                 cx.new(|_| settings_store()),
                 remote,
+                fake_telnet_terminals(),
                 fake_serial_terminals(),
                 fake_local_terminals(),
                 Arc::new(FakeSftpProvider::default()),
@@ -44,6 +45,10 @@ pub fn open_workspace_with_tester(
 /// `(host, port, user, password)` of one connection test.
 pub type TestedLogin = (String, u16, String, Option<String>);
 
+/// A Telnet connection test: address, port, route, and the proxy password
+/// typed.
+pub type TestedTelnet = (String, u16, LoginRoute, Option<String>);
+
 /// Stands in for the SSH login behind 「测试连接」: records what the form sent,
 /// optionally asks to trust a made-up host key, and answers with `result`.
 pub struct FakeConnectionTester {
@@ -56,6 +61,8 @@ pub struct FakeConnectionTester {
     pub trust_answers: Mutex<Vec<bool>>,
     /// The serial lines opened, answered with `result` too.
     pub serial_lines: Mutex<Vec<SerialLine>>,
+    /// Each Telnet test: address, port, route, and the proxy password typed.
+    pub telnet_tests: Mutex<Vec<TestedTelnet>>,
 }
 
 impl Default for FakeConnectionTester {
@@ -67,6 +74,7 @@ impl Default for FakeConnectionTester {
             routes: Mutex::default(),
             trust_answers: Mutex::default(),
             serial_lines: Mutex::default(),
+            telnet_tests: Mutex::default(),
         }
     }
 }
@@ -109,6 +117,13 @@ impl FakeConnectionTester {
 
     pub fn serial_lines(&self) -> Vec<SerialLine> {
         self.serial_lines
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+
+    pub fn telnet_tests(&self) -> Vec<TestedTelnet> {
+        self.telnet_tests
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone()
@@ -159,6 +174,19 @@ impl ConnectionTester for FakeConnectionTester {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .push(line.clone());
+        self.result.clone()
+    }
+
+    fn test_telnet(&self, request: TelnetTest, _: TrustCallback) -> Result<(), String> {
+        self.telnet_tests
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push((
+                request.host().to_string(),
+                request.port(),
+                request.route().clone(),
+                request.proxy_password().map(str::to_string),
+            ));
         self.result.clone()
     }
 }

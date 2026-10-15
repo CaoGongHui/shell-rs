@@ -15,7 +15,7 @@ use super::connection::{
 use crate::{
     connection::{
         ConnectionPrompt, ConnectionPromptKind, ConnectionPromptReply, ConnectionTester, LoginTest,
-        TrustCallback,
+        TelnetTest, TrustCallback,
     },
     host::{JumpLogin, LoginMethod, LoginRoute},
     i18n::t,
@@ -47,6 +47,14 @@ impl ConnectionTester for SshConnectionTester {
         runtime.block_on(self.run(request, trust))
     }
 
+    fn test_telnet(&self, request: TelnetTest, trust: TrustCallback) -> Result<(), String> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| t!("ssh.test.runtime_failed", error = error).to_string())?;
+        runtime.block_on(self.run_telnet(request, trust))
+    }
+
     /// A serial line has nothing of SSH: the serial module opens it.
     fn test_serial(&self, line: &crate::host::SerialLine) -> Result<(), String> {
         crate::serial::check(line)
@@ -63,23 +71,8 @@ struct HostTrust {
 
 impl SshConnectionTester {
     async fn run(&self, request: LoginTest, trust: TrustCallback) -> Result<(), String> {
-        // Resolved apart from connecting, so a mistyped name says so instead
-        // of surfacing the resolver's own wording. Only the first leg is
-        // resolved here: a proxy or a jump host resolves what comes after.
         let login = request.login();
-        let first = match &login.route {
-            LoginRoute::Direct => Some((login.host.as_str(), login.port)),
-            LoginRoute::Proxy(proxy) => Some((proxy.host.as_str(), proxy.port)),
-            LoginRoute::Jump(hops) => match hops.first() {
-                Some(JumpLogin::Host { login, .. }) => Some((login.host.as_str(), login.port)),
-                _ => None,
-            },
-        };
-        if let Some((host, port)) = first
-            && tokio::net::lookup_host((host, port)).await.is_err()
-        {
-            return Err(t!("ssh.test.unresolved", host = host).into());
-        }
+        resolve_first_leg(&login.route, &login.host, login.port).await?;
 
         // No password typed: go without one, as 「无密码」 does (the server's
         // leave, the SSH agent, the default keys), and fail if that fails.
@@ -93,53 +86,7 @@ impl SshConnectionTester {
         };
         let secrets: SharedSecretStore =
             Arc::new(FormSecrets::new(&request, self.connector.secrets().clone()));
-        let host_trust = Arc::new(Mutex::new(HostTrust::default()));
-        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
-        // The events callback answers the trust question through the broker,
-        // which does not exist yet when the callback is made.
-        let broker_slot: Arc<OnceLock<Weak<SshPrompts>>> = Arc::new(OnceLock::new());
-        let events = {
-            let trust = Arc::new(trust);
-            let host_trust = host_trust.clone();
-            let broker_slot = broker_slot.clone();
-            Arc::new(move |prompt: ConnectionPrompt| match prompt.kind() {
-                ConnectionPromptKind::UnknownHost(question) => {
-                    let (trust, host_trust, broker_slot) =
-                        (trust.clone(), host_trust.clone(), broker_slot.clone());
-                    let (request_id, question) = (prompt.request_id(), question.clone());
-                    // The answer takes a person; keep the connection's runtime
-                    // free while they decide.
-                    tokio::task::spawn_blocking(move || {
-                        let trusted = trust(question);
-                        if !trusted {
-                            lock(&host_trust).declined = true;
-                        }
-                        if let Some(broker) = broker_slot.get().and_then(Weak::upgrade) {
-                            broker.respond(
-                                request_id,
-                                if trusted {
-                                    ConnectionPromptReply::TrustAndSave
-                                } else {
-                                    ConnectionPromptReply::Cancel
-                                },
-                            );
-                        }
-                    });
-                    true
-                }
-                // Declined at once, which fails the test and says why:
-                // replacing the saved key is left to a real connection.
-                ConnectionPromptKind::HostKeyChanged(_) => {
-                    lock(&host_trust).key_changed = true;
-                    false
-                }
-                // Credential questions never get here: the broker is
-                // non-interactive and fails with a `MissingCredential`.
-                ConnectionPromptKind::Authentication(_) => false,
-            })
-        };
-        let broker = Arc::new(SshPrompts::new(events, shutdown_rx).non_interactive());
-        let _ = broker_slot.set(Arc::downgrade(&broker));
+        let (broker, host_trust, _shutdown) = test_broker(trust);
 
         let connected = timeout_excluding_prompts(
             self.connector
@@ -168,6 +115,115 @@ impl SshConnectionTester {
             Err(error) => Err(describe_test_failure(&error, *lock(&host_trust))),
         }
     }
+
+    /// The way to a Telnet host, and nothing more: what answers there is
+    /// the device's business.
+    async fn run_telnet(&self, request: TelnetTest, trust: TrustCallback) -> Result<(), String> {
+        resolve_first_leg(request.route(), request.host(), request.port()).await?;
+        let secrets: SharedSecretStore = Arc::new(FormSecrets::for_proxy(
+            request.route(),
+            request.proxy_password(),
+            self.connector.secrets().clone(),
+        ));
+        let (broker, host_trust, _shutdown) = test_broker(trust);
+        let reached = timeout_excluding_prompts(
+            self.connector.open_route(
+                request.route(),
+                request.host(),
+                request.port(),
+                &broker,
+                &secrets,
+            ),
+            broker.prompt_activity_receiver(),
+            TEST_TIMEOUT,
+        )
+        .await
+        .and_then(|result| result);
+        match reached {
+            Ok(stream) => {
+                drop(stream);
+                Ok(())
+            }
+            Err(error) => Err(describe_test_failure(&error, *lock(&host_trust))),
+        }
+    }
+}
+
+/// Resolve the first leg apart from connecting, so a mistyped name says so
+/// instead of surfacing the resolver's own wording. Only the first leg: a
+/// proxy or a jump host resolves what comes after.
+async fn resolve_first_leg(route: &LoginRoute, host: &str, port: u16) -> Result<(), String> {
+    let first = match route {
+        LoginRoute::Direct => Some((host, port)),
+        LoginRoute::Proxy(proxy) => Some((proxy.host.as_str(), proxy.port)),
+        LoginRoute::Jump(hops) => match hops.first() {
+            Some(JumpLogin::Host { login, .. }) => Some((login.host.as_str(), login.port)),
+            _ => None,
+        },
+    };
+    match first {
+        Some((host, port)) if tokio::net::lookup_host((host, port)).await.is_err() => {
+            Err(t!("ssh.test.unresolved", host = host).into())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// The broker a test connects with: it asks nobody for a password, and
+/// answers a host key seen for the first time through `trust`. What the
+/// checks said comes back in the `HostTrust`; the watch's sender keeps the
+/// broker from counting as shut down while it is held.
+fn test_broker(
+    trust: TrustCallback,
+) -> (Arc<SshPrompts>, Arc<Mutex<HostTrust>>, watch::Sender<bool>) {
+    let host_trust = Arc::new(Mutex::new(HostTrust::default()));
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    // The events callback answers the trust question through the broker,
+    // which does not exist yet when the callback is made.
+    let broker_slot: Arc<OnceLock<Weak<SshPrompts>>> = Arc::new(OnceLock::new());
+    let events = {
+        let trust = Arc::new(trust);
+        let host_trust = host_trust.clone();
+        let broker_slot = broker_slot.clone();
+        Arc::new(move |prompt: ConnectionPrompt| match prompt.kind() {
+            ConnectionPromptKind::UnknownHost(question) => {
+                let (trust, host_trust, broker_slot) =
+                    (trust.clone(), host_trust.clone(), broker_slot.clone());
+                let (request_id, question) = (prompt.request_id(), question.clone());
+                // The answer takes a person; keep the connection's runtime
+                // free while they decide.
+                tokio::task::spawn_blocking(move || {
+                    let trusted = trust(question);
+                    if !trusted {
+                        lock(&host_trust).declined = true;
+                    }
+                    if let Some(broker) = broker_slot.get().and_then(Weak::upgrade) {
+                        broker.respond(
+                            request_id,
+                            if trusted {
+                                ConnectionPromptReply::TrustAndSave
+                            } else {
+                                ConnectionPromptReply::Cancel
+                            },
+                        );
+                    }
+                });
+                true
+            }
+            // Declined at once, which fails the test and says why:
+            // replacing the saved key is left to a real connection.
+            ConnectionPromptKind::HostKeyChanged(_) => {
+                lock(&host_trust).key_changed = true;
+                false
+            }
+            // Credential questions never get here: the broker is
+            // non-interactive and fails with a `MissingCredential`.
+            ConnectionPromptKind::Authentication(_) => false,
+        })
+    };
+    let broker = Arc::new(SshPrompts::new(events, shutdown_rx).non_interactive());
+    let _ = broker_slot.set(Arc::downgrade(&broker));
+    (broker, host_trust, shutdown_tx)
 }
 
 /// Why a test failed, in the words the notification shows.
@@ -263,6 +319,22 @@ impl FormSecrets {
         if let Some(proxy) = login.route.proxy_password() {
             typed.push((proxy, owned(request.proxy_password())));
         }
+        Self { typed, fallback }
+    }
+
+    /// Only the proxy's password from the form, for a test that logs in
+    /// nowhere but the jump hosts, with what they saved.
+    fn for_proxy(route: &LoginRoute, password: Option<&str>, fallback: SharedSecretStore) -> Self {
+        let typed = route
+            .proxy_password()
+            .map(|proxy| {
+                (
+                    proxy,
+                    password.map(|value| Zeroizing::new(value.to_string())),
+                )
+            })
+            .into_iter()
+            .collect();
         Self { typed, fallback }
     }
 }

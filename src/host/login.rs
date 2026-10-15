@@ -7,7 +7,10 @@ use std::path::PathBuf;
 
 use crate::secrets::SecretRef;
 
-use super::{AuthKind, Credential, CredentialKind, Host, ProxyKind, ProxySettings, SerialSettings};
+use super::{
+    AuthKind, Credential, CredentialKind, Host, ProxyKind, ProxySettings, SerialSettings,
+    TelnetSettings,
+};
 
 /// How a host's terminal connects, looked up by the store. Two equal values
 /// connect the same way, which is how an edit tells whether the host's
@@ -15,7 +18,106 @@ use super::{AuthKind, Credential, CredentialKind, Host, ProxyKind, ProxySettings
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HostConnection {
     Ssh(HostLogin),
+    Telnet(TelnetLogin),
     Serial(SerialLine),
+}
+
+impl HostConnection {
+    /// The endpoint and proxy password entries it reads, which the store
+    /// keeps while any host still does.
+    pub fn password_entries(&self) -> Vec<SecretRef> {
+        let (password, route) = match self {
+            HostConnection::Ssh(login) => (Some(login.password.clone()), &login.route),
+            HostConnection::Telnet(login) => (
+                login
+                    .auto_login
+                    .as_ref()
+                    .and_then(|auto_login| auto_login.password.clone()),
+                &login.route,
+            ),
+            HostConnection::Serial(_) => return Vec::new(),
+        };
+        [password, route.proxy_password()]
+            .into_iter()
+            .flatten()
+            .collect()
+    }
+}
+
+/// What a Telnet host's terminal connects to, and how it logs in, if it
+/// does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct TelnetLogin {
+    pub host: String,
+    pub port: u16,
+    /// How the connection reaches the host, as an SSH host's does.
+    pub route: LoginRoute,
+    /// Telnet 自动登录, when it is on.
+    pub auto_login: Option<TelnetAutoLogin>,
+}
+
+/// What Telnet 自动登录 types, and the prompts it waits for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct TelnetAutoLogin {
+    /// Empty for a device that asks only for a password.
+    pub user: String,
+    /// Where the password is kept: the endpoint's entry, or a password
+    /// credential's. `None` when there is none to type: the user does.
+    pub password: Option<SecretRef>,
+    /// Empty for the usual prompts.
+    pub user_prompt: String,
+    pub password_prompt: String,
+}
+
+impl TelnetLogin {
+    /// `host:port` reached directly, without 自动登录.
+    pub fn new(host: impl Into<String>, port: u16) -> Self {
+        Self {
+            host: host.into(),
+            port,
+            route: LoginRoute::Direct,
+            auto_login: None,
+        }
+    }
+
+    /// How `host` connects as if it were reached directly: its route takes
+    /// the store to look up. `credential` is ignored unless it is the one the
+    /// host names; one that is not a password credential gives only its
+    /// user name.
+    pub fn of(host: &Host, settings: &TelnetSettings, credential: Option<&Credential>) -> Self {
+        let address = host.address.to_string();
+        let prompts = |user: String, password: Option<SecretRef>| TelnetAutoLogin {
+            user,
+            password,
+            user_prompt: settings.user_prompt.to_string(),
+            password_prompt: settings.password_prompt.to_string(),
+        };
+        let auto_login = match credential
+            .filter(|credential| host.credential == Some(credential.id))
+        {
+            Some(credential) => Some(prompts(
+                credential.user.to_string(),
+                (credential.kind == CredentialKind::Password).then(|| credential.password_secret()),
+            )),
+            None if host.auth == AuthKind::Password => Some(prompts(
+                host.user.to_string(),
+                Some(SecretRef::password(host.user.as_ref(), &address, host.port)),
+            )),
+            None => None,
+        };
+        Self {
+            auto_login,
+            ..Self::new(address, host.port)
+        }
+    }
+
+    /// The same connection, reaching the host by `route`.
+    pub fn with_route(mut self, route: LoginRoute) -> Self {
+        self.route = route;
+        self
+    }
 }
 
 /// What a serial host's terminal opens: the device, and how its line is set.
@@ -342,6 +444,53 @@ mod tests {
             Some(SecretRef::proxy("me", "127.0.0.1", 7890))
         );
         assert_eq!(LoginRoute::Direct.proxy_password(), None);
+    }
+
+    #[test]
+    fn telnet_logs_in_only_when_told_and_with_a_password_credential_s_password() {
+        let telnet = |auth: AuthKind, user: &str| {
+            let mut draft = HostDraft::telnet("switch", "10.0.0.5", 23, None);
+            draft.auth = auth;
+            draft.user = user.into();
+            Host::new(HostId(1), draft)
+        };
+        let prompts = TelnetSettings {
+            user_prompt: "账号：".into(),
+            password_prompt: "".into(),
+        };
+        let off = TelnetLogin::of(&telnet(AuthKind::NoPassword, "admin"), &prompts, None);
+        assert_eq!(off.auto_login, None);
+        assert_eq!((off.host.as_str(), off.port), ("10.0.0.5", 23));
+        assert!(HostConnection::Telnet(off).password_entries().is_empty());
+
+        let typed = TelnetLogin::of(&telnet(AuthKind::Password, ""), &prompts, None);
+        let auto_login = typed.auto_login.clone().unwrap();
+        assert_eq!(auto_login.user, "");
+        assert_eq!(auto_login.user_prompt, "账号：");
+        assert_eq!(
+            auto_login.password,
+            Some(SecretRef::password("", "10.0.0.5", 23))
+        );
+        assert_eq!(
+            HostConnection::Telnet(typed).password_entries(),
+            [SecretRef::password("", "10.0.0.5", 23)]
+        );
+
+        let password = credential(CredentialKind::Password);
+        let mut host = telnet(AuthKind::Password, "");
+        host.credential = Some(password.id);
+        let saved = TelnetLogin::of(&host, &prompts, Some(&password))
+            .auto_login
+            .unwrap();
+        assert_eq!(saved.user, "deploy");
+        assert_eq!(saved.password, Some(password.password_secret()));
+        // A key is no use to Telnet: only the user name is typed.
+        let key = credential(CredentialKind::Key);
+        host.credential = Some(key.id);
+        let keyed = TelnetLogin::of(&host, &prompts, Some(&key))
+            .auto_login
+            .unwrap();
+        assert_eq!((keyed.user.as_str(), keyed.password), ("deploy", None));
     }
 
     #[test]

@@ -8,7 +8,7 @@ ShellRS（crate 与二进制都叫 `shellrs`）是 Xshell / WinSCP 式的 SSH �
 
 - **术语。** 保存的一项叫「主机」（量词「台」），代码和库里叫 host（`Host`、`HostId`、`HostStore`、`hosts` 表）。它以前叫「会话」/ `Session`，已全部改掉，新代码和文案别再用。填 IP / 域名的字段叫「地址」（`Host.address`）。SSH 协议层的 session（「SSH 会话通道」、russh 的 `Session`、SFTP 会话）照旧。英文用词见「多语言」的用词表。
 - **两种不保存的连接。** 「外部连接」：堡垒机像调 Xshell（`ssh://`、`-url`）或 WinSCP（`sftp://`）一样拉起 ShellRS，只开一个终端或 SFTP 标签（`HostStore::is_external`）。「临时连接」：标题栏「临时连接…」打开，功能齐全。两者共同的「不保存」在代码里叫 temporary（`HostInfo::temporary`）。
-- **全是真的。** SQLite（`~/Library/Application Support/shellrs/shellrs.db`，`SHELLRS_DATA_DIR` 可覆盖目录）、本地终端（`portable-pty` + `alacritty_terminal`）、SSH（`russh`）、串口（`serial2`，`portable-pty` 本来就带着它）、SFTP（双栏、传输队列、断点续传）、端口转发（`-L` / `-R` / `-D`）、凭据、连接方式（直连、多级跳板、HTTP / SOCKS5 代理）、右侧栏十一个工具、内置编辑器和预览、外部 CLI、在线升级、匿名使用统计（Aptabase）。密码和口令只进系统钥匙串（`keyring`），**数据库里永远不出现秘密**。
+- **全是真的。** SQLite（`~/Library/Application Support/shellrs/shellrs.db`，`SHELLRS_DATA_DIR` 可覆盖目录）、本地终端（`portable-pty` + `alacritty_terminal`）、SSH（`russh`）、Telnet（协议自己写）、串口（`serial2`，`portable-pty` 本来就带着它）、SFTP（双栏、传输队列、断点续传）、端口转发（`-L` / `-R` / `-D`）、凭据、连接方式（直连、多级跳板、HTTP / SOCKS5 代理）、右侧栏十一个工具、内置编辑器和预览、外部 CLI、在线升级、匿名使用统计（Aptabase）。密码和口令只进系统钥匙串（`keyring`），**数据库里永远不出现秘密**。
 
 做 UI 之前先读 `gpui-kit` 与 `gpui-kit-design-guides` 两个技能（其中的 Coding Guides 和 Design Guides 在本仓库是规范，不是参考）。不要凭记忆臆造 gpui-kit API：以 `~/.cargo/registry/src/*/gpui-component-0.6.1/`、`gpui-base-0.6.1/` 的源码或 `https://gpui-kit.com/component/<name>.md` 为准。
 
@@ -20,7 +20,7 @@ ShellRS（crate 与二进制都叫 `shellrs`）是 Xshell / WinSCP 式的 SSH �
 - **SFTP**：Dock 标签，每次「打开 SFTP」新开一个、各自连接。操作对标 WinSCP Commander：两行工具栏、路径标签、WinSCP 的列、高亮多选、「名称」格才是项目、框选。本地侧与远程侧对称，本地删除进废纸篓；书签按主机、按侧持久化。传输进行中还能再发起，新批次在标签底部的传输队列里排队，不做前台进度对话框。传输逻辑按 WinSCP（用户反馈小文件太慢后定的）：一批里同时传的文件数是「设置 › SFTP › 传输 › 最大同时传输数量」（默认 3，可选 1–10），文件夹里的等文件夹建好；但走标签的同一条 SFTP 会话，不像 WinSCP 另开连接（不另登录，堡垒机上也能用）。小于 100 KB 的不走 `.filepart`、不续传（WinSCP 默认的 100 KB）。大小列默认整 KB，右键列标题可切换。「显示隐藏文件」（`.` 开头的）本地、远程各一个开关、互不影响，每侧对所有标签生效，存进设置，默认不显示；工具栏用睁眼 / 闭眼两个图标表示状态，不用选中效果；显示时隐藏文件的文字浅一些。文件图标默认单色（gpui-kit 规范：一个产品一套图标）；用户反馈后加了「设置 › SFTP › 图标风格」可换彩色（对标 WinSCP / Xftp），只管文件列表和传输确认框里的文件图标，工具栏、路径标签不变。彩色取自 Material Icon Theme（MIT），只带服务器、项目、主目录常见的约 160 个，普通文件夹改成黄色（它本身的蓝灰太像单色）；Linux 的 `/dev`、`/media` 不按它的项目含义配图标。「查找文件」只在远程侧（同 WinSCP，工具栏、空白处菜单、⌘F）：逐层发普通的 `List`（同时 4 个）。用户要求和 WinSCP 一致：掩码匹配整个名称（不带通配符也不是「包含」），普通掩码只找文件、以 `/` 结尾的找文件夹；进入链接到目录的符号链接，按 `List` 返回的真实路径防循环；不跳过 `/proc` 之类，没有数量上限。只有隐藏文件跟远程侧的「显示隐藏文件」走。它是单独的普通窗口（同 WinSCP，可以被主窗口盖住），不用 gpui-kit 的对话框（那只能是模态的）：每个 SFTP 标签最多一个，定位、编辑、下载把主窗口切到前面、查找窗口留着；关窗口就停止查找、丢掉结果，只记住上次的文件名。结果的排序、多选、框选和键同主窗口的文件列表（`Selection` 按路径、点标题循环排序、文件夹在前、「名称」格才是结果，指针处理和框选与文件面板共用 `marquee.rs`）；右键菜单就是下方那几个按钮（空白处只有「复制结果」），菜单项派发的是文件列表的 `ExplorerShortcut`，由查找窗口自己处理；下载、删除作用于所有选中的，删除在查找窗口里确认，经标签的 `DeletePaths` 执行，完成后标签把结果告诉窗口。SFTP 标签暂不做目录同步（外部 CLI 有 `shellrs sync`）、过滤、目录树和 Dock 布局持久化。
 - **主机树**：搜索匹配主机（名称、地址、用户）和分组名；分组名匹配时列出整个分组，回车只连本身匹配的第一台主机（按树的顺序）。首次启动是空库；分组可任意嵌套，主机可以不属于分组；删除分组连同子分组和主机，确认框写明数量。
 - **主机对话框**：
-  - 名称下面是「协议」：SSH / 串口（Telnet 以后再说）。协议在创建后不能改（用户定的）：编辑时另一段不可选，CLI `update` 改协议报错，store 的 `update_unnotified` 也拒绝。这样跳板、端口转发、开着的 SFTP 标签永远不会指向串口主机。
+  - 名称下面是「协议」：SSH / Telnet / 串口。协议在创建后不能改（用户定的）：编辑时另一段不可选，CLI `update` 改协议报错，store 的 `update_unnotified`（比较 `ProtocolKind`）也拒绝。这样跳板、端口转发、开着的 SFTP 标签永远不会指向 Telnet 或串口主机。
   - 认证方式三选一：「密码」（留空就每次连接时询问，不悄悄试密钥）、「使用凭据」、「无密码」（依次试服务器免认证、SSH Agent、`~/.ssh` 默认私钥，服务器要密码就报错、不询问）。主机自己没有私钥文件，要用私钥就建密钥凭据。
   - 「测试连接」是真登录，不强制填密码。
   - 连接方式三选一：直接连接、SSH 跳板、代理连接。跳板只走列出的链（跳板自己的连接方式不参与），不做拖动排序；删掉的跳板留「已删除的主机」占位，连接时直接报错。代理是 HTTP `CONNECT` 或 SOCKS5，失败直接报错、不弹问答。跳板和代理不叠加。
@@ -32,6 +32,15 @@ ShellRS（crate 与二进制都叫 `shellrs`）是 Xshell / WinSCP 式的 SSH �
   - 对话框：串口设备（`Input` 加右端下拉列出检测到的端口和「重新检测」，macOS 只列 `cu.*`）和波特率（常用值下拉、可手填）一行，数据位 / 校验位 / 停止位 / 流控一行四个 `Select`；默认 115200 8N1、无流控。流控只有无、RTS/CTS、XON/XOFF（`serial2` 没有 DSR/DTR，macOS、Linux 的 termios 也没有）。「测试连接」照样有（用户要的）：按表单的参数打开串口再关掉（`ConnectionTester::test_serial` → `serial::check`），只说明本机能不能打开。临时连接也能选串口。
   - 连接是普通的远程终端标签（`TerminalPanel`、`CenterTab::Terminal`），状态点、回车重连都有；改参数经 `HostConnection` 比较后重连。每次「连接」照旧新开标签（用户定的），Unix 上 `TIOCEXCL` 独占，第二个标签报「已被占用」。
   - 没有 SFTP、复制 IP、跳板、端口转发；右侧栏只有命令片段（同外部连接）；标签菜单有「发送 Break」（约 0.3 秒）。外部 CLI 的 `hosts` 能列、能建能改（`protocol`、`serial`），`exec`（含 `--terminal`）和传输报 `not_ssh`。
+- **Telnet 主机**（协议不引入第三方库，用户定的）：截图只作布局参考，文案沿用现有的，不加「＋新建凭据」和「高级设置」。
+  - 对话框：地址加端口一行（默认 23；新建主机时端口没改过就随协议在 22 ↔ 23 间切换）、「Telnet 自动登录」复选框（默认关）。勾上后：认证方式「手动输入 / 使用凭据」；手动是用户名（可选）和密码（可选）一行；凭据只列密码凭据（加主机当前那条），用户名和密码都取自凭据，同 SSH（用户定的）；再下面用户名 / 密码提示文本一行，留空用常见提示。连接方式、分组、备注同 SSH。临时连接也能选 Telnet，密码只在内存。
+  - 存法复用 SSH 的列：自动登录关 = `no-password`，手动 = `password`（用户名可空，密码在 `SecretRef::password(user, address, port)`），凭据 = `credential_id`。提示文本在 `Protocol::Telnet(TelnetSettings)` 和库里的 `telnet_user_prompt` / `telnet_pass_prompt`（NULL 是常见提示；列名避开 password，守卫测试要求）。凭据后来改成密钥 / Agent 时照旧挂着，只输入用户名（少见，不做释放或拒绝）。
+  - 自动登录（`telnet/auto_login.rs`，纯逻辑）：只看光标所在行的结尾（去 ANSI、忽略行尾空白、不分大小写），输出停 100 ms 才答；默认提示 `login:`、`username:`、`user name:`、`password:`，填了就只认填的。先看密码提示（只问密码的设备直接给密码），每项最多一次；第二次出现用户名提示（登录失败）就停；用户敲了不以 ESC 开头的键就停（ESC 开头的是终端应答、方向键）。不弹框、不重试。
+  - 协议（`telnet/protocol.rs`，不碰 IO）：等服务器先协商（同 PuTTY 的被动模式：JPL Horizons 这类服务器收到抢先的选项字节会回显或出错；从不协商的服务器什么也收不到），再请求 WILL NAWS / TTYPE / SGA、DO SGA / ECHO（服务器已问过的不再问），BINARY 双向接受，其余拒绝，按简化的 RFC 1143 不回无变化的请求；TTYPE 报 `XTERM-256COLOR`；NAWS 随改大小发；回车 CR → CR LF（同 PuTTY 默认，粘贴的 `\r\n` 不翻倍）；收到 CR NUL → CR；「发送 Break」= `IAC BRK`；对方关闭算 `Exited{code: 0}`。
+  - 本地回显（用户要的简单版，`telnet/local_line.rs`，纯逻辑）：服务器没答应回显（`WILL ECHO`）时同 PuTTY 的默认，在本地编辑一行：打的字显示出来，退格 / Ctrl+U 删（宽字符删两列），Enter 整行发出；Tab 算进行里，其余控制键（^C、^D）跟在这行后面立刻发；ESC 开头的写入（方向键、终端应答）原样发、不显示。服务器改成回显时，没发的那段立刻发出。自动登录输入的不显示。自己回显却不协商的设备会显示两遍，不做开关。
+  - 连接方式同 SSH：路线走 `SshConnector::open_route`（直连 / 代理 / 跳板到任意 地址:端口，SSH 登录也从它开始），跳板用各自保存的登录、问答写明跳板名。Telnet 主机不能当跳板或转发的经由主机（`ssh_hosts` / `saved_ssh_host` 只认 SSH）。「测试连接」只走通路线（`ConnectionTester::test_telnet`），不试自动登录。
+  - 终端是普通远程终端标签：回车重连、改设置经 `HostConnection` 比较后重连、「发送 Break」、复制 IP；没有 SFTP、「文件」、延迟、系统探测；右侧栏只有命令片段；图标是名称首字，悬停写「Telnet」。只按 UTF-8 显示。不做 `telnet://` 外部连接（用户定的）。
+  - 外部 CLI：`protocol` 为 `telnet`，`telnet` 里是两个提示文本；`auth` 就是自动登录，只收密码凭据，给了 `user` / `password` 没给 `auth` 时打开自动登录；`exec`、传输报 `not_ssh`（Telnet 自己的文案）。统计是 `Counter::Telnet`（键 `telnet`）。
 - **端口转发**：侧栏第二个列表，不是 Dock 标签；标题栏「ShellRS」后面三个图标切换主机 / 端口转发 / 凭据。
   - 一条规则经由一台保存的主机，自己建连接：不算主机的连接状态，主机「断开连接」不停它；删除主机连同规则一起删。
   - 「创建」只保存不启动，可设「启动 ShellRS 时自动开启」；新建时「经由主机」留空，由用户自己选。
@@ -56,7 +65,7 @@ ShellRS（crate 与二进制都叫 `shellrs`）是 Xshell / WinSCP 式的 SSH �
   - 中间区分屏时不隐藏：跟着最近一次在前（切到或焦点点进）、而且还在屏幕上的远程终端；点进另一半的 SFTP、本地终端等不换；屏幕上一个远程终端都没有才隐藏。标题写出主机（「系统监控 · web-01」），状态栏也跟焦点走。用户比较过「分屏就隐藏」，选了这个。
   - 工具从上到下：命令片段、历史命令、文件、tmux、Docker、Kubernetes、系统服务、进程管理、网络连接、系统监控、GPU/NPU（「文件」排在历史命令之后，用户定的）。
   - 「设置 › 终端 › 侧栏功能」（在「终端交互」和「通知」之间，用户定的）是两排图标（`settings/sidebar_tools.rs`）：上排显示、下排不显示，图标下写名称，点击或拖到另一排就切换，悬停显示用途（用户嫌复选框不好使）。GPU/NPU 和 Kubernetes 默认不显示（不是每台机器都有卡或 kubectl，用户定的），以后的同类工具也加在这里。`settings.json` 的 `sidebar_tools` 只存和默认不同的（`ToolKind::key`，发布后不能改），新工具自带默认值、不用迁移。组内「恢复默认」只管这一组（gpui-kit 只有整页重置）。只在设置里改：图标列的右键勾选菜单做过又去掉了（用户嫌意义不大、增加复杂度），别加回来。全部隐藏时图标列整个消失，只能回设置。过滤只在 `offered_tools`，设置变了要 `sync_tool_sidebar`。
-  - 已知不是 Linux 的主机不显示系统监控、GPU/NPU、网络连接、进程管理、系统服务；已知是 Windows 的再去掉 tmux、Docker、Kubernetes 和历史命令；外部连接只有命令片段。
+  - 已知不是 Linux 的主机不显示系统监控、GPU/NPU、网络连接、进程管理、系统服务；已知是 Windows 的再去掉 tmux、Docker、Kubernetes 和历史命令；外部连接、Telnet 和串口主机只有命令片段。
   - 系统监控每 2 秒读一次（运行时长随读数刷新，不自己走），磁盘每 30 秒，只在显示时读。≥ 70% 黄、≥ 90% 红。
   - GPU/NPU（用户要的 AI 主机显卡运维，没合并 PR #19 塞进系统监控的做法）：NVIDIA 读 `nvidia-smi` 的 CSV 查询和计算进程，华为昇腾解析 `npu-smi info` 的表格，其他厂商暂不支持；`ps` 补进程的用户和命令行。按 8 卡设计：汇总（显存写占用比例、下面一行已用 / 总量，半格放不下几百 GB）、每卡三行（利用率、显存各一行，名称和数值定宽，两根条一样长；点开看详情，「全部展开 / 全部收起」，只有一张卡时默认展开）、计算进程（右键结束，沿用进程管理的 `EndProcess`）。读完 2 秒后再读；运行时长在同一个脚本里读 `/proc/uptime`，随读数 2 秒一跳、不自己走（用户定的，同系统监控）；刷新按钮只在点了刷新时转（每 2 秒转一次用户嫌过度）。每个工具 `timeout -s KILL 3`；读失败或被停掉就停止自动读取，点刷新再读（卡掉了时 `nvidia-smi` 会卡在驱动里，一直重试会堆积进程）。利用率和显存不变色（跑满、预占显存是常态），只有温度（≥ 80 °C 黄、≥ 90 °C 红）和健康状态（ECC 不可纠正错误、昇腾 Health 不是 OK）上色。昇腾的解析只按公开样例写，没在真机上验证过。
   - tmux（用户要的：最小功能加重命名，没装时的样子按用户给的图：顶部和中间都写「远端未安装 tmux」，按钮不可用）：列表、新建、连接、退出当前、重命名、结束会话（先确认）。列表在终端连接上读 `tmux ls`，不自己刷新（同 Docker），动作之后重读，往终端打字后 1 秒再读。默认显示。
@@ -95,7 +104,7 @@ ShellRS（crate 与二进制都叫 `shellrs`）是 Xshell / WinSCP 式的 SSH �
 - **设置 › 应用 › 窗口**：「记住窗口大小」（含最大化）和「记住窗口位置」两个开关，默认都开，下次启动生效。屏幕不在了或窗口不在屏幕上就居中，比屏幕大就缩小；全屏不记。
 - **终端交互**：「选中复制」默认关；「右键行为」无动作 / 粘贴 / 显示菜单，默认显示菜单。
 - **标签连接状态**：远程终端和 SFTP 标签按自己的连接（不是主机的汇总）画图标：已连接是彩色的；连接中和断开时图标灰底灰图（`HostMark::connection_state`），标题文字也变灰（`ClosableTabTitle::connection_state`），图标的悬停说明加上状态（「Ubuntu · 未连接」）。原来图标右下角的黄 / 红小点已去掉（用户定的：彩色就是在线）。只在标签上变灰，主机列表、最近连接、快速连接、编辑器标签一律彩色。远程终端断开后（失败、退出、断开、取消认证）按无修饰的 Enter 在原标签重连，本地终端不做。
-- **主机图标一律彩色**：没有品牌色的（未探测到系统的首字、macOS 和 AlmaLinux 的单色 logo）按地址（串口用设备路径）取色：`shared::mark_color`，FNV-1a 哈希对固定调色板取模，去掉首尾空白、不分大小写。调色板 13 色，都能放白字（对比度 ≥ 4.5），没有灰、红、黄（用户定的：绝不能灰，灰色留给离线）。哈希不能换成 std 的：颜色要跨版本不变。串口主机不另画图标，同样是名称首字（用户定的），只是悬停说明写「串口」。
+- **主机图标一律彩色**：没有品牌色的（未探测到系统的首字、macOS 和 AlmaLinux 的单色 logo）按地址（串口用设备路径）取色：`shared::mark_color`，FNV-1a 哈希对固定调色板取模，去掉首尾空白、不分大小写。调色板 13 色，都能放白字（对比度 ≥ 4.5），没有灰、红、黄（用户定的：绝不能灰，灰色留给离线）。哈希不能换成 std 的：颜色要跨版本不变。串口和 Telnet 主机不另画图标，同样是名称首字（用户定的），只是悬停说明写「串口」「Telnet」。
 - **终端通知**：只做程序请求的（OSC 9 / 777）和响铃，不做 OSC 133 长命令通知：那要每台服务器装 shell 集成，收益不抵成本。（OSC 7 目录报告是另一回事：只给「文件」跟随用，用户同意后才往服务器写配置。）不在前台发系统通知，在前台而终端在别的标签发应用内通知；响铃在终端就在眼前时不提醒。
 - **界面字号**（issue #24）：「外观 › 常规」第三项，下拉框 12–20 每 1 px 一档，默认 16，即 gpui-kit 的默认、原来的大小。它就是 gpui-kit 主题的 `font_size`，界面的 rem 随它缩放（`settings::apply` 在换主题之后设）；终端字号另设。终端外的 ⌘= / ⌘- / ⌘0 直接改这个设置（用户定的，以前是不保存的临时缩放）。
 - **主题**：「应用外观」（浅色 / 深色 / 跟随系统）决定深浅；「外观 › 主题」左右两栏里浅色、深色各选一套，按当前外观生效。组里第一项「界面跟随主题」默认关闭：界面是中性的灰（浅色是 gpui-kit 默认主题，深色见下条），只有终端按主题配色；打开后界面也按主题配色。用户试过默认跟随，觉得中性界面更合适，别改回去。
@@ -149,13 +158,16 @@ cargo test -- --ignored                     # 会读写真实钥匙串的测试�
 - `host/`：主机、分组、凭据、端口转发规则和命令片段的模型（它们同库、随主机级联删除，所以都放在这里，host 不依赖其他功能模块），以及：
   - `HostStore`：内存是唯一事实来源，写穿到 SQLite；
   - `database.rs`：`SCHEMA`、迁移；
-  - `login.rs`：登录快照 `HostLogin`；
+  - `protocol.rs`：`Protocol`（SSH / Telnet / 串口，带各自的设置）和 `ProtocolKind`；
+  - `login.rs`：登录快照 `HostLogin`、`TelnetLogin` 和 `HostConnection`；
   - 主机树面板、主机和分组对话框、快速连接、`ssh_link.rs`（解析堡垒机链接）。
 - `connection.rs`：问答协议（`ConnectionPrompt`…）、`Latency`、测试连接的 `LoginTest` / `ConnectionTester`。
 - `ssh/`：
-  - `SshConnector`：所有登录都走它（终端、SFTP、exec、测试连接、端口转发、外部 CLI）。
+  - `SshConnector`：所有登录都走它（终端、SFTP、exec、测试连接、端口转发、外部 CLI）；`open_route` 是到任意 地址:端口 的路线（直连 / 代理 / 跳板），Telnet 也用它。
+  - `worker.rs`：`run_terminal_worker`，远程终端传输的 tokio 运行时、命令桥线程和问答路由，SSH 和 Telnet 终端共用。
   - 远程终端的传输：pty、系统探测、延迟、旁路 exec 和 SFTP 通道（右侧栏「文件」）。
   - 代理握手；外部 CLI 用的 `run_command`。
+- `telnet/`：Telnet 主机的终端传输（`TelnetTransportProvider`）、不碰 IO 的协议状态机（`protocol.rs`）、自动登录（`auto_login.rs`）和服务器不回显时的本地行编辑（`local_line.rs`）。
 - `serial/`：串口主机的终端传输（`SerialTransportProvider`，读线程加命令循环，同 `local_pty.rs`）和本机串口列表（`available_ports`）。
 - `terminal/`：本地 PTY 和它跑的 shell（`local_shell.rs`：命令行拆分、已安装的 shell、Windows 的默认 shell）、驱动 `alacritty_terminal` 的引擎、`TerminalView`（网格、选区、查找、清屏）、关键字高亮（`highlight.rs`）、终端字体全局量、右侧栏工具共用的 `ExecTarget`、目录报告（`directory.rs`：OSC 7 / 1337 的解析）和「文件」目录跟随的远端脚本（`directory_setup.rs`：检测、安装、bash / zsh 片段）。
 - `sftp/`：可注入的传输和本地目录接口、`RemotePath`、`RemoteFs` 协议适配、worker（批次、三次重连、空闲断网检测），以及：
@@ -190,11 +202,12 @@ cargo test -- --ignored                     # 会读写真实钥匙串的测试�
   - 秘密不放进派生了 `Debug` 的 `HostDraft` / `CredentialDraft`。
   - 对话框里的密码字段是异步预填的，`*_loaded` 标志没置上之前，空字段不算「用户清空了」。
 - **私钥文件。** ShellRS 保存的私钥在 `keys/` 下（目录 0700、文件 0600，经临时文件改名写入）。只有没人再用时才删这个目录下的文件；用户自己的私钥文件从不改动或删除。
-- **登录快照在 UI 线程解析。** 工作线程读不到 store，拿到的是 `HostLogin`：凭据和跳板都已查好。它只含影响登录的字段并派生 `PartialEq`：改主机或凭据时比较前后快照，不同才发 `ConnectionSettingsChanged` 重连，所以只改名称不重连。比较的是 `HostConnection`（SSH 的 `HostLogin` 或串口的 `SerialLine`），终端按它经 `HostTerminalTransports` 选传输；`login_of` 只给 SSH 的使用方，串口主机不进钥匙串的清理（`ssh_login`）。
+- **登录快照在 UI 线程解析。** 工作线程读不到 store，拿到的是 `HostLogin`：凭据和跳板都已查好。它只含影响登录的字段并派生 `PartialEq`：改主机或凭据时比较前后快照，不同才发 `ConnectionSettingsChanged` 重连，所以只改名称不重连。比较的是 `HostConnection`（SSH 的 `HostLogin`、Telnet 的 `TelnetLogin` 或串口的 `SerialLine`），终端按它经 `HostTerminalTransports` 选传输；`login_of` 只给 SSH 的使用方。钥匙串的清理按 `HostConnection::password_entries`（SSH 的密码和代理密码、Telnet 自动登录的密码和代理密码，串口没有）。
 - **id 由内存分配**，四个独立计数器，重启后从库里最大 id + 1 开始，删掉的最大号会被复用。对外只给 `PublicId`（16 位随机串，改名、改地址都不变，不复用），不给 `HostId`。
-- **改表**：现在 `SCHEMA_VERSION` 是 15，所有表都是 `STRICT`。
+- **改表**：现在 `SCHEMA_VERSION` 是 16，所有表都是 `STRICT`。
   - 改表要升版本、在 `STEPS` 里加一步，并加一个「用冻结的旧 schema 升级、再和新库比对」的测试。
   - 加列直接 `ALTER TABLE ADD COLUMN`，在 `SCHEMA` 里也写在最后一列之后。
+  - 改不了的（列上的 CHECK，如 16 给 `protocol` 加 `telnet`）就重建表，用 `Step::Code`（`add_telnet`）：外键在事务外关掉（事务里改不了，开着时 `DROP TABLE` 会级联删掉子表的行），经 TEMP 表拷出，按 `SCHEMA` 原文建表、显式列名拷回、重建索引，再开外键。不用 `ALTER TABLE … RENAME`：SQLite 会把表名存成带引号的，和 `SCHEMA` 比对不上，还会改写子表的外键。
   - 库只往前升：旧版本遇到新库直接报错、不动文件。迁移前先 `VACUUM INTO` 备份。
 - **窗口的大小和位置存在 `window.json`，不进 `settings.json`**（`workspace/window_state.rs`）：移动、缩放时 `observe_window_bounds` 记下，停 0.5 秒再写；退出时再写一次，用 App 级的 `on_app_quit`，因为 Windows / Linux 关窗口时工作区已经先没了。只有 `Workspace::new` 记，UI 测试不碰这个文件。
   - 启动时 `main` 先读设置和 `window.json` 再开窗口，`window_options` 按两个开关算 `window_bounds` 和 `display_id`。
@@ -243,7 +256,8 @@ cargo test -- --ignored                     # 会读写真实钥匙串的测试�
 | 图标风格：单色 / 彩色 | Icon style: Monochrome / Color |
 | 应用更新 / 稳定版 / 重启并安装 / 查看更新内容 | Updates / Stable / Restart to update / What’s new |
 | 连接 / 断开连接 / 重新连接 | Connect / Disconnect / Reconnect |
-| 协议：SSH / 串口 | Protocol: SSH / Serial |
+| 协议：SSH / Telnet / 串口 | Protocol: SSH / Telnet / Serial |
+| Telnet 自动登录 / 手动输入 / 用户名提示文本 / 密码提示文本 | Log in automatically / Manual / Username prompt / Password prompt |
 | 串口设备 / 波特率 / 数据位 / 校验位（无 / 奇校验 / 偶校验）/ 停止位 / 流控 | Serial port / Baud rate / Data bits / Parity (None / Odd / Even) / Stop bits / Flow control |
 | 发送 Break | Send break |
 | 已连接 / 未连接 / 连接中 | Connected / Not connected / Connecting |

@@ -2,6 +2,7 @@ use super::{
     connection::{SshConnectionConfig, SshConnector, SshHandle, SshPrompts},
     latency::{LATENCY_INTERVAL, round_trip},
     probe::{HostOsProbe, ProbeOutcome},
+    run_terminal_worker,
     tester::describe_login_error,
 };
 use crate::{
@@ -14,22 +15,17 @@ use crate::{
         TerminalTransportEvent, TerminalTransportFactory,
     },
 };
-use anyhow::{Context as _, Result, anyhow, bail};
+use anyhow::{Result, anyhow, bail};
 use async_channel::Sender;
 use russh::{ChannelMsg, client};
 use std::{
     collections::VecDeque,
     future::Future,
     pin::Pin,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
-    thread,
+    sync::{Arc, mpsc},
     time::Duration,
 };
-use tokio::sync::{mpsc as tokio_mpsc, watch};
+use tokio::sync::mpsc as tokio_mpsc;
 use tokio::time::MissedTickBehavior;
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 /// How long a command run beside the shell may take. Generous: a slow disk
@@ -78,34 +74,9 @@ impl TerminalTransport for SshTerminalTransport {
         commands: mpsc::Receiver<TerminalTransportCommand>,
         events: Sender<TerminalTransportEvent>,
     ) -> Result<()> {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .context(t!("ssh.terminal.runtime_failed"))?;
-        let (command_tx, command_rx) = tokio_mpsc::unbounded_channel();
-        let stop = Arc::new(AtomicBool::new(false));
-        let bridge_stop = stop.clone();
-        let bridge = thread::Builder::new()
-            .name("shellrs-ssh-command-bridge".into())
-            .spawn(move || {
-                while !bridge_stop.load(Ordering::Acquire) {
-                    match commands.recv_timeout(Duration::from_millis(20)) {
-                        Ok(command) => {
-                            if command_tx.send(command).is_err() {
-                                break;
-                            }
-                        }
-                        Err(mpsc::RecvTimeoutError::Timeout) => {}
-                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                    }
-                }
-            })
-            .context(t!("ssh.terminal.bridge_failed"))?;
-
-        let result = runtime.block_on(self.run_async(initial_size, command_rx, events));
-        stop.store(true, Ordering::Release);
-        let _ = bridge.join();
-        result
+        run_terminal_worker(commands, events.clone(), |broker, io_rx| {
+            self.run_async(initial_size, broker, io_rx, events)
+        })
     }
 }
 
@@ -113,42 +84,10 @@ impl SshTerminalTransport {
     async fn run_async(
         &self,
         initial_size: TerminalSize,
-        mut bridge_commands: tokio_mpsc::UnboundedReceiver<TerminalTransportCommand>,
+        broker: Arc<SshPrompts>,
+        mut io_rx: tokio_mpsc::UnboundedReceiver<TerminalTransportCommand>,
         events: Sender<TerminalTransportEvent>,
     ) -> Result<()> {
-        let (io_tx, mut io_rx) = tokio_mpsc::unbounded_channel();
-        let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let prompt_events = events.clone();
-        let broker = Arc::new(SshPrompts::new(
-            Arc::new(move |prompt| {
-                prompt_events
-                    .try_send(TerminalTransportEvent::Prompt(prompt))
-                    .is_ok()
-            }),
-            shutdown_rx,
-        ));
-        let router_broker = broker.clone();
-        let router = tokio::spawn(async move {
-            while let Some(command) = bridge_commands.recv().await {
-                match command {
-                    TerminalTransportCommand::PromptReply { request_id, reply } => {
-                        router_broker.respond(request_id, reply);
-                    }
-                    TerminalTransportCommand::Shutdown => {
-                        let _ = shutdown_tx.send(true);
-                        router_broker.cancel_all();
-                        let _ = io_tx.send(TerminalTransportCommand::Shutdown);
-                        break;
-                    }
-                    command => {
-                        if io_tx.send(command).is_err() {
-                            break;
-                        }
-                    }
-                }
-            }
-        });
-
         // Said in the terminal: down to the cause, which says what to fix.
         let (handle, fingerprint) = self
             .connector
@@ -248,7 +187,6 @@ impl SshTerminalTransport {
                                 "zh-CN",
                             ).await;
                         }).await;
-                        router.abort();
                         return Ok(());
                     }
                     Some(TerminalTransportCommand::Exec(request)) if shell_only => {
@@ -325,7 +263,6 @@ impl SshTerminalTransport {
                 signal: exit_signal,
             })
             .await;
-        router.abort();
         Ok(())
     }
 }
@@ -440,6 +377,7 @@ mod tests {
     use russh::server::{self, Server as _};
     use russh::{MethodKind, MethodSet};
     use std::borrow::Cow;
+    use std::thread;
     use std::{path::Path, sync::Mutex};
 
     const TEST_PASSWORD: &str = "test-password";

@@ -111,6 +111,15 @@ cli.field.serial:
 cli.field.flow_control:
   zh-CN: 流控
   en: Flow control
+cli.field.telnet:
+  zh-CN: Telnet
+  en: Telnet
+cli.field.auto_login:
+  zh-CN: 自动登录
+  en: Automatic login
+cli.field.prompts:
+  zh-CN: 提示文本
+  en: Prompts
 cli.field.os:
   zh-CN: 系统
   en: System
@@ -147,6 +156,15 @@ cli.auth.credential:
 cli.auth.no_password:
   zh-CN: 无密码
   en: No password
+cli.auto_login.off:
+  zh-CN: 不自动登录
+  en: "Off"
+cli.auto_login.as_user:
+  zh-CN: "%{user} · %{password}"
+  en: "%{user} · %{password}"
+cli.prompts.usual:
+  zh-CN: 常见提示
+  en: the usual
 cli.flow.none:
   zh-CN: 无
   en: None
@@ -266,6 +284,9 @@ cli.server.not_absolute:
 cli.server.not_ssh:
   zh-CN: "%{name} 是串口主机，没有 SSH 连接，只能在 ShellRS 的终端里用"
   en: "%{name} is a serial host. It has no SSH connection and can only be used in a ShellRS terminal."
+cli.server.not_ssh_telnet:
+  zh-CN: "%{name} 是 Telnet 主机，没有 SSH 连接，只能在 ShellRS 的终端里用"
+  en: "%{name} is a Telnet host. It has no SSH connection and can only be used in a ShellRS terminal."
 # The app's notification when a second ShellRS starts.
 cli.server.another_app:
   zh-CN: 另一个 ShellRS 已在提供外部 CLI
@@ -302,12 +323,21 @@ cli.host.jump_temporary:
 cli.host.jump_serial:
   zh-CN: 跳板只能是 SSH 主机：%{id} 是串口主机
   en: "Jump hosts must be SSH hosts: %{id} is a serial host."
+cli.host.jump_telnet:
+  zh-CN: 跳板只能是 SSH 主机：%{id} 是 Telnet 主机
+  en: "Jump hosts must be SSH hosts: %{id} is a Telnet host."
 cli.host.protocol_fixed:
   zh-CN: 协议在创建后不能更改
   en: The protocol can’t be changed after the host is created.
 cli.host.serial_on_ssh:
   zh-CN: 只有串口主机有 serial
   en: Only a serial host has serial settings.
+cli.host.telnet_on_other:
+  zh-CN: 只有 Telnet 主机有 telnet
+  en: Only a Telnet host has telnet settings.
+cli.host.telnet_credential_kind:
+  zh-CN: Telnet 主机只能使用密码凭据
+  en: A Telnet host can only use a password credential.
 cli.host.ssh_fields_on_serial:
   zh-CN: 串口主机没有 host、port、user、auth、credential、password 和 route，设备和参数写在 serial 里
   en: A serial host has no host, port, user, auth, credential, password or route. Give its device and line in serial.

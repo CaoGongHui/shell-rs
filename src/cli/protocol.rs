@@ -247,6 +247,7 @@ pub struct HostInfo {
     pub user: String,
     /// A serial host's device.
     pub host: String,
+    /// A Telnet host's port too; a serial host's means nothing.
     pub port: u16,
     /// A serial host's line, `115200 8N1`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -262,10 +263,12 @@ pub struct HostInfo {
 }
 
 impl HostInfo {
-    /// `user@host:port`; a serial host's device and line.
+    /// `user@host:port`; a Telnet host's `host:port`; a serial host's
+    /// device and line.
     pub fn address(&self) -> String {
         match (self.protocol, &self.line) {
             (ProtocolChoice::Serial, Some(line)) => format!("{} · {line}", self.host),
+            (ProtocolChoice::Telnet, _) => format!("{}:{}", self.host, self.port),
             _ => format!("{}@{}:{}", self.user, self.host, self.port),
         }
     }
@@ -434,6 +437,7 @@ where
 pub enum ProtocolChoice {
     #[default]
     Ssh,
+    Telnet,
     Serial,
 }
 
@@ -486,7 +490,37 @@ pub struct SerialFields {
     pub flow_control: Option<FlowControlChoice>,
 }
 
-/// How a host logs in, as the CLI spells it.
+/// What a Telnet host's 自动登录 waits for, as `hosts show` prints it:
+/// `None` for the usual prompts.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TelnetDetails {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password_prompt: Option<String>,
+}
+
+/// A Telnet host's prompts as `hosts create` and `hosts update` take them:
+/// left out, left as they are; `null` or empty, the usual ones.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TelnetFields {
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub user_prompt: Option<Option<String>>,
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub password_prompt: Option<Option<String>>,
+}
+
+/// How a host logs in, as the CLI spells it. For a Telnet host, `password`
+/// and `credential` are its 自动登录's, and `no_password` is none.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthChoice {
@@ -516,7 +550,8 @@ pub enum CredentialKindChoice {
 /// takes. Never a secret: only whether one is saved, and only when shown.
 ///
 /// A serial host has no `host`, `port`, `user`, `auth` or `route`, which
-/// are left out; it has `serial` instead.
+/// are left out; it has `serial` instead. A Telnet host has what an SSH
+/// host has, and `telnet`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HostDetails {
     pub id: String,
@@ -544,6 +579,8 @@ pub struct HostDetails {
     pub route: Option<RouteDetails>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serial: Option<SerialDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telnet: Option<TelnetDetails>,
     pub notes: String,
     pub os: Option<String>,
     #[serde(default)]
@@ -577,12 +614,14 @@ pub enum RouteDetails {
 pub struct HostFields {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// A new host's; `serial` without it makes a serial host. An update may
-    /// repeat the host's own but not change it.
+    /// A new host's; `serial` or `telnet` without it makes a serial or a
+    /// Telnet host. An update may repeat the host's own but not change it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protocol: Option<ProtocolChoice>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serial: Option<SerialFields>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telnet: Option<TelnetFields>,
     #[serde(default, alias = "address", skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

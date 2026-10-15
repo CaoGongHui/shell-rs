@@ -869,6 +869,7 @@ fn saved_host(name: &str) -> HostDetails {
         password_saved: Some(true),
         route: Some(RouteDetails::Direct),
         serial: None,
+        telnet: None,
         notes: String::new(),
         os: None,
         temporary: false,

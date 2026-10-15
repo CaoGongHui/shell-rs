@@ -47,6 +47,9 @@ host.draft.baud:
 host.protocol.ssh:
   zh-CN: SSH
   en: SSH
+host.protocol.telnet:
+  zh-CN: Telnet
+  en: Telnet
 host.protocol.serial:
   zh-CN: 串口
   en: Serial
@@ -118,6 +121,9 @@ host.auth.credential:
 host.auth.no_password:
   zh-CN: 无密码
   en: No password
+host.telnet_auth.manual:
+  zh-CN: 手动输入
+  en: Manual
 
 host.route.direct:
   zh-CN: 直接连接
@@ -237,6 +243,12 @@ host.dialog.no_credentials:
 host.dialog.no_credentials_hint:
   zh-CN: 还没有凭据，可在侧栏的「凭据」中新建
   en: No credentials yet. Create one in the sidebar’s Credentials list.
+host.dialog.no_password_credentials:
+  zh-CN: 还没有密码凭据
+  en: No password credentials yet
+host.dialog.no_password_credentials_hint:
+  zh-CN: 还没有密码凭据，可在侧栏的「凭据」中新建
+  en: No password credentials yet. Create one in the sidebar’s Credentials list.
 host.dialog.credential_option:
   zh-CN: "%{name}（%{summary}）"
   en: "%{name} (%{summary})"
@@ -273,6 +285,24 @@ host.dialog.keychain_note:
 host.dialog.no_keychain_note:
   zh-CN: 系统钥匙串不可用，这台机器上无法保存密码，每次连接都会询问。
   en: The system keychain isn’t available, so passwords can’t be saved on this computer and are asked for at each connection.
+host.dialog.telnet_no_keychain_note:
+  zh-CN: 系统钥匙串不可用，这台机器上无法保存密码，连接后自己输入。
+  en: The system keychain isn’t available, so the password can’t be saved on this computer. Type it after connecting.
+host.dialog.telnet_auto_login:
+  zh-CN: Telnet 自动登录
+  en: Log in automatically
+host.dialog.telnet_password_placeholder:
+  zh-CN: 可选，留空则连接后自己输入
+  en: Optional; type it after connecting if left empty
+host.dialog.telnet_user_prompt:
+  zh-CN: 用户名提示文本
+  en: Username prompt
+host.dialog.telnet_password_prompt:
+  zh-CN: 密码提示文本
+  en: Password prompt
+host.dialog.telnet_prompt_note:
+  zh-CN: 留空使用常见提示，匹配时忽略大小写。用户名可留空以支持仅密码登录。
+  en: Leave a prompt empty for the usual ones; matching ignores case. Leave the username empty for a device that asks only for a password.
 host.dialog.reconnect_note:
   zh-CN: 保存后连接设置将立即生效并重连。
   en: Saving applies the connection settings at once and reconnects.
@@ -344,6 +374,9 @@ host.test.connected:
 host.test.serial_opened:
   zh-CN: "串口 %{device} 成功打开"
   en: "Opened the serial port %{device}"
+host.test.telnet_reached:
+  zh-CN: "%{address}:%{port} 连接成功（未测试自动登录）"
+  en: "Reached %{address}:%{port} (automatic login isn’t tested)"
 host.test.failed:
   zh-CN: 连接失败
   en: Couldn’t connect

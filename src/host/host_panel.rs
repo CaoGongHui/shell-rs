@@ -31,8 +31,8 @@ use crate::i18n::{UiLocale, t, tn};
 use crate::shared::{HostMark, RowTooltip, RowTooltips};
 
 use super::{
-    GroupId, Host, HostId, HostNode, HostOs, HostStore, NodeDrop, first_matching_host,
-    host_tree_items,
+    GroupId, Host, HostId, HostNode, HostOs, HostStore, NodeDrop, ProtocolKind,
+    first_matching_host, host_tree_items,
 };
 
 /// The host list of the left dock: a searchable, grouped tree of hosts.
@@ -383,7 +383,7 @@ impl Render for HostPanel {
                 .map(|host| {
                     let mark = MarkOf {
                         os: host.os,
-                        serial: host.is_serial(),
+                        protocol: host.kind(),
                         address: host.address.clone(),
                     };
                     (host.id, mark)
@@ -569,7 +569,7 @@ fn group_host_counts(
 /// What a host row's mark is drawn from, taken in `render`.
 struct MarkOf {
     os: Option<HostOs>,
-    serial: bool,
+    protocol: ProtocolKind,
     address: SharedString,
 }
 
@@ -612,7 +612,7 @@ fn render_row(
                     mark.map(|mark| mark.address.clone()).unwrap_or_default(),
                     mark.and_then(|mark| mark.os),
                 )
-                .serial(mark.is_some_and(|mark| mark.serial))
+                .protocol(mark.map(|mark| mark.protocol).unwrap_or_default())
             }
             .small()
             .without_tooltip()
@@ -807,10 +807,11 @@ fn valid_drop(
 /// start page's recent hosts both build it here, so they cannot drift.
 /// Built as it opens, from the host as it is then.
 ///
-/// A serial host has no SFTP and no address to copy.
+/// Only an SSH host has SFTP, and a serial host has no address to copy.
 pub fn host_menu(menu: PopupMenu, host: &Host) -> PopupMenu {
     let id = host.id;
-    let ssh = !host.is_serial();
+    let ssh = host.is_ssh();
+    let has_address = host.kind().has_address();
     // Named after what the address is, as in the tabs' menus.
     let copy_address = if host.address_is_ip() {
         t!("host.menu.copy_ip")
@@ -841,7 +842,7 @@ pub fn host_menu(menu: PopupMenu, host: &Host) -> PopupMenu {
         Box::new(DuplicateHost(id)),
     )
     .separator()
-    .when(ssh, |menu| {
+    .when(has_address, |menu| {
         menu.menu_with_icon(
             copy_address,
             Icon::new(CatalogIcon::ClipboardCopy),

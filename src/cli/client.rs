@@ -15,8 +15,8 @@ use super::link::OpenLink;
 use super::protocol::{
     AuthChoice, CredentialDeleted, CredentialDetails, CredentialKindChoice, Envelope, ErrorCode,
     FlowControlChoice, FrameKind, HostDeleted, HostDetails, HostInfo, PROTOCOL_VERSION,
-    ParityChoice, ProxyChoice, Reply, Request, RouteDetails, SerialDetails, TerminalContext,
-    TransferCounters, TransferSummary, parse_json, read_frame, write_json,
+    ParityChoice, ProxyChoice, Reply, Request, RouteDetails, SerialDetails, TelnetDetails,
+    TerminalContext, TransferCounters, TransferSummary, parse_json, read_frame, write_json,
 };
 use crate::host::HostOs;
 use crate::i18n::{t, tn};
@@ -440,9 +440,10 @@ fn print_host(host: &HostDetails, asked: Asked, console: &mut Console) -> io::Re
         (t!("cli.field.name"), host.name.clone()),
         (t!("cli.field.group"), group),
     ];
-    match &host.serial {
-        Some(serial) => fields.extend(serial_fields(serial)),
-        None => fields.extend(ssh_fields(host)),
+    match (&host.serial, &host.telnet) {
+        (Some(serial), _) => fields.extend(serial_fields(serial)),
+        (None, Some(telnet)) => fields.extend(telnet_fields(host, telnet)),
+        (None, None) => fields.extend(ssh_fields(host)),
     }
     if let Some(os) = host.os.as_deref().and_then(HostOs::from_stored) {
         fields.push((t!("cli.field.os"), os.label().to_string()));
@@ -465,7 +466,71 @@ fn ssh_fields(host: &HostDetails) -> Vec<(SharedString, String)> {
         Some(AuthChoice::NoPassword) => t!("cli.auth.no_password").to_string(),
         None => String::new(),
     };
-    let route = match &host.route {
+    vec![
+        (
+            t!("cli.field.address"),
+            format!(
+                "{}@{}:{}",
+                host.user.as_deref().unwrap_or_default(),
+                host.host.as_deref().unwrap_or_default(),
+                host.port.unwrap_or_default()
+            ),
+        ),
+        (t!("cli.field.auth"), auth),
+        (t!("cli.field.route"), route_text(host)),
+    ]
+}
+
+/// A Telnet host's rows: where it is, its 自动登录 and the prompts it
+/// waits for when they are not the usual ones, how it is reached.
+fn telnet_fields(host: &HostDetails, telnet: &TelnetDetails) -> Vec<(SharedString, String)> {
+    let user = host.user.as_deref().unwrap_or_default();
+    let auto_login = match host.auth {
+        Some(AuthChoice::Password) => {
+            let password = with_saved(t!("cli.auth.password"), host.password_saved);
+            if user.is_empty() {
+                password
+            } else {
+                t!("cli.auto_login.as_user", user = user, password = password).to_string()
+            }
+        }
+        Some(AuthChoice::Credential) => t!(
+            "cli.auth.credential",
+            id = host.credential.as_deref().unwrap_or_default()
+        )
+        .to_string(),
+        Some(AuthChoice::NoPassword) | None => t!("cli.auto_login.off").to_string(),
+    };
+    let mut fields = vec![
+        (
+            t!("cli.field.telnet"),
+            format!(
+                "{}:{}",
+                host.host.as_deref().unwrap_or_default(),
+                host.port.unwrap_or_default()
+            ),
+        ),
+        (t!("cli.field.auto_login"), auto_login),
+    ];
+    if telnet.user_prompt.is_some() || telnet.password_prompt.is_some() {
+        let usual = t!("cli.prompts.usual");
+        let prompt = |prompt: &Option<String>| prompt.clone().unwrap_or_else(|| usual.to_string());
+        fields.push((
+            t!("cli.field.prompts"),
+            format!(
+                "{} · {}",
+                prompt(&telnet.user_prompt),
+                prompt(&telnet.password_prompt)
+            ),
+        ));
+    }
+    fields.push((t!("cli.field.route"), route_text(host)));
+    fields
+}
+
+/// How an SSH or Telnet host is reached.
+fn route_text(host: &HostDetails) -> String {
+    match &host.route {
         Some(RouteDetails::Direct) | None => t!("cli.route.direct").to_string(),
         Some(RouteDetails::Jump { hosts }) => {
             let deleted = t!("cli.route.deleted_host");
@@ -499,20 +564,7 @@ fn ssh_fields(host: &HostDetails) -> Vec<(SharedString, String)> {
             };
             proxy.to_string()
         }
-    };
-    vec![
-        (
-            t!("cli.field.address"),
-            format!(
-                "{}@{}:{}",
-                host.user.as_deref().unwrap_or_default(),
-                host.host.as_deref().unwrap_or_default(),
-                host.port.unwrap_or_default()
-            ),
-        ),
-        (t!("cli.field.auth"), auth),
-        (t!("cli.field.route"), route),
-    ]
+    }
 }
 
 /// A serial host's rows: its device and line, and its flow control.
@@ -829,6 +881,7 @@ mod tests {
             password_saved: None,
             route: Some(RouteDetails::Direct),
             serial: None,
+            telnet: None,
             notes: String::new(),
             os: None,
             temporary: false,

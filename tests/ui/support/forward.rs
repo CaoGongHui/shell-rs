@@ -157,6 +157,7 @@ pub fn open_sized_workspace_with_forwards(
                 store,
                 cx.new(|_| settings_store()),
                 remote,
+                fake_telnet_terminals(),
                 fake_serial_terminals(),
                 fake_local_terminals(),
                 Arc::new(FakeSftpProvider::default()),

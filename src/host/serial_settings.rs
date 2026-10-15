@@ -1,42 +1,9 @@
-//! How a host is reached (the host form's 「协议」) and, for a serial host,
-//! how its line is set. The device itself is the host's `address`.
+//! How a serial host's line is set. The device itself is the host's
+//! `address`.
 
 use gpui_kit::SharedString;
 
 use crate::i18n::t;
-
-/// How a host is reached. Chosen when the host is created and never changed
-/// afterwards, so nothing that names an SSH host (a jump host, a forward)
-/// can find it turned into a serial one.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Protocol {
-    #[default]
-    Ssh,
-    /// A serial port of this computer. The device is the host's address;
-    /// its port, user, login and route play no part.
-    Serial(SerialSettings),
-}
-
-impl Protocol {
-    pub fn is_serial(self) -> bool {
-        matches!(self, Protocol::Serial(_))
-    }
-
-    pub fn serial(self) -> Option<SerialSettings> {
-        match self {
-            Protocol::Serial(settings) => Some(settings),
-            Protocol::Ssh => None,
-        }
-    }
-
-    /// The stored spelling, also the external CLI's.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Protocol::Ssh => "ssh",
-            Protocol::Serial(_) => "serial",
-        }
-    }
-}
 
 /// The baud rates the host form offers. Any other rate can be typed.
 pub const COMMON_BAUD_RATES: [u32; 12] = [

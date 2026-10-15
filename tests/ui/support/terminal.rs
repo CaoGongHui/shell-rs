@@ -281,6 +281,13 @@ pub fn fake_local_terminals() -> Arc<FixedLocalTerminalTransportProvider> {
     )))
 }
 
+/// Telnet hosts' terminals that start, and never print anything.
+pub fn fake_telnet_terminals() -> Arc<FixedTelnetTerminalTransportProvider> {
+    Arc::new(FixedTelnetTerminalTransportProvider::new(Arc::new(
+        FakeTerminalFactory::default(),
+    )))
+}
+
 /// Serial hosts' terminals that start, and never print anything.
 pub fn fake_serial_terminals() -> Arc<FixedSerialTerminalTransportProvider> {
     Arc::new(FixedSerialTerminalTransportProvider::new(Arc::new(
@@ -304,6 +311,18 @@ pub fn open_workspace_with_terminals(
     factory: Arc<dyn TerminalTransportFactory>,
     serial: Arc<FixedSerialTerminalTransportProvider>,
 ) -> (WindowHandle<Root>, Entity<Workspace>) {
+    open_workspace_with_protocols(cx, store, factory, fake_telnet_terminals(), serial)
+}
+
+/// With `telnet` and `serial` asked for each Telnet and serial host's
+/// terminal, and `factory` giving every SSH host's.
+pub fn open_workspace_with_protocols(
+    cx: &mut TestAppContext,
+    store: HostStore,
+    factory: Arc<dyn TerminalTransportFactory>,
+    telnet: Arc<FixedTelnetTerminalTransportProvider>,
+    serial: Arc<FixedSerialTerminalTransportProvider>,
+) -> (WindowHandle<Root>, Entity<Workspace>) {
     init_app(cx);
     // Dialogs still, as in every fixture: see `open_workspace_with_tester`.
     cx.update(|cx| cx.set_reduce_motion(true));
@@ -316,6 +335,7 @@ pub fn open_workspace_with_terminals(
                 store,
                 cx.new(|_| settings_store()),
                 remote,
+                telnet.clone(),
                 serial.clone(),
                 fake_local_terminals(),
                 Arc::new(FakeSftpProvider::default()),

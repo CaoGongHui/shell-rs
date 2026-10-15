@@ -70,8 +70,9 @@ use crate::terminal::{
     DEFAULT_FONT_SIZE, HostTerminalTransports, LocalPtyTransportProvider, LocalShell,
     LocalTerminalId, LocalTerminalPanel, LocalTerminalPanelEvent, RemoteTerminalId,
     SearchDirection, SharedLocalTerminalTransportProvider, SharedRemoteTerminalTransportProvider,
-    SharedSerialTerminalTransportProvider, SharedTerminalTransportFactory, TerminalLifecycle,
-    TerminalPanel, TerminalPanelEvent, TerminalView,
+    SharedSerialTerminalTransportProvider, SharedTelnetTerminalTransportProvider,
+    SharedTerminalTransportFactory, TerminalLifecycle, TerminalPanel, TerminalPanelEvent,
+    TerminalView,
 };
 use crate::update::{UpdateServices, Updater, UpdaterEvent};
 
@@ -250,6 +251,9 @@ impl Workspace {
             store,
             settings,
             remote,
+            Arc::new(crate::telnet::TelnetTransportProvider::new(
+                connector.clone(),
+            )),
             Arc::new(crate::serial::SerialTransportProvider),
             Arc::new(LocalPtyTransportProvider),
             sftp.clone(),
@@ -312,6 +316,7 @@ impl Workspace {
         store: Entity<HostStore>,
         settings: Entity<SettingsStore>,
         remote_terminal_provider: SharedRemoteTerminalTransportProvider,
+        telnet_terminal_provider: SharedTelnetTerminalTransportProvider,
         serial_terminal_provider: SharedSerialTerminalTransportProvider,
         local_terminal_provider: SharedLocalTerminalTransportProvider,
         sftp_provider: SharedSftpTransportProvider,
@@ -324,6 +329,7 @@ impl Workspace {
         let focus_handle = cx.focus_handle();
         let host_terminals = HostTerminalTransports {
             ssh: remote_terminal_provider,
+            telnet: telnet_terminal_provider,
             serial: serial_terminal_provider,
         };
         let recent = cx.new(|cx| RecentHosts::new(store.clone(), focus_handle.clone(), cx));
@@ -1229,12 +1235,12 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // A serial host has no SFTP; nothing offers it one.
+        // Only an SSH host has SFTP; nothing offers it another.
         if self
             .store
             .read(cx)
             .host(host_id)
-            .is_none_or(|host| host.is_serial())
+            .is_none_or(|host| !host.is_ssh())
         {
             return;
         }
@@ -2487,12 +2493,12 @@ fn new_terminal_panel(
             }
             TerminalPanelEvent::Connected(terminal_id, host_id) => {
                 this.count_connection(*host_id, false, cx);
-                // A serial line has no 文件 beside it.
+                // A Telnet or serial terminal has no 文件 beside it.
                 if this
                     .store
                     .read(cx)
                     .host(*host_id)
-                    .is_some_and(|host| host.is_serial())
+                    .is_some_and(|host| !host.is_ssh())
                 {
                     return;
                 }

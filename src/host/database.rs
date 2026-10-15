@@ -10,6 +10,7 @@ use std::{
     path::Path,
 };
 
+use gpui_kit::SharedString;
 use rusqlite::{Connection, params};
 
 use crate::i18n::t;
@@ -19,7 +20,7 @@ use super::{
     FlowControl, ForwardDraft, ForwardEndpoint, ForwardId, ForwardKind, ForwardRule, GroupDraft,
     GroupId, Host, HostDraft, HostGroup, HostId, HostOs, Parity, Protocol, ProxyKind,
     ProxySettings, PublicId, Route, SerialSettings, Snippet, SnippetCategory, SnippetCategoryId,
-    SnippetDraft, SnippetId, SnippetScope, StopBits,
+    SnippetDraft, SnippetId, SnippetScope, StopBits, TelnetSettings,
 };
 
 /// SQLite's only integer type is `i64`, so the `u64` ids cross the boundary
@@ -38,8 +39,8 @@ fn from_sql(id: i64) -> u64 {
 ///
 /// 13 is the schema as it was rebuilt before the first release. Versions up
 /// to 12 were development builds, and their files are refused. 14 adds the
-/// command snippets, 15 the serial hosts.
-const SCHEMA_VERSION: i64 = 15;
+/// command snippets, 15 the serial hosts, 16 the Telnet hosts.
+const SCHEMA_VERSION: i64 = 16;
 
 /// The whole schema, as a new database gets it.
 ///
@@ -64,10 +65,13 @@ const SCHEMA_VERSION: i64 = 15;
 ///     next open (see `fill_missing_public_ids`); the ones there are unique.
 ///   - `os` and `last_connected_at` are written by connections, not by the
 ///     host form.
-///   - `protocol` is `ssh` or `serial`. A serial host's device is its
-///     `address` and its line is in the five `serial_*` columns, set exactly
-///     for a serial host; the login and route columns keep what a new SSH
-///     host would have, unused.
+///   - `protocol` is `ssh`, `telnet` or `serial`. A serial host's device is
+///     its `address` and its line is in the five `serial_*` columns, set
+///     exactly for a serial host; the login and route columns keep what a
+///     new SSH host would have, unused. A Telnet host uses the login and
+///     route columns as an SSH host does (`no-password` is no 自动登录), and
+///     the prompts its 自动登录 waits for are in the two `telnet_*` columns,
+///     `NULL` for the usual ones and always for other hosts.
 /// - **host_jumps** lists a host's jump hosts in order. A deleted jump
 ///   host leaves its row behind with no `jump_id`, so the host fails to
 ///   connect rather than skip the hop.
@@ -83,7 +87,8 @@ const SCHEMA_VERSION: i64 = 15;
 ///
 /// A column added later goes after the table's last column here and is
 /// added to existing files with `ALTER TABLE ADD COLUMN`, which puts it in
-/// the same place (`a_column_added_later_matches_the_schema`).
+/// the same place (`a_column_added_later_matches_the_schema`). A CHECK
+/// cannot be changed that way: the table is made again (see `add_telnet`).
 const SCHEMA: &str = "\
 CREATE TABLE groups (
     id         INTEGER PRIMARY KEY,
@@ -122,7 +127,7 @@ CREATE TABLE hosts (
     notes             TEXT NOT NULL DEFAULT '',
     os                TEXT,
     last_connected_at INTEGER,
-    protocol          TEXT NOT NULL DEFAULT 'ssh' CHECK (protocol IN ('ssh', 'serial')),
+    protocol          TEXT NOT NULL DEFAULT 'ssh' CHECK (protocol IN ('ssh', 'serial', 'telnet')),
     serial_baud       INTEGER CHECK (serial_baud > 0)
         CHECK ((protocol = 'serial') = (serial_baud IS NOT NULL)),
     serial_data_bits  INTEGER CHECK (serial_data_bits BETWEEN 5 AND 8)
@@ -133,6 +138,10 @@ CREATE TABLE hosts (
         CHECK ((protocol = 'serial') = (serial_stop_bits IS NOT NULL)),
     serial_flow       TEXT CHECK (serial_flow IN ('none', 'rts-cts', 'xon-xoff'))
         CHECK ((protocol = 'serial') = (serial_flow IS NOT NULL)),
+    telnet_user_prompt TEXT CHECK (telnet_user_prompt <> '')
+        CHECK (protocol = 'telnet' OR telnet_user_prompt IS NULL),
+    telnet_pass_prompt TEXT CHECK (telnet_pass_prompt <> '')
+        CHECK (protocol = 'telnet' OR telnet_pass_prompt IS NULL),
     CHECK ((auth = 'credential') = (credential_id IS NOT NULL)),
     CHECK ((auth = 'credential') = (username IS NULL)),
     CHECK ((route = 'proxy') = (proxy_kind IS NOT NULL)),
@@ -193,8 +202,6 @@ CREATE INDEX snippets_scope_host_id ON snippets(scope_host_id);";
 
 /// One step from a version to the next: one transaction that ends by
 /// recording the version it reached.
-// No step needs `Code` yet.
-#[allow(dead_code)]
 enum Step {
     /// Statements that make their own transaction.
     Sql(&'static str),
@@ -208,7 +215,7 @@ enum Step {
 ///
 /// A step is history: it says what that version's change was, and stays as
 /// written when `SCHEMA` changes again.
-const STEPS: [(i64, Step); 2] = [
+const STEPS: [(i64, Step); 3] = [
     (
     13,
     // The command snippets.
@@ -255,7 +262,87 @@ PRAGMA user_version = 15;
 COMMIT;",
         ),
     ),
+    // The Telnet hosts.
+    (15, Step::Code(add_telnet)),
 ];
+
+/// Version 16, the Telnet hosts: `protocol` takes `telnet`, and the two
+/// `telnet_*` columns come after the serial ones. SQLite cannot change the
+/// CHECK on `protocol`, so `hosts` is made again and its rows copied in,
+/// ids and all. Not with `ALTER TABLE … RENAME`: that would store the new
+/// table's name quoted, unlike `SCHEMA`, and point the other tables'
+/// foreign keys at the old one.
+fn add_telnet(connection: &Connection) -> rusqlite::Result<()> {
+    // With foreign keys on, dropping `hosts` would take every jump host,
+    // bookmark, forward and host snippet with it. The pragma does nothing
+    // inside a transaction, hence here.
+    connection.pragma_update(None, "foreign_keys", false)?;
+    let result = connection.execute_batch(TELNET_HOSTS);
+    if result.is_err() {
+        let _ = connection.execute_batch("ROLLBACK");
+    }
+    connection.pragma_update(None, "foreign_keys", true)?;
+    result
+}
+
+const TELNET_HOSTS: &str = "BEGIN;
+CREATE TEMP TABLE hosts_15 AS SELECT * FROM main.hosts;
+DROP TABLE main.hosts;
+CREATE TABLE hosts (
+    id                INTEGER PRIMARY KEY,
+    public_id         TEXT UNIQUE,
+    group_id          INTEGER REFERENCES groups(id) ON DELETE CASCADE,
+    sort_order        INTEGER NOT NULL DEFAULT 0,
+    name              TEXT NOT NULL CHECK (name <> ''),
+    address           TEXT NOT NULL CHECK (address <> ''),
+    port              INTEGER NOT NULL CHECK (port BETWEEN 1 AND 65535),
+    auth              TEXT NOT NULL CHECK (auth IN ('password', 'no-password', 'credential')),
+    username          TEXT,
+    credential_id     INTEGER REFERENCES credentials(id),
+    route             TEXT NOT NULL DEFAULT 'direct' CHECK (route IN ('direct', 'jump', 'proxy')),
+    proxy_kind        TEXT CHECK (proxy_kind IN ('http', 'socks5')),
+    proxy_host        TEXT,
+    proxy_port        INTEGER CHECK (proxy_port BETWEEN 1 AND 65535),
+    proxy_username    TEXT,
+    notes             TEXT NOT NULL DEFAULT '',
+    os                TEXT,
+    last_connected_at INTEGER,
+    protocol          TEXT NOT NULL DEFAULT 'ssh' CHECK (protocol IN ('ssh', 'serial', 'telnet')),
+    serial_baud       INTEGER CHECK (serial_baud > 0)
+        CHECK ((protocol = 'serial') = (serial_baud IS NOT NULL)),
+    serial_data_bits  INTEGER CHECK (serial_data_bits BETWEEN 5 AND 8)
+        CHECK ((protocol = 'serial') = (serial_data_bits IS NOT NULL)),
+    serial_parity     TEXT CHECK (serial_parity IN ('none', 'odd', 'even'))
+        CHECK ((protocol = 'serial') = (serial_parity IS NOT NULL)),
+    serial_stop_bits  INTEGER CHECK (serial_stop_bits IN (1, 2))
+        CHECK ((protocol = 'serial') = (serial_stop_bits IS NOT NULL)),
+    serial_flow       TEXT CHECK (serial_flow IN ('none', 'rts-cts', 'xon-xoff'))
+        CHECK ((protocol = 'serial') = (serial_flow IS NOT NULL)),
+    telnet_user_prompt TEXT CHECK (telnet_user_prompt <> '')
+        CHECK (protocol = 'telnet' OR telnet_user_prompt IS NULL),
+    telnet_pass_prompt TEXT CHECK (telnet_pass_prompt <> '')
+        CHECK (protocol = 'telnet' OR telnet_pass_prompt IS NULL),
+    CHECK ((auth = 'credential') = (credential_id IS NOT NULL)),
+    CHECK ((auth = 'credential') = (username IS NULL)),
+    CHECK ((route = 'proxy') = (proxy_kind IS NOT NULL)),
+    CHECK ((proxy_kind IS NULL) = (proxy_host IS NULL)
+        AND (proxy_kind IS NULL) = (proxy_port IS NULL)),
+    CHECK (proxy_kind IS NOT NULL OR proxy_username IS NULL)
+) STRICT;
+INSERT INTO hosts (id, public_id, group_id, sort_order, name, address, port, auth, username,
+    credential_id, route, proxy_kind, proxy_host, proxy_port, proxy_username, notes, os,
+    last_connected_at, protocol, serial_baud, serial_data_bits, serial_parity, serial_stop_bits,
+    serial_flow)
+SELECT id, public_id, group_id, sort_order, name, address, port, auth, username,
+    credential_id, route, proxy_kind, proxy_host, proxy_port, proxy_username, notes, os,
+    last_connected_at, protocol, serial_baud, serial_data_bits, serial_parity, serial_stop_bits,
+    serial_flow
+FROM hosts_15;
+DROP TABLE hosts_15;
+CREATE INDEX hosts_group_id ON hosts(group_id);
+CREATE INDEX hosts_credential_id ON hosts(credential_id);
+PRAGMA user_version = 16;
+COMMIT;";
 
 /// Everything one launch reads back from disk.
 pub struct StoredData {
@@ -329,7 +416,8 @@ impl HostDatabase {
                 "SELECT id, public_id, group_id, sort_order, name, address, port, auth, username, \
                  credential_id, route, proxy_kind, proxy_host, proxy_port, proxy_username, \
                  notes, os, protocol, serial_baud, serial_data_bits, serial_parity, \
-                 serial_stop_bits, serial_flow FROM hosts ORDER BY id",
+                 serial_stop_bits, serial_flow, telnet_user_prompt, telnet_pass_prompt \
+                 FROM hosts ORDER BY id",
             )?
             .query_map([], |row| {
                 let id: i64 = row.get(0)?;
@@ -355,6 +443,10 @@ impl HostDatabase {
                     parity: row.get(20)?,
                     stop_bits: row.get(21)?,
                     flow: row.get(22)?,
+                };
+                let telnet = TelnetSettings {
+                    user_prompt: row.get::<_, Option<String>>(23)?.unwrap_or_default().into(),
+                    password_prompt: row.get::<_, Option<String>>(24)?.unwrap_or_default().into(),
                 };
                 let mut host = Host::new(
                     HostId(from_sql(id)),
@@ -387,8 +479,10 @@ impl HostDatabase {
                     _ => Route::Direct,
                 };
                 host.os = os.as_deref().and_then(HostOs::from_stored);
-                if protocol == "serial" {
-                    host.protocol = Protocol::Serial(serial.settings());
+                match protocol.as_str() {
+                    "serial" => host.protocol = Protocol::Serial(serial.settings()),
+                    "telnet" => host.protocol = Protocol::Telnet(telnet),
+                    _ => {}
                 }
                 Ok(host)
             })?
@@ -630,9 +724,10 @@ impl HostDatabase {
             "INSERT INTO hosts (id, public_id, group_id, sort_order, name, address, port, auth, \
              username, credential_id, route, proxy_kind, proxy_host, proxy_port, \
              proxy_username, notes, os, protocol, serial_baud, serial_data_bits, \
-             serial_parity, serial_stop_bits, serial_flow) \
+             serial_parity, serial_stop_bits, serial_flow, telnet_user_prompt, \
+             telnet_pass_prompt) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, \
-             ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
+             ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
             params![
                 to_sql(host.id.0),
                 host.public_id.as_str(),
@@ -657,6 +752,8 @@ impl HostDatabase {
                 row.serial.parity,
                 row.serial.stop_bits,
                 row.serial.flow,
+                row.telnet_user_prompt,
+                row.telnet_password_prompt,
             ],
         )?;
         write_jumps(&transaction, host)?;
@@ -675,7 +772,8 @@ impl HostDatabase {
              port = ?6, auth = ?7, username = ?8, credential_id = ?9, route = ?10, \
              proxy_kind = ?11, proxy_host = ?12, proxy_port = ?13, proxy_username = ?14, \
              notes = ?15, serial_baud = ?16, serial_data_bits = ?17, serial_parity = ?18, \
-             serial_stop_bits = ?19, serial_flow = ?20 WHERE id = ?1",
+             serial_stop_bits = ?19, serial_flow = ?20, telnet_user_prompt = ?21, \
+             telnet_pass_prompt = ?22 WHERE id = ?1",
             params![
                 to_sql(host.id.0),
                 host.group.map(|group| to_sql(group.0)),
@@ -697,6 +795,8 @@ impl HostDatabase {
                 row.serial.parity,
                 row.serial.stop_bits,
                 row.serial.flow,
+                row.telnet_user_prompt,
+                row.telnet_password_prompt,
             ],
         )?;
         write_jumps(&transaction, host)?;
@@ -977,9 +1077,12 @@ impl HostDatabase {
 }
 
 /// The columns of a host's row that are spelled differently from the
-/// model: its login, its route and its serial line.
+/// model: its login, its route, its serial line and its Telnet prompts.
 struct HostRow<'a> {
     serial: SerialColumns,
+    /// `NULL` for the usual prompt, and for a host that is not Telnet.
+    telnet_user_prompt: Option<&'a str>,
+    telnet_password_prompt: Option<&'a str>,
     auth: &'static str,
     username: Option<&'a str>,
     credential: Option<i64>,
@@ -996,8 +1099,13 @@ impl<'a> HostRow<'a> {
             Route::Proxy(proxy) => Some(proxy),
             _ => None,
         };
+        let telnet = host.protocol.telnet();
+        let prompt =
+            |prompt: &'a SharedString| Some(prompt.as_ref()).filter(|prompt| !prompt.is_empty());
         Self {
-            serial: SerialColumns::of(host.protocol),
+            serial: SerialColumns::of(&host.protocol),
+            telnet_user_prompt: telnet.and_then(|telnet| prompt(&telnet.user_prompt)),
+            telnet_password_prompt: telnet.and_then(|telnet| prompt(&telnet.password_prompt)),
             auth: match host.credential {
                 Some(_) => "credential",
                 None => host.auth.as_str(),
@@ -1033,7 +1141,7 @@ struct SerialColumns {
 }
 
 impl SerialColumns {
-    fn of(protocol: Protocol) -> Self {
+    fn of(protocol: &Protocol) -> Self {
         let settings = protocol.serial();
         Self {
             baud: settings.map(|line| line.baud),
@@ -1538,6 +1646,114 @@ CREATE INDEX snippets_category_id ON snippets(category_id);
 CREATE INDEX snippets_scope_group_id ON snippets(scope_group_id);
 CREATE INDEX snippets_scope_host_id ON snippets(scope_host_id);";
 
+    /// The schema of version 15, as files of that version have it.
+    const SCHEMA_15: &str = "\
+CREATE TABLE groups (
+    id         INTEGER PRIMARY KEY,
+    parent_id  INTEGER REFERENCES groups(id) ON DELETE CASCADE,
+    name       TEXT NOT NULL CHECK (name <> ''),
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    expanded   INTEGER NOT NULL DEFAULT 1 CHECK (expanded IN (0, 1))
+) STRICT;
+CREATE INDEX groups_parent_id ON groups(parent_id);
+CREATE TABLE credentials (
+    id          INTEGER PRIMARY KEY,
+    keychain_id TEXT NOT NULL UNIQUE,
+    name        TEXT NOT NULL CHECK (name <> ''),
+    kind        TEXT NOT NULL CHECK (kind IN ('password', 'key', 'agent')),
+    username    TEXT NOT NULL,
+    key_path    TEXT,
+    sort_order  INTEGER NOT NULL DEFAULT 0,
+    CHECK ((kind = 'key') = (key_path IS NOT NULL))
+) STRICT;
+CREATE TABLE hosts (
+    id                INTEGER PRIMARY KEY,
+    public_id         TEXT UNIQUE,
+    group_id          INTEGER REFERENCES groups(id) ON DELETE CASCADE,
+    sort_order        INTEGER NOT NULL DEFAULT 0,
+    name              TEXT NOT NULL CHECK (name <> ''),
+    address           TEXT NOT NULL CHECK (address <> ''),
+    port              INTEGER NOT NULL CHECK (port BETWEEN 1 AND 65535),
+    auth              TEXT NOT NULL CHECK (auth IN ('password', 'no-password', 'credential')),
+    username          TEXT,
+    credential_id     INTEGER REFERENCES credentials(id),
+    route             TEXT NOT NULL DEFAULT 'direct' CHECK (route IN ('direct', 'jump', 'proxy')),
+    proxy_kind        TEXT CHECK (proxy_kind IN ('http', 'socks5')),
+    proxy_host        TEXT,
+    proxy_port        INTEGER CHECK (proxy_port BETWEEN 1 AND 65535),
+    proxy_username    TEXT,
+    notes             TEXT NOT NULL DEFAULT '',
+    os                TEXT,
+    last_connected_at INTEGER,
+    protocol          TEXT NOT NULL DEFAULT 'ssh' CHECK (protocol IN ('ssh', 'serial')),
+    serial_baud       INTEGER CHECK (serial_baud > 0)
+        CHECK ((protocol = 'serial') = (serial_baud IS NOT NULL)),
+    serial_data_bits  INTEGER CHECK (serial_data_bits BETWEEN 5 AND 8)
+        CHECK ((protocol = 'serial') = (serial_data_bits IS NOT NULL)),
+    serial_parity     TEXT CHECK (serial_parity IN ('none', 'odd', 'even'))
+        CHECK ((protocol = 'serial') = (serial_parity IS NOT NULL)),
+    serial_stop_bits  INTEGER CHECK (serial_stop_bits IN (1, 2))
+        CHECK ((protocol = 'serial') = (serial_stop_bits IS NOT NULL)),
+    serial_flow       TEXT CHECK (serial_flow IN ('none', 'rts-cts', 'xon-xoff'))
+        CHECK ((protocol = 'serial') = (serial_flow IS NOT NULL)),
+    CHECK ((auth = 'credential') = (credential_id IS NOT NULL)),
+    CHECK ((auth = 'credential') = (username IS NULL)),
+    CHECK ((route = 'proxy') = (proxy_kind IS NOT NULL)),
+    CHECK ((proxy_kind IS NULL) = (proxy_host IS NULL)
+        AND (proxy_kind IS NULL) = (proxy_port IS NULL)),
+    CHECK (proxy_kind IS NOT NULL OR proxy_username IS NULL)
+) STRICT;
+CREATE INDEX hosts_group_id ON hosts(group_id);
+CREATE INDEX hosts_credential_id ON hosts(credential_id);
+CREATE TABLE host_jumps (
+    host_id  INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL CHECK (position >= 0),
+    jump_id  INTEGER REFERENCES hosts(id) ON DELETE SET NULL,
+    PRIMARY KEY (host_id, position),
+    CHECK (jump_id <> host_id)
+) STRICT, WITHOUT ROWID;
+CREATE INDEX host_jumps_jump_id ON host_jumps(jump_id);
+CREATE TABLE bookmarks (
+    host_id    INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    side       TEXT NOT NULL CHECK (side IN ('local', 'remote')),
+    path       TEXT NOT NULL,
+    sort_order INTEGER NOT NULL,
+    PRIMARY KEY (host_id, side, path)
+) STRICT, WITHOUT ROWID;
+CREATE TABLE forwards (
+    id          INTEGER PRIMARY KEY,
+    host_id     INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL DEFAULT '',
+    kind        TEXT NOT NULL CHECK (kind IN ('local', 'remote', 'dynamic')),
+    bind_host   TEXT NOT NULL,
+    bind_port   INTEGER NOT NULL CHECK (bind_port BETWEEN 1 AND 65535),
+    target_host TEXT,
+    target_port INTEGER,
+    auto_start  INTEGER NOT NULL DEFAULT 0 CHECK (auto_start IN (0, 1)),
+    sort_order  INTEGER NOT NULL DEFAULT 0,
+    CHECK ((kind = 'dynamic' AND target_host IS NULL AND target_port IS NULL)
+        OR (kind <> 'dynamic' AND target_host IS NOT NULL
+            AND target_port BETWEEN 1 AND 65535))
+) STRICT;
+CREATE INDEX forwards_host_id ON forwards(host_id);
+CREATE TABLE snippet_categories (
+    id   INTEGER PRIMARY KEY,
+    name TEXT NOT NULL CHECK (name <> '')
+) STRICT;
+CREATE TABLE snippets (
+    id             INTEGER PRIMARY KEY,
+    category_id    INTEGER REFERENCES snippet_categories(id) ON DELETE CASCADE,
+    name           TEXT NOT NULL CHECK (name <> ''),
+    command        TEXT NOT NULL CHECK (command <> ''),
+    scope_group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
+    scope_host_id  INTEGER REFERENCES hosts(id) ON DELETE CASCADE,
+    run_on_click   INTEGER NOT NULL DEFAULT 0 CHECK (run_on_click IN (0, 1)),
+    CHECK (scope_group_id IS NULL OR scope_host_id IS NULL)
+) STRICT;
+CREATE INDEX snippets_category_id ON snippets(category_id);
+CREATE INDEX snippets_scope_group_id ON snippets(scope_group_id);
+CREATE INDEX snippets_scope_host_id ON snippets(scope_host_id);";
+
     #[test]
     fn a_version_14_file_gets_the_serial_columns_and_keeps_its_hosts() {
         let dir = tempfile::tempdir().unwrap();
@@ -1568,6 +1784,130 @@ CREATE INDEX snippets_scope_host_id ON snippets(scope_host_id);";
         let data = db.load().unwrap();
         assert_eq!(data.hosts.len(), 1);
         assert_eq!(data.hosts[0].protocol, Protocol::Ssh);
+    }
+
+    #[test]
+    fn a_version_15_file_takes_telnet_hosts_and_keeps_every_row_on_its_hosts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shellrs.db");
+        {
+            let old = Connection::open(&path).unwrap();
+            old.pragma_update(None, "foreign_keys", true).unwrap();
+            old.execute_batch(&format!(
+                "BEGIN;\n{SCHEMA_15}\nPRAGMA user_version = 15;\nCOMMIT;"
+            ))
+            .unwrap();
+            old.execute_batch(
+                "INSERT INTO groups (id, name) VALUES (1, '生产');
+INSERT INTO credentials (id, keychain_id, name, kind, username)
+    VALUES (1, 'k1', '运维', 'password', 'deploy');
+INSERT INTO hosts (id, public_id, group_id, sort_order, name, address, port, auth, username,
+    last_connected_at)
+    VALUES (1, 'pub-web', 1, 7, 'web', '10.0.0.1', 22, 'password', 'root', 200);
+INSERT INTO hosts (id, name, address, port, auth, credential_id, route, last_connected_at)
+    VALUES (2, 'db', '10.0.0.2', 22, 'credential', 1, 'jump', 300);
+INSERT INTO hosts (id, name, address, port, auth, username, protocol, serial_baud,
+    serial_data_bits, serial_parity, serial_stop_bits, serial_flow)
+    VALUES (3, 'console', '/dev/ttyUSB0', 22, 'no-password', '', 'serial', 9600, 8, 'none', 1,
+    'none');
+INSERT INTO host_jumps (host_id, position, jump_id) VALUES (2, 0, 1), (2, 1, NULL);
+INSERT INTO bookmarks (host_id, side, path, sort_order) VALUES (1, 'remote', '/var/log', 0);
+INSERT INTO forwards (id, host_id, kind, bind_host, bind_port, target_host, target_port)
+    VALUES (1, 1, 'local', '127.0.0.1', 8080, 'localhost', 80);
+INSERT INTO snippet_categories (id, name) VALUES (1, '常用');
+INSERT INTO snippets (id, category_id, name, command, scope_host_id)
+    VALUES (1, 1, 'top', 'top', 1);",
+            )
+            .unwrap();
+        }
+
+        let db = HostDatabase::open(&path).unwrap();
+        let version: i64 = db
+            .connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        assert!(dir.path().join("shellrs.db.v15.bak").exists());
+        let fresh = HostDatabase::in_memory().unwrap();
+        assert_eq!(schema_of(&db.connection), schema_of(&fresh.connection));
+        let foreign_keys: i64 = db
+            .connection
+            .pragma_query_value(None, "foreign_keys", |row| row.get(0))
+            .unwrap();
+        assert_eq!(foreign_keys, 1, "back on after the rebuild");
+        let violations = db
+            .connection
+            .prepare("PRAGMA foreign_key_check")
+            .unwrap()
+            .query_map([], |_| Ok(()))
+            .unwrap()
+            .count();
+        assert_eq!(violations, 0);
+
+        let data = db.load().unwrap();
+        assert_eq!(data.hosts.len(), 3);
+        let web = &data.hosts[0];
+        assert_eq!(web.public_id.as_str(), "pub-web");
+        assert_eq!((web.sort_order, web.group), (7, Some(GroupId(1))));
+        assert_eq!(
+            data.hosts[1].route,
+            Route::Jump(vec![Some(HostId(1)), None])
+        );
+        assert_eq!(data.hosts[1].credential, Some(CredentialId(1)));
+        assert!(data.hosts[2].is_serial());
+        assert_eq!(data.recent, [HostId(2), HostId(1)]);
+        assert_eq!(data.bookmarks.len(), 1);
+        assert_eq!(data.forwards.len(), 1);
+        assert_eq!(data.snippets.len(), 1);
+
+        // The foreign keys hold as before: deleting web takes its rows, and
+        // leaves its place in db's jump hosts empty.
+        db.remove_host(HostId(1)).unwrap();
+        let data = db.load().unwrap();
+        assert!(data.bookmarks.is_empty());
+        assert!(data.forwards.is_empty());
+        assert!(data.snippets.is_empty());
+        assert_eq!(data.hosts[0].route, Route::Jump(vec![None, None]));
+    }
+
+    #[test]
+    fn a_telnet_host_keeps_its_prompts_and_other_hosts_have_none() {
+        let db = HostDatabase::in_memory().unwrap();
+        let mut telnet = Host::new(HostId(1), HostDraft::telnet("switch", "10.0.0.5", 23, None));
+        db.insert_host(&telnet).unwrap();
+        let ssh = Host::new(
+            HostId(2),
+            HostDraft::new("web", "10.0.0.1", 22, "root", AuthKind::Password, None),
+        );
+        db.insert_host(&ssh).unwrap();
+
+        let loaded = &db.load().unwrap().hosts[0];
+        assert_eq!(loaded.protocol, Protocol::Telnet(TelnetSettings::default()));
+        assert_eq!((loaded.port, loaded.auth), (23, AuthKind::NoPassword));
+        assert_eq!(loaded.user.as_ref(), "");
+
+        let prompts = TelnetSettings {
+            user_prompt: "账号：".into(),
+            password_prompt: "".into(),
+        };
+        telnet.protocol = Protocol::Telnet(prompts.clone());
+        telnet.auth = AuthKind::Password;
+        telnet.user = "admin".into();
+        db.update_host(&telnet).unwrap();
+        let data = db.load().unwrap();
+        assert_eq!(data.hosts[0].protocol, Protocol::Telnet(prompts));
+        assert_eq!(data.hosts[0].user.as_ref(), "admin");
+        assert_eq!(data.hosts[1].protocol, Protocol::Ssh);
+
+        // A prompt on another host, an empty one, or a protocol nobody knows
+        // is refused.
+        for change in [
+            "UPDATE hosts SET telnet_user_prompt = 'login:' WHERE id = 2",
+            "UPDATE hosts SET telnet_pass_prompt = '' WHERE id = 1",
+            "UPDATE hosts SET protocol = 'rlogin' WHERE id = 1",
+        ] {
+            assert!(db.connection.execute(change, []).is_err(), "{change}");
+        }
     }
 
     #[test]

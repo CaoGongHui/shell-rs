@@ -382,17 +382,76 @@ impl std::fmt::Debug for LoginTest {
     }
 }
 
+/// What 测试连接 tries for a Telnet host: the way to its address and port,
+/// with the form's proxy password. It does not log in: Telnet's login is
+/// the device's prompts, which 自动登录 answers in the terminal.
+pub struct TelnetTest {
+    host: String,
+    port: u16,
+    route: crate::host::LoginRoute,
+    proxy_password: Option<Zeroizing<String>>,
+}
+
+impl TelnetTest {
+    pub fn new(host: impl Into<String>, port: u16, route: crate::host::LoginRoute) -> Self {
+        Self {
+            host: host.into(),
+            port,
+            route,
+            proxy_password: None,
+        }
+    }
+
+    /// The proxy's password typed into the form. An empty one is none.
+    pub fn with_proxy_password(mut self, password: impl Into<String>) -> Self {
+        let password = password.into();
+        self.proxy_password = (!password.is_empty()).then(|| Zeroizing::new(password));
+        self
+    }
+
+    pub fn host(&self) -> &str {
+        &self.host
+    }
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+    pub fn route(&self) -> &crate::host::LoginRoute {
+        &self.route
+    }
+    pub fn proxy_password(&self) -> Option<&str> {
+        self.proxy_password.as_deref().map(String::as_str)
+    }
+}
+
+impl std::fmt::Debug for TelnetTest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TelnetTest")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("route", &self.route)
+            .field(
+                "proxy_password",
+                &self.proxy_password().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
+}
+
 /// Answers whether to trust a host key seen for the first time. It blocks
 /// until a person decides; `false` also covers "nobody is there to ask".
 pub type TrustCallback = Box<dyn Fn(UnknownHostPrompt) -> bool + Send + Sync>;
 
-/// Logs in once with a [`LoginTest`] and hangs up, or opens a serial port
-/// and closes it again, so the host form can check its values before saving
-/// them.
+/// Logs in once with a [`LoginTest`] and hangs up, reaches a Telnet host's
+/// port, or opens a serial port and closes it again, so the host form can
+/// check its values before saving them.
 pub trait ConnectionTester: Send + Sync + 'static {
     /// Blocks: call it on a thread of its own. `Err` holds the reason, worded
     /// for the user.
     fn test(&self, request: LoginTest, trust: TrustCallback) -> Result<(), String>;
+
+    /// Reach `request`'s address and port the way its terminal would, jump
+    /// hosts and proxy included, and hang up. Blocks like [`Self::test`].
+    fn test_telnet(&self, request: TelnetTest, trust: TrustCallback) -> Result<(), String>;
 
     /// Open `line` as a serial host's terminal would, and close it. Blocks
     /// too, briefly; `Err` is why it would not open.

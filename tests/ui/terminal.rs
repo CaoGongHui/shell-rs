@@ -36,6 +36,7 @@ fn open_workspace_with_local_terminals(
                 store,
                 cx.new(|_| settings_store()),
                 remote,
+                fake_telnet_terminals(),
                 fake_serial_terminals(),
                 local.clone(),
                 Arc::new(FakeSftpProvider::default()),

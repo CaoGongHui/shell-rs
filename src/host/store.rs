@@ -17,7 +17,7 @@ use super::{
     CredentialKind, ForwardDraft, ForwardId, ForwardRule, GroupDraft, GroupId, Host,
     HostConnection, HostDatabase, HostDraft, HostGroup, HostId, HostLogin, HostNode, HostOs,
     JumpLogin, LoginRoute, NodeDrop, Protocol, ProxyLogin, PublicId, Route, SerialLine, Snippet,
-    SnippetCategory, SnippetScope, SshLink, StoredData,
+    SnippetCategory, SnippetScope, SshLink, StoredData, TelnetLogin,
 };
 
 mod snippets;
@@ -409,7 +409,7 @@ impl HostStore {
 
     /// The saved SSH hosts: what a forward or a jump can go through.
     pub fn ssh_hosts(&self) -> impl Iterator<Item = &Host> {
-        self.hosts.iter().filter(|host| !host.is_serial())
+        self.hosts.iter().filter(|host| host.is_ssh())
     }
 
     /// A saved host, or a temporary one.
@@ -425,7 +425,7 @@ impl HostStore {
 
     /// A saved SSH host: what a jump host or a forward may go through.
     pub fn saved_ssh_host(&self, id: HostId) -> Option<&Host> {
-        self.saved_host(id).filter(|host| !host.is_serial())
+        self.saved_host(id).filter(|host| host.is_ssh())
     }
 
     fn host_mut(&mut self, id: HostId) -> Option<&mut Host> {
@@ -640,7 +640,7 @@ impl HostStore {
     /// host using it as a jump host.
     pub fn update(&mut self, id: HostId, draft: HostDraft, cx: &mut Context<Self>) -> bool {
         let logins = self.logins();
-        let previous = self.ssh_login(id);
+        let previous = self.connection(id);
         let updated = self.update_unnotified(id, draft);
         if updated {
             if let Some(host) = self.host(id) {
@@ -658,12 +658,12 @@ impl HostStore {
         updated
     }
 
-    /// The protocol is the host's for good: a draft of the other one is
+    /// The protocol is the host's for good: a draft of another one is
     /// refused.
     pub fn update_unnotified(&mut self, id: HostId, draft: HostDraft) -> bool {
         if self
             .saved_host(id)
-            .is_some_and(|host| host.is_serial() != draft.protocol.is_serial())
+            .is_some_and(|host| host.kind() != draft.protocol.kind())
         {
             return false;
         }
@@ -696,12 +696,12 @@ impl HostStore {
     /// their jump hosts, empty, and are not reconnected: deleting a host does
     /// not drop a working connection behind it.
     pub fn remove(&mut self, id: HostId, cx: &mut Context<Self>) -> bool {
-        let login = self.ssh_login(id);
+        let connection = self.connection(id);
         let removed = self.remove_unnotified(id);
         if removed {
             self.persist(Change::DeleteHost, cx, |db| db.remove_host(id));
-            if let Some(login) = login {
-                self.forget_passwords_of(&login, cx);
+            if let Some(connection) = connection {
+                self.forget_passwords_of(&connection, cx);
             }
             cx.notify();
         }
@@ -1068,26 +1068,33 @@ impl HostStore {
     }
 
     /// How a host's terminal connects: its login for an SSH host, its
-    /// device and line for a serial one.
+    /// address, route and 自动登录 for a Telnet one, its device and line for
+    /// a serial one.
     pub fn connection(&self, id: HostId) -> Option<HostConnection> {
         self.host(id).map(|host| self.connection_of(host))
     }
 
     pub fn connection_of(&self, host: &Host) -> HostConnection {
-        match host.protocol {
+        match &host.protocol {
             Protocol::Ssh => HostConnection::Ssh(self.login_of(host)),
+            Protocol::Telnet(settings) => {
+                let credential = host.credential.and_then(|id| self.credential(id));
+                let mut login = TelnetLogin::of(host, settings, credential)
+                    .with_route(self.route_login(&host.route));
+                // As an SSH host's: a temporary host's password is its own.
+                if self.is_temporary(host.id)
+                    && let Some(auto_login) = &mut login.auto_login
+                    && matches!(auto_login.password, Some(SecretRef::Password { .. }))
+                {
+                    auto_login.password = Some(SecretRef::temporary(host.id.0));
+                }
+                HostConnection::Telnet(login)
+            }
             Protocol::Serial(settings) => HostConnection::Serial(SerialLine {
                 device: host.address.to_string(),
-                settings,
+                settings: *settings,
             }),
         }
-    }
-
-    /// The login of an SSH host; a serial host has none.
-    fn ssh_login(&self, id: HostId) -> Option<HostLogin> {
-        self.host(id)
-            .filter(|host| !host.is_serial())
-            .map(|host| self.login_of(host))
     }
 
     pub fn login_of(&self, host: &Host) -> HostLogin {
@@ -1233,9 +1240,7 @@ impl HostStore {
             self.forget_key_file(path, cx);
         }
         for (host, before) in &logins {
-            if let HostConnection::Ssh(before) = before
-                && self.host(*host).is_some_and(|s| s.credential == Some(id))
-            {
+            if self.host(*host).is_some_and(|s| s.credential == Some(id)) {
                 self.forget_passwords_of(before, cx);
             }
         }
@@ -1671,11 +1676,8 @@ impl HostStore {
     /// proxies' included.
     fn passwords_of(&self, ids: &[HostId]) -> Vec<SecretRef> {
         let mut passwords: Vec<SecretRef> = Vec::new();
-        for login in ids.iter().filter_map(|id| self.ssh_login(*id)) {
-            for secret in [Some(login.password), login.route.proxy_password()]
-                .into_iter()
-                .flatten()
-            {
+        for connection in ids.iter().filter_map(|id| self.connection(*id)) {
+            for secret in connection.password_entries() {
                 if !passwords.contains(&secret) {
                     passwords.push(secret);
                 }
@@ -1684,12 +1686,11 @@ impl HostStore {
         passwords
     }
 
-    /// Forget the endpoint and proxy passwords `login` used, those that no
-    /// host uses any more.
-    fn forget_passwords_of(&mut self, login: &HostLogin, cx: &mut Context<Self>) {
-        self.forget_password(login.password.clone(), cx);
-        if let Some(proxy) = login.route.proxy_password() {
-            self.forget_password(proxy, cx);
+    /// Forget the endpoint and proxy passwords `connection` used, those that
+    /// no host uses any more.
+    fn forget_passwords_of(&mut self, connection: &HostConnection, cx: &mut Context<Self>) {
+        for secret in connection.password_entries() {
+            self.forget_password(secret, cx);
         }
     }
 
@@ -1710,11 +1711,7 @@ impl HostStore {
     fn password_in_use(&self, secret: &SecretRef) -> bool {
         self.hosts
             .iter()
-            .filter(|host| !host.is_serial())
-            .any(|host| {
-                let login = self.login_of(host);
-                login.password == *secret || login.route.proxy_password().as_ref() == Some(secret)
-            })
+            .any(|host| self.connection_of(host).password_entries().contains(secret))
     }
 
     /// Write a change through to the database, when there is one. A failed
@@ -1836,11 +1833,12 @@ impl HostStore {
 
 /// `draft` as the store keeps it. A host using a credential logs in as
 /// the credential's user and keeps nothing of its own login; one naming a
-/// credential that is not there logs in on its own.
+/// credential that is not there logs in on its own. A Telnet host is kept
+/// as an SSH one: its credential is its 自动登录's.
 fn normalized(credentials: &[Credential], mut draft: HostDraft) -> HostDraft {
     if draft.protocol.is_serial() {
-        // Nothing of an SSH login: no credential to count it as a user of,
-        // no jump hosts to keep alive.
+        // Nothing of a login: no credential to count it as a user of, no
+        // jump hosts to keep alive.
         draft.credential = None;
         draft.route = Route::Direct;
         return draft;
@@ -1940,6 +1938,76 @@ mod tests {
         assert!(store.host(console).unwrap().is_serial());
         // It has no password to keep, nor to look for.
         assert!(store.passwords_of(&[console]).is_empty());
+    }
+
+    #[test]
+    fn a_telnet_host_is_no_way_through_and_keeps_its_protocol() {
+        let mut store = HostStore::empty();
+        let web = store.insert_unnotified(draft("web", None));
+        let switch = store.insert_unnotified(HostDraft::telnet("switch", "10.0.0.5", 23, None));
+        assert_eq!(
+            store.ssh_hosts().map(|host| host.id).collect::<Vec<_>>(),
+            [web]
+        );
+        assert_eq!(
+            store.insert_forward_unnotified(forward_draft(switch, 8080)),
+            None
+        );
+        let through = store.insert_unnotified(
+            draft("behind", None).with_route(Route::Jump(vec![Some(switch), Some(web)])),
+        );
+        assert_eq!(
+            store.host(through).unwrap().route,
+            Route::Jump(vec![None, Some(web)])
+        );
+        // A Telnet host goes through jump hosts as an SSH host does.
+        let behind = store.insert_unnotified(
+            HostDraft::telnet("behind", "10.0.0.6", 23, None)
+                .with_route(Route::Jump(vec![Some(web)])),
+        );
+        assert_eq!(
+            store.host(behind).unwrap().route,
+            Route::Jump(vec![Some(web)])
+        );
+        // No protocol ever becomes another.
+        let serial = HostDraft::serial("x", "COM3", super::super::SerialSettings::default(), None);
+        assert!(!store.update_unnotified(switch, draft("switch", None)));
+        assert!(!store.update_unnotified(switch, serial.clone()));
+        assert!(!store.update_unnotified(web, HostDraft::telnet("web", "10.0.0.1", 23, None)));
+        assert!(store.update_unnotified(
+            switch,
+            HostDraft::telnet("switch-2", "10.0.0.5", 2323, None)
+        ));
+        // Without 自动登录 it has no password to keep.
+        assert!(store.passwords_of(&[switch]).is_empty());
+    }
+
+    #[test]
+    fn a_telnet_password_is_kept_while_a_host_types_it() {
+        let mut store = HostStore::empty();
+        let mut typing = HostDraft::telnet("switch", "10.0.0.5", 23, None);
+        typing.auth = AuthKind::Password;
+        typing.user = "admin".into();
+        let switch = store.insert_unnotified(typing.clone());
+        let entry = SecretRef::password("admin", "10.0.0.5", 23);
+        assert_eq!(store.passwords_of(&[switch]), std::slice::from_ref(&entry));
+        assert!(store.password_in_use(&entry));
+        let HostConnection::Telnet(login) = store.connection(switch).unwrap() else {
+            panic!("a Telnet host connects over Telnet");
+        };
+        let auto_login = login.auto_login.unwrap();
+        assert_eq!(auto_login.user, "admin");
+        assert_eq!(auto_login.password, Some(entry.clone()));
+
+        // A temporary host's is its own, in memory.
+        let temporary = store.insert_temporary_unnotified(typing, None);
+        let HostConnection::Telnet(login) = store.connection(temporary).unwrap() else {
+            panic!("a Telnet host connects over Telnet");
+        };
+        assert_eq!(
+            login.auto_login.unwrap().password,
+            Some(SecretRef::temporary(temporary.0))
+        );
     }
 
     fn forward_draft(host: HostId, port: u16) -> ForwardDraft {

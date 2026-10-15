@@ -15,7 +15,7 @@ use gpui_kit::*;
 use crate::app::{
     CatalogIcon, ConnectHost, ConnectSelected, NewHost, QuickConnect, RECENT_HOSTS_CONTEXT,
 };
-use crate::host::{HostId, HostOs, HostStore, host_menu};
+use crate::host::{HostId, HostOs, HostStore, ProtocolKind, host_menu};
 use crate::i18n::t;
 use crate::shared::HostMark;
 
@@ -46,7 +46,7 @@ struct RecentRow {
     group: Option<SharedString>,
     connected: bool,
     os: Option<HostOs>,
-    serial: bool,
+    protocol: ProtocolKind,
     /// The host's own address, which colours a mark without a brand.
     host_address: SharedString,
 }
@@ -87,7 +87,7 @@ impl RecentHosts {
                     .map(|id| SharedString::from(store.group_path(id))),
                 connected: host.state.is_connected(),
                 os: host.os,
-                serial: host.is_serial(),
+                protocol: host.kind(),
                 host_address: host.address.clone(),
             })
             .collect()
@@ -209,7 +209,7 @@ impl RecentHosts {
                             row.host_address.clone(),
                             row.os,
                         )
-                        .serial(row.serial),
+                        .protocol(row.protocol),
                     )
                     .child(
                         v_flex()

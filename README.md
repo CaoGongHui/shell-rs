@@ -38,6 +38,7 @@ Hosts, groups, credentials and forwarding rules live in a local SQLite database.
 - Three ways to log in: password; no password (the server's `none` auth, then the SSH agent, then the default keys in `~/.ssh`); or a saved credential.
 - Three ways to connect: directly, through a chain of SSH jump hosts, or through an HTTP or SOCKS5 proxy. Terminals, SFTP, port forwards and the CLI all follow it.
 - "Test connection" performs a real login and explains any failure.
+- Besides SSH: Telnet hosts for switches, console servers and lab devices, with automatic login at the device's prompts and the same jump hosts and proxies; and serial ports of this computer, for console cables and debug ports.
 
 **Terminal**
 

@@ -325,6 +325,7 @@ fn a_host_described_on_stdin_reaches_the_app_and_comes_back_saved() {
                         password_saved: Some(password.is_some()),
                         route: Some(RouteDetails::Direct),
                         serial: None,
+                        telnet: None,
                         notes: String::new(),
                         os: None,
                         temporary: false,

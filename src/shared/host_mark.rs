@@ -4,7 +4,7 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::host::{ConnectionState, HostOs};
+use crate::host::{ConnectionState, HostOs, ProtocolKind};
 use crate::i18n::t;
 
 /// The colours a host without one of its own is drawn on, picked by its
@@ -56,8 +56,8 @@ fn mark_index(address: &str) -> usize {
 
 /// The mark that stands for a host: the operating system found on its host,
 /// drawn on a badge in that project's own colour, or the first character of
-/// the host name until a probe succeeds, as for a serial host, which nothing
-/// probes. Whatever has no colour of its own (the name's character, Apple's
+/// the host name until a probe succeeds, as for a Telnet or serial host,
+/// which nothing probes. Whatever has no colour of its own (the name's character, Apple's
 /// mark) gets its address's.
 ///
 /// Shared so the host tree and the start page show one identity for the
@@ -69,7 +69,7 @@ pub struct HostMark {
     name: SharedString,
     address: SharedString,
     os: Option<HostOs>,
-    serial: bool,
+    protocol: ProtocolKind,
     /// The connection the mark stands for on a tab, when it has one.
     state: Option<ConnectionState>,
     size: Size,
@@ -90,17 +90,17 @@ impl HostMark {
             name: name.into(),
             address: address.into(),
             os,
-            serial: false,
+            protocol: ProtocolKind::Ssh,
             state: None,
             size: Size::Medium,
             tooltip: true,
         }
     }
 
-    /// The mark of a serial host, whatever `os` says: the name's character,
-    /// which the tooltip calls a serial port.
-    pub fn serial(mut self, serial: bool) -> Self {
-        self.serial = serial;
+    /// The mark of a Telnet or serial host, whatever `os` says: the name's
+    /// character, which the tooltip calls Telnet or a serial port.
+    pub fn protocol(mut self, protocol: ProtocolKind) -> Self {
+        self.protocol = protocol;
         self
     }
 
@@ -139,7 +139,7 @@ impl RenderOnce for HostMark {
         };
         let own: Hsla = mark_color(&self.address).into();
         let white: Hsla = rgb(MARK_INK).into();
-        let os = self.os.filter(|_| !self.serial);
+        let os = self.os.filter(|_| self.protocol.is_ssh());
         let (background, ink, glyph, description) = match os {
             Some(os) => {
                 let (background, ink) = match (os.brand_color(), os.brand_foreground()) {
@@ -155,8 +155,8 @@ impl RenderOnce for HostMark {
                     SharedString::from(os.label()),
                 )
             }
-            // The name's first character, a serial host's too: it has no
-            // system to find, which is all the tooltip says otherwise.
+            // The name's first character, a Telnet or serial host's too: it
+            // has no system to find, which is all the tooltip says otherwise.
             None => (
                 own,
                 white,
@@ -176,10 +176,10 @@ impl RenderOnce for HostMark {
                             .unwrap_or_default(),
                     )
                     .into_any_element(),
-                if self.serial {
-                    t!("shared.host_mark.serial")
-                } else {
-                    t!("shared.host_mark.unknown_os")
+                match self.protocol {
+                    ProtocolKind::Ssh => t!("shared.host_mark.unknown_os"),
+                    ProtocolKind::Telnet => t!("shared.host_mark.telnet"),
+                    ProtocolKind::Serial => t!("shared.host_mark.serial"),
                 },
             ),
         };

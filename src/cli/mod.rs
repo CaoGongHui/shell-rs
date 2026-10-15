@@ -67,8 +67,8 @@ const HOST_FIELDS: &str = "\
 Reads one JSON object from stdin. Every field may be left out; `update` changes only the fields given.
   name        Default the address; an empty name is the address too.
   host        The address (IP or host name). Required to create. Also read as `address`.
-  port        Default 22.
-  user        Default root. A host using a credential logs in as the credential's user.
+  port        Default 22 (23 for Telnet).
+  user        Default root (none for Telnet). A host using a credential logs in as the credential's user.
   group       A group path such as \"Production/Databases\", made when it is not there; null for the top level.
   auth        \"password\", \"credential\" or \"no_password\".
   credential  A credential ID from `shellrs credentials list`, for auth \"credential\" (implied).
@@ -79,7 +79,11 @@ Reads one JSON object from stdin. Every field may be left out; `update` changes 
               {\"type\": \"proxy\", \"kind\": \"http\" | \"socks5\", \"host\": ..., \"port\": ...,
                \"user\": ..., \"password\": ...}
   notes       Free text.
-  protocol    \"ssh\" (the default) or \"serial\", set when the host is created.
+  protocol    \"ssh\" (the default), \"telnet\" or \"serial\", set when the host is created.
+  telnet      A Telnet host's prompts for its automatic login (implies protocol \"telnet\"):
+              {\"user_prompt\": ..., \"password_prompt\": ...}   (null or empty for the usual ones)
+              Its auth \"password\" or \"credential\" (a password credential) logs in automatically with
+              user and password, either of which may be empty; \"no_password\" doesn't log in.
   serial      A serial host's port of this computer and line, instead of host, port, user, auth,
               credential, password and route (implies protocol \"serial\"):
               {\"device\": \"/dev/ttyUSB0\" | \"COM3\", \"baud\": 115200, \"data_bits\": 5-8,

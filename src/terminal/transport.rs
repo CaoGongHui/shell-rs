@@ -8,7 +8,7 @@ use tokio::sync::oneshot;
 use super::{LocalShell, TerminalSize};
 use crate::connection::Latency;
 use crate::connection::{ConnectionPrompt, ConnectionPromptReply};
-use crate::host::{HostConnection, HostLogin, HostOs, SerialLine};
+use crate::host::{HostConnection, HostLogin, HostOs, SerialLine, TelnetLogin};
 
 /// Commands accepted by every terminal byte-stream transport.
 pub enum TerminalTransportCommand {
@@ -24,9 +24,9 @@ pub enum TerminalTransportCommand {
     /// Open an SFTP channel beside the shell, for the right sidebar's
     /// 文件. Dropped like `Exec` by a transport without a connection.
     OpenSftp(SftpChannelRequest),
-    /// Hold the line in the break condition for a moment, as a serial
-    /// console's 发送 Break does. Only a serial transport has a line to
-    /// break; the others drop it.
+    /// 发送 Break: a serial transport holds its line in the break condition
+    /// for a moment, a Telnet one sends Telnet's break (which a console
+    /// server passes on to its line). SSH has none and drops it.
     SendBreak,
     Shutdown,
 }
@@ -175,11 +175,21 @@ pub trait SerialTerminalTransportProvider: Send + Sync + 'static {
 
 pub type SharedSerialTerminalTransportProvider = Arc<dyn SerialTerminalTransportProvider>;
 
-/// Where a host's terminal gets its bytes: an SSH connection, or a serial
-/// port of this computer.
+/// Creates the factory of a Telnet host's terminal for the address, route
+/// and 自动登录 it has, asked when it opens and when it reconnects. The
+/// workspace owns this boundary too, and UI tests inject a fake.
+pub trait TelnetTerminalTransportProvider: Send + Sync + 'static {
+    fn factory_for(&self, login: &TelnetLogin) -> SharedTerminalTransportFactory;
+}
+
+pub type SharedTelnetTerminalTransportProvider = Arc<dyn TelnetTerminalTransportProvider>;
+
+/// Where a host's terminal gets its bytes: an SSH connection, a Telnet
+/// one, or a serial port of this computer.
 #[derive(Clone)]
 pub struct HostTerminalTransports {
     pub ssh: SharedRemoteTerminalTransportProvider,
+    pub telnet: SharedTelnetTerminalTransportProvider,
     pub serial: SharedSerialTerminalTransportProvider,
 }
 
@@ -187,6 +197,7 @@ impl HostTerminalTransports {
     pub fn factory_for(&self, connection: &HostConnection) -> SharedTerminalTransportFactory {
         match connection {
             HostConnection::Ssh(login) => self.ssh.factory_for(login),
+            HostConnection::Telnet(login) => self.telnet.factory_for(login),
             HostConnection::Serial(line) => self.serial.factory_for(line),
         }
     }
@@ -266,6 +277,40 @@ impl SerialTerminalTransportProvider for FixedSerialTerminalTransportProvider {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .push(line.clone());
+        self.factory.clone()
+    }
+}
+
+/// Gives every Telnet terminal the same factory, and remembers what each
+/// was for.
+pub struct FixedTelnetTerminalTransportProvider {
+    factory: SharedTerminalTransportFactory,
+    logins: Mutex<Vec<TelnetLogin>>,
+}
+
+impl FixedTelnetTerminalTransportProvider {
+    pub fn new(factory: SharedTerminalTransportFactory) -> Self {
+        Self {
+            factory,
+            logins: Default::default(),
+        }
+    }
+
+    /// The connection of each Telnet terminal started, in order.
+    pub fn logins(&self) -> Vec<TelnetLogin> {
+        self.logins
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+}
+
+impl TelnetTerminalTransportProvider for FixedTelnetTerminalTransportProvider {
+    fn factory_for(&self, login: &TelnetLogin) -> SharedTerminalTransportFactory {
+        self.logins
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(login.clone());
         self.factory.clone()
     }
 }

@@ -8,6 +8,7 @@ mod proxy;
 mod route_tests;
 mod tester;
 mod transport;
+mod worker;
 pub use connection::{
     AgentLocation, ForwardedTcpip, MissingCredential, SshConnectionConfig, SshConnector, SshHandle,
     SshPrompts, is_network_error,
@@ -16,3 +17,4 @@ pub use exec::{ExecError, ExecErrorKind, ExecExit, ExecStream, run_command};
 pub use latency::{LATENCY_INTERVAL, round_trip};
 pub use tester::{SshConnectionTester, describe_login_error};
 pub use transport::SshTerminalTransportProvider;
+pub(crate) use worker::run_terminal_worker;

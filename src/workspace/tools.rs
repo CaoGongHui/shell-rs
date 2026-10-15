@@ -105,9 +105,7 @@ impl Workspace {
         let store = self.store.read(cx);
         let os = store.host(terminal.host).and_then(|host| host.os);
         let shell_only = store.is_external(terminal.host)
-            || store
-                .host(terminal.host)
-                .is_some_and(|host| host.is_serial());
+            || store.host(terminal.host).is_some_and(|host| !host.is_ssh());
         let shown = self.settings().read(cx).settings().sidebar_tools;
         ToolKind::ALL
             .into_iter()

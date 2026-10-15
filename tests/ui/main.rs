@@ -29,6 +29,7 @@ mod settings;
 mod sftp;
 mod shortcuts;
 mod snippets;
+mod telnet;
 mod terminal;
 mod tmux;
 mod transfer;

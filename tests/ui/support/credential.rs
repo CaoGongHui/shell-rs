@@ -21,6 +21,7 @@ pub fn open_workspace_with_credentials(
                 store,
                 cx.new(|_| settings_store()),
                 remote,
+                fake_telnet_terminals(),
                 fake_serial_terminals(),
                 fake_local_terminals(),
                 Arc::new(FakeSftpProvider::default()),

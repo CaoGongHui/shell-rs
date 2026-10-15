@@ -4,7 +4,7 @@ use rand::{Rng as _, distr::Alphanumeric};
 use crate::i18n::t;
 use crate::secrets::SecretRef;
 
-use super::{CredentialId, Protocol, SerialSettings};
+use super::{CredentialId, Protocol, ProtocolKind, SerialSettings, TelnetSettings};
 
 /// Stable identity of a host. Never reused within a process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -389,7 +389,7 @@ impl ConnectionState {
     }
 }
 
-/// A saved host: an SSH server, or a serial port of this computer. `group`
+/// A saved host: an SSH or Telnet server, or a serial port of this computer. `group`
 /// is `None` for a host that sits at the root of the tree rather than
 /// inside a folder.
 #[derive(Clone, Debug)]
@@ -399,17 +399,20 @@ pub struct Host {
     /// Set once when the host is created; editing never changes it.
     pub public_id: PublicId,
     pub name: SharedString,
-    /// SSH or serial, for good: see [`Protocol`].
+    /// SSH, Telnet or serial, for good: see [`Protocol`].
     pub protocol: Protocol,
     /// The host name or IP address it is reached at: 「地址」 in the form.
     /// A serial host's device, such as `/dev/cu.usbserial-1410` or `COM3`.
     pub address: SharedString,
     pub port: u16,
     /// The user it logs in as. For a host using a credential this is the
-    /// credential's user, which the store keeps in step.
+    /// credential's user, which the store keeps in step. A Telnet host's
+    /// may be empty: its device asks only for a password.
     pub user: SharedString,
     /// How a host logs in on its own. A host using a credential keeps
-    /// the default here.
+    /// the default here. For a Telnet host, [`AuthKind::Password`] is 自动登录
+    /// with its own user and password, and [`AuthKind::NoPassword`] no
+    /// 自动登录 at all.
     pub auth: AuthKind,
     /// The credential it logs in with instead of `auth`, if any.
     pub credential: Option<CredentialId>,
@@ -450,13 +453,23 @@ impl Host {
         }
     }
 
-    /// `user@address:port`, as shown in the status bar; a serial host's
-    /// device and line, `/dev/cu.usbserial-1410 · 115200 8N1`.
+    /// `user@address:port`, as shown in the status bar; a Telnet host's
+    /// `address:port`, its user being only what 自动登录 types; a serial
+    /// host's device and line, `/dev/cu.usbserial-1410 · 115200 8N1`.
     pub fn endpoint(&self) -> String {
-        match self.protocol {
+        match &self.protocol {
             Protocol::Ssh => format!("{}@{}:{}", self.user, self.address, self.port),
+            Protocol::Telnet(_) => format!("{}:{}", self.address, self.port),
             Protocol::Serial(settings) => format!("{} · {}", self.address, settings.summary()),
         }
+    }
+
+    pub fn kind(&self) -> ProtocolKind {
+        self.protocol.kind()
+    }
+
+    pub fn is_ssh(&self) -> bool {
+        self.protocol.is_ssh()
     }
 
     pub fn is_serial(&self) -> bool {
@@ -480,7 +493,7 @@ impl Host {
     pub fn draft(&self) -> HostDraft {
         HostDraft {
             name: self.name.clone(),
-            protocol: self.protocol,
+            protocol: self.protocol.clone(),
             address: self.address.clone(),
             port: self.port,
             user: self.user.clone(),
@@ -590,6 +603,20 @@ impl HostDraft {
         }
     }
 
+    /// A Telnet host at `address:port`, without 自动登录. What only SSH uses
+    /// keeps its default.
+    pub fn telnet(
+        name: impl Into<SharedString>,
+        address: impl Into<SharedString>,
+        port: u16,
+        group: Option<GroupId>,
+    ) -> Self {
+        Self {
+            protocol: Protocol::Telnet(TelnetSettings::default()),
+            ..Self::new(name, address, port, "", AuthKind::NoPassword, group)
+        }
+    }
+
     /// Log in with a saved credential instead of `auth`. The store takes the
     /// user name from the credential when the draft is saved.
     pub fn with_credential(mut self, credential: CredentialId) -> Self {
@@ -615,8 +642,8 @@ impl HostDraft {
     }
 
     /// The draft with surrounding blanks removed, an empty name taken as
-    /// the address and an empty user name as [`super::DEFAULT_USER`], or the
-    /// first thing wrong with it,
+    /// the address and an empty user name as [`super::DEFAULT_USER`] (a
+    /// Telnet host may have none), or the first thing wrong with it,
     /// in the order the host form checks. What the form cannot leave out
     /// of a draft (a credential to pick, a proxy password without a user)
     /// is the caller's to check.
@@ -625,6 +652,10 @@ impl HostDraft {
         self.address = self.address.trim().to_string().into();
         if let Protocol::Serial(settings) = self.protocol {
             return self.validated_serial(settings);
+        }
+        if let Protocol::Telnet(settings) = &mut self.protocol {
+            settings.user_prompt = settings.user_prompt.trim().to_string().into();
+            settings.password_prompt = settings.password_prompt.trim().to_string().into();
         }
         if self.address.is_empty() {
             return Err(HostDraftError::Address);
@@ -636,7 +667,7 @@ impl HostDraft {
             return Err(HostDraftError::Port);
         }
         let user = self.user.trim();
-        self.user = if user.is_empty() {
+        self.user = if user.is_empty() && !self.protocol.is_telnet() {
             super::DEFAULT_USER.into()
         } else {
             user.to_string().into()
@@ -686,6 +717,9 @@ impl HostDraft {
 /// The port of an SSH host that names none, also what a serial host keeps
 /// in the column it has no use for.
 pub const SSH_PORT: u16 = 22;
+
+/// The port of a Telnet host that names none.
+pub const TELNET_PORT: u16 = 23;
 
 /// Why a host draft cannot be saved. `Display` is the text the host form
 /// shows.
@@ -788,6 +822,33 @@ mod tests {
             .validated()
             .unwrap_err();
         assert_eq!(error, HostDraftError::Baud);
+    }
+
+    #[test]
+    fn a_telnet_host_may_have_no_user_and_keeps_its_prompts_trimmed() {
+        let mut draft = HostDraft::telnet("", " 10.0.0.5 ", 23, None);
+        draft.protocol = Protocol::Telnet(TelnetSettings {
+            user_prompt: " Username: ".into(),
+            password_prompt: "".into(),
+        });
+        let draft = draft.validated().unwrap();
+        assert_eq!(
+            draft.user.as_ref(),
+            "",
+            "not root: the device may ask only for a password"
+        );
+        assert_eq!(draft.name.as_ref(), "10.0.0.5");
+        assert_eq!(
+            draft.protocol.telnet().unwrap().user_prompt.as_ref(),
+            "Username:"
+        );
+        assert_eq!(
+            HostDraft::telnet("x", "", 23, None).validated(),
+            Err(HostDraftError::Address)
+        );
+        let host = Host::new(HostId(1), draft);
+        assert_eq!(host.endpoint(), "10.0.0.5:23");
+        assert_eq!(host.kind(), ProtocolKind::Telnet);
     }
 
     #[test]

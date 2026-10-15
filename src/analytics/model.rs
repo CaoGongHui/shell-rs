@@ -55,6 +55,8 @@ pub enum Counter {
     LocalTerminal,
     /// A serial host's terminal connected, a reconnection too.
     Serial,
+    /// A Telnet host's terminal connected, a reconnection too.
+    Telnet,
     /// A port forward started, by the user or with ShellRS.
     ForwardLocal,
     ForwardRemote,
@@ -104,7 +106,7 @@ pub enum Counter {
 }
 
 impl Counter {
-    pub const ALL: [Counter; 50] = [
+    pub const ALL: [Counter; 51] = [
         Self::Ssh,
         Self::SshJump,
         Self::SshProxy,
@@ -118,6 +120,7 @@ impl Counter {
         Self::SftpFind,
         Self::LocalTerminal,
         Self::Serial,
+        Self::Telnet,
         Self::ForwardLocal,
         Self::ForwardRemote,
         Self::ForwardDynamic,
@@ -172,6 +175,7 @@ impl Counter {
             Self::SftpFind => "sftp_find",
             Self::LocalTerminal => "local_terminal",
             Self::Serial => "serial",
+            Self::Telnet => "telnet",
             Self::ForwardLocal => "forward_local",
             Self::ForwardRemote => "forward_remote",
             Self::ForwardDynamic => "forward_dynamic",

@@ -22,7 +22,7 @@ use super::{SshConnectionConfig, SshConnectionTester, SshConnector, SshPrompts};
 use crate::{
     connection::{
         ConnectionPrompt, ConnectionPromptKind, ConnectionPromptReply, ConnectionSecret,
-        ConnectionTester as _, LoginTest,
+        ConnectionTester as _, LoginTest, TelnetTest,
     },
     host::{AuthKind, HostLogin, JumpLogin, LoginRoute, ProxyKind, ProxyLogin, ProxySettings},
     secrets::{InMemorySecretStore, SecretRef, SecretStore as _},
@@ -696,5 +696,61 @@ fn a_proxy_that_is_not_there_is_named() {
         Err(format!(
             "无法连接代理服务器 127.0.0.1:{port}：连接被拒绝，该端口上没有服务在监听"
         ))
+    );
+}
+
+/// A port that takes connections and holds them, as a Telnet server would.
+fn start_listener() -> Option<(u16, tokio::runtime::Runtime)> {
+    let runtime = runtime();
+    let listener = listen(&runtime)?;
+    let port = listener.local_addr().unwrap().port();
+    runtime.spawn(async move {
+        let mut held = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            held.push(socket);
+        }
+    });
+    Some((port, runtime))
+}
+
+#[test]
+fn a_telnet_host_behind_a_jump_host_is_reached_with_the_jump_hosts_saved_login() {
+    let (Some(jump), Some((telnet, _runtime))) =
+        (start_server(JUMP_USER, JUMP_PASSWORD), start_listener())
+    else {
+        eprintln!("loopback sockets are unavailable in this sandbox; skipping");
+        return;
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let keychain = Arc::new(InMemorySecretStore::default());
+    keychain
+        .set(
+            &SecretRef::password(JUMP_USER, "127.0.0.1", jump.port),
+            JUMP_PASSWORD,
+        )
+        .unwrap();
+    let tester = SshConnectionTester::new(SshConnector::new(
+        directory.path().join("known_hosts"),
+        keychain,
+    ));
+    let request = TelnetTest::new(
+        "127.0.0.1",
+        telnet,
+        LoginRoute::Jump(vec![hop("跳板", jump.port)]),
+    );
+    assert_eq!(tester.test_telnet(request, Box::new(|_| true)), Ok(()));
+    assert_eq!(
+        jump.targets(),
+        [("127.0.0.1".to_string(), u32::from(telnet))]
+    );
+
+    // Directly, to a port nothing listens on.
+    let port = closed_port();
+    assert_eq!(
+        tester.test_telnet(
+            TelnetTest::new("127.0.0.1", port, LoginRoute::Direct),
+            Box::new(|_| true)
+        ),
+        Err("连接被拒绝，该端口上没有服务在监听".into())
     );
 }

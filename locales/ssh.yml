@@ -4,6 +4,9 @@ _version: 2
 ssh.connect.failed:
   zh-CN: 无法建立 SSH 连接，请检查地址、端口和主机密钥
   en: Couldn’t establish an SSH connection (check the address, port and host key)
+ssh.route.connect_failed:
+  zh-CN: 无法连接到 %{host}:%{port}
+  en: Couldn’t connect to %{host}:%{port}
 ssh.connect.cancelled:
   zh-CN: 连接已取消
   en: Connection cancelled

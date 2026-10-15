@@ -6,6 +6,7 @@ use crate::{
     host::{HostLogin, JumpLogin, LoginMethod, LoginRoute, ProxyLogin},
     i18n::t,
     secrets::{SecretRef, SharedSecretStore},
+    terminal::ChannelStream,
 };
 use anyhow::{Context as _, Result, anyhow, bail};
 use russh::keys::{
@@ -27,7 +28,6 @@ use std::{
     },
     time::Duration,
 };
-use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, oneshot, watch};
 use zeroize::Zeroizing;
@@ -126,7 +126,7 @@ impl SshConnector {
     }
 
     /// The keychain this connector reads saved secrets from.
-    pub(super) fn secrets(&self) -> &SharedSecretStore {
+    pub(crate) fn secrets(&self) -> &SharedSecretStore {
         &self.secrets
     }
 
@@ -148,17 +148,37 @@ impl SshConnector {
         forwarded: Option<mpsc::UnboundedSender<ForwardedTcpip>>,
     ) -> Result<(client::Handle<SshClientHandler>, String)> {
         let login = &config.login;
-        let tunnel = match &login.route {
-            LoginRoute::Direct => {
-                Box::new(step(&broker, tcp(&login.host, login.port)).await?) as Tunnel
-            }
-            LoginRoute::Proxy(proxy) => {
-                Box::new(step(&broker, through_proxy(proxy, login, secrets)).await?)
-            }
-            LoginRoute::Jump(hops) => self.through_jumps(hops, login, &broker, secrets).await?,
-        };
+        let tunnel = self
+            .open_route(&login.route, &login.host, login.port, &broker, secrets)
+            .await?;
         self.log_in(tunnel, login, None, &broker, secrets, forwarded)
             .await
+    }
+
+    /// A stream to `host:port` by `route`: a socket, through the proxy, or a
+    /// channel through the last jump host. Each leg is given up after
+    /// `CONNECT_TIMEOUT`, not counting time spent answering, or when
+    /// `broker` is shut down; the jump hosts log in with their own logins and
+    /// ask through `broker`, naming the jump host. What an SSH login starts
+    /// from, and all a Telnet connection is.
+    pub(crate) async fn open_route(
+        &self,
+        route: &LoginRoute,
+        host: &str,
+        port: u16,
+        broker: &Arc<SshPrompts>,
+        secrets: &SharedSecretStore,
+    ) -> Result<Tunnel> {
+        Ok(match route {
+            LoginRoute::Direct => Box::new(step(broker, tcp(host, port)).await?),
+            LoginRoute::Proxy(proxy) => {
+                Box::new(step(broker, through_proxy(proxy, (host, port), secrets)).await?)
+            }
+            LoginRoute::Jump(hops) => {
+                self.through_jumps(hops, (host, port), broker, secrets)
+                    .await?
+            }
+        })
     }
 
     /// Open the SSH connection to `login`'s host over `tunnel` and log in.
@@ -202,12 +222,12 @@ impl SshConnector {
         Ok((handle, fingerprint))
     }
 
-    /// A stream to `login`'s host through `hops`, each logged in to over the
-    /// one before. A failure says which jump host it was at.
+    /// A stream to `target` through `hops`, each logged in to over the one
+    /// before. A failure says which jump host it was at.
     async fn through_jumps(
         &self,
         hops: &[JumpLogin],
-        login: &HostLogin,
+        target: (&str, u16),
         broker: &Arc<SshPrompts>,
         secrets: &SharedSecretStore,
     ) -> Result<Tunnel> {
@@ -226,9 +246,7 @@ impl SshConnector {
         for (ix, (name, hop)) in hosts.iter().enumerate() {
             let (next_host, next_port) = hosts
                 .get(ix + 1)
-                .map_or((login.host.as_str(), login.port), |(_, next)| {
-                    (next.host.as_str(), next.port)
-                });
+                .map_or(target, |(_, next)| (next.host.as_str(), next.port));
             let reached = self
                 .jump(
                     tunnel.take(),
@@ -330,11 +348,7 @@ impl SshConnector {
 
 /// What carries a connection to the host: a socket, or a channel through a
 /// jump host.
-type Tunnel = Box<dyn TunnelStream>;
-
-trait TunnelStream: AsyncRead + AsyncWrite + Unpin + Send {}
-
-impl<T: AsyncRead + AsyncWrite + Unpin + Send> TunnelStream for T {}
+pub(crate) type Tunnel = Box<dyn ChannelStream>;
 
 /// The key exchanges ShellRS offers, in OpenSSH's order: russh's own list
 /// leaves out the NIST curves, which servers without curve25519 (Apache
@@ -401,16 +415,16 @@ async fn tcp(host: &str, port: u16) -> Result<TcpStream> {
     let socket = TcpStream::connect((host, port))
         .await
         .map_err(russh::Error::IO)
-        .context(t!("ssh.connect.failed"))?;
+        .context(t!("ssh.route.connect_failed", host = host, port = port))?;
     // As russh's own connect does: the terminal's keystrokes go out at once.
     let _ = socket.set_nodelay(true);
     Ok(socket)
 }
 
-/// A stream to `login`'s host through `proxy`.
+/// A stream to `target` through `proxy`.
 async fn through_proxy(
     proxy: &ProxyLogin,
-    login: &HostLogin,
+    (host, port): (&str, u16),
     secrets: &SharedSecretStore,
 ) -> Result<TcpStream> {
     let mut socket = TcpStream::connect((proxy.host.as_str(), proxy.port))
@@ -436,7 +450,7 @@ async fn through_proxy(
         user,
         password: password.as_deref().map_or("", String::as_str),
     });
-    handshake(&mut socket, proxy.kind, &login.host, login.port, auth)
+    handshake(&mut socket, proxy.kind, host, port, auth)
         .await
         .map_err(|error| {
             let text = error.to_string();

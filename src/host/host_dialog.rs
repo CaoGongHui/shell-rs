@@ -4,6 +4,7 @@ use std::time::Duration;
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, IndexPath, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
+    checkbox::Checkbox,
     combobox::{Combobox, ComboboxEvent, ComboboxState},
     dialog::{Cancel, Confirm, DialogButtonProps, DialogFooter},
     form::{Field, Form},
@@ -21,15 +22,18 @@ use gpui_kit::*;
 use zeroize::Zeroizing;
 
 use crate::app::ConnectHost;
-use crate::connection::{LoginTest, SharedConnectionTester, TrustCallback, UnknownHostPrompt};
+use crate::connection::{
+    LoginTest, SharedConnectionTester, TelnetTest, TrustCallback, UnknownHostPrompt,
+};
 use crate::i18n::{t, tn};
+use crate::secrets::SecretRef;
 
 use super::secret_fields::SecretFields;
 use super::{
     AuthKind, COMMON_BAUD_RATES, Credential, CredentialId, CredentialKind, DEFAULT_USER, DataBits,
     FlowControl, GroupId, Host, HostDraft, HostDraftError, HostId, HostLogin, HostStore, Parity,
-    Protocol, ProxyKind, ProxySettings, Route, SSH_PORT, SerialLine, SerialSettings, StopBits,
-    group_options,
+    Protocol, ProtocolKind, ProxyKind, ProxySettings, Route, SSH_PORT, SerialLine, SerialSettings,
+    StopBits, TELNET_PORT, TelnetSettings, group_options,
 };
 pub use crate::shared::DeleteHandler;
 use crate::shared::{
@@ -42,29 +46,34 @@ use crate::shared::{
 const DIALOG_TOP: f32 = 0.05;
 const DIALOG_MAX_HEIGHT: f32 = 0.9;
 
-/// What a host is, as the form's 「协议」 offers it.
+/// Where a Telnet host's 自动登录 takes its user name and password, as the
+/// form's 「认证方式」 offers it when 自动登录 is on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ProtocolChoice {
-    Ssh,
-    Serial,
+enum TelnetSource {
+    /// Typed into this form; either may be left empty.
+    Manual,
+    /// A saved password credential's.
+    Credential,
 }
 
-impl ProtocolChoice {
-    /// Every protocol, in the order the form lists them.
-    const ALL: [ProtocolChoice; 2] = [ProtocolChoice::Ssh, ProtocolChoice::Serial];
+impl TelnetSource {
+    const ALL: [TelnetSource; 2] = [TelnetSource::Manual, TelnetSource::Credential];
 
     fn label(self) -> SharedString {
         match self {
-            ProtocolChoice::Ssh => t!("host.protocol.ssh"),
-            ProtocolChoice::Serial => t!("host.protocol.serial"),
+            TelnetSource::Manual => t!("host.telnet_auth.manual"),
+            TelnetSource::Credential => t!("host.auth.credential"),
         }
     }
+}
 
-    fn of(protocol: Protocol) -> Self {
-        match protocol {
-            Protocol::Ssh => ProtocolChoice::Ssh,
-            Protocol::Serial(_) => ProtocolChoice::Serial,
-        }
+/// The port a new host of `protocol` starts with, which follows the protocol
+/// until it is changed; a serial host has none.
+fn default_port(protocol: ProtocolKind) -> Option<u16> {
+    match protocol {
+        ProtocolKind::Ssh => Some(SSH_PORT),
+        ProtocolKind::Telnet => Some(TELNET_PORT),
+        ProtocolKind::Serial => None,
     }
 }
 
@@ -197,7 +206,7 @@ pub struct HostForm {
     temporary: bool,
     name: Entity<InputState>,
     /// Chosen when the host is created; an edit shows it but cannot change it.
-    protocol: ProtocolChoice,
+    protocol: ProtocolKind,
     address: Entity<InputState>,
     port: Entity<InputState>,
     source: AuthSource,
@@ -229,6 +238,18 @@ pub struct HostForm {
     /// The proxy's password.
     proxy_secret: Entity<SecretFields>,
     notes: Entity<TextareaState>,
+    /// A Telnet host's 自动登录: whether it is on, where it takes the
+    /// user name and password from, and the prompts it waits for.
+    telnet_auto_login: bool,
+    telnet_source: TelnetSource,
+    telnet_user: Entity<InputState>,
+    telnet_fields: Entity<SecretFields>,
+    telnet_credential: Entity<SelectState<Vec<SharedString>>>,
+    /// The password credentials, parallel to the Telnet credential select's
+    /// rows, and the host's own credential whatever it is.
+    telnet_credentials: Vec<Credential>,
+    telnet_user_prompt: Entity<InputState>,
+    telnet_password_prompt: Entity<InputState>,
     /// A serial host's device and line.
     device: Entity<InputState>,
     baud: Entity<InputState>,
@@ -292,20 +313,21 @@ impl HostForm {
                 preselect_group,
             )
         });
-        let protocol = ProtocolChoice::of(draft.protocol);
+        let protocol = draft.protocol.kind();
         // A serial host's address is its device, which is not an address
-        // the SSH fields would show.
+        // the SSH or Telnet fields would show.
         let (address_value, device_value) = match protocol {
-            ProtocolChoice::Ssh => (draft.address.clone(), SharedString::default()),
-            ProtocolChoice::Serial => (SharedString::default(), draft.address.clone()),
+            ProtocolKind::Serial => (SharedString::default(), draft.address.clone()),
+            _ => (draft.address.clone(), SharedString::default()),
         };
         let line = draft.protocol.serial().unwrap_or_default();
+        let telnet = draft.protocol.telnet().cloned();
 
         let name = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(match protocol {
-                    ProtocolChoice::Ssh => t!("host.dialog.name_placeholder"),
-                    ProtocolChoice::Serial => t!("host.dialog.name_placeholder_serial"),
+                    ProtocolKind::Serial => t!("host.dialog.name_placeholder_serial"),
+                    _ => t!("host.dialog.name_placeholder"),
                 })
                 .default_value(draft.name.clone())
         });
@@ -367,7 +389,7 @@ impl HostForm {
         );
         let port = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("22")
+                .placeholder(default_port(protocol).unwrap_or(SSH_PORT).to_string())
                 .default_value(draft.port.to_string())
         });
         let user = cx.new(|cx| {
@@ -393,6 +415,79 @@ impl HostForm {
             )
             .searchable(true)
         });
+        // Telnet: a password credential's user name and password, or
+        // whatever the host already uses.
+        let telnet_credentials = credentials
+            .iter()
+            .filter(|credential| {
+                credential.kind == CredentialKind::Password
+                    || (telnet.is_some() && draft.credential == Some(credential.id))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let telnet_credential_ix = telnet.as_ref().and(draft.credential).and_then(|id| {
+            telnet_credentials
+                .iter()
+                .position(|credential| credential.id == id)
+        });
+        let telnet_credential = cx.new(|cx| {
+            SelectState::new(
+                telnet_credentials
+                    .iter()
+                    .map(|credential| credential_option(credential, key_dir.as_deref()))
+                    .collect::<Vec<_>>(),
+                telnet_credential_ix.map(IndexPath::new),
+                window,
+                cx,
+            )
+            .searchable(true)
+        });
+        let telnet_user = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t!("host.dialog.optional"))
+                .default_value(match (&telnet, draft.credential) {
+                    (Some(_), None) => draft.user.clone(),
+                    _ => SharedString::default(),
+                })
+        });
+        let telnet_fields = cx.new(|cx| {
+            let mut fields = SecretFields::new(secrets.clone(), None, window, cx);
+            fields.set_password_placeholder(
+                t!("host.dialog.telnet_password_placeholder"),
+                window,
+                cx,
+            );
+            fields
+        });
+        let prompt = |placeholder: &'static str,
+                      value: SharedString,
+                      window: &mut Window,
+                      cx: &mut Context<Self>| {
+            cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder(placeholder)
+                    .default_value(value)
+            })
+        };
+        let telnet_user_prompt = prompt(
+            "login: / Username:",
+            telnet
+                .as_ref()
+                .map(|telnet| telnet.user_prompt.clone())
+                .unwrap_or_default(),
+            window,
+            cx,
+        );
+        let telnet_password_prompt = prompt(
+            "Password:",
+            telnet
+                .as_ref()
+                .map(|telnet| telnet.password_prompt.clone())
+                .unwrap_or_default(),
+            window,
+            cx,
+        );
+
         let group_ix = group_ids
             .iter()
             .position(|group| *group == draft.group)
@@ -478,6 +573,8 @@ impl HostForm {
         let subscriptions = vec![
             cx.observe(&credential, |_, _, cx| cx.notify()),
             cx.observe(&fields, |_, _, cx| cx.notify()),
+            cx.observe(&telnet_credential, |_, _, cx| cx.notify()),
+            cx.observe(&telnet_fields, |_, _, cx| cx.notify()),
             cx.subscribe_in(
                 &jump_picker,
                 window,
@@ -491,10 +588,17 @@ impl HostForm {
             ),
         ];
 
-        if editing.is_some() && protocol == ProtocolChoice::Ssh {
-            // The host's own password, even for a host that does not use one
-            // now: it is what switching back would show.
-            fields.update(cx, |fields, cx| {
+        // The host's own password, even for a host that does not use one
+        // now: it is what switching back would show.
+        let own_password = match protocol {
+            ProtocolKind::Ssh => Some(&fields),
+            ProtocolKind::Telnet => Some(&telnet_fields),
+            ProtocolKind::Serial => None,
+        };
+        if editing.is_some()
+            && let Some(own_password) = own_password
+        {
+            own_password.update(cx, |fields, cx| {
                 fields.load_saved(Some(draft.password_secret()), None, cx)
             });
         }
@@ -516,6 +620,19 @@ impl HostForm {
             credential,
             credentials,
             key_dir,
+            telnet_auto_login: telnet.is_some()
+                && (draft.credential.is_some() || draft.auth == AuthKind::Password),
+            telnet_source: if telnet_credential_ix.is_some() {
+                TelnetSource::Credential
+            } else {
+                TelnetSource::Manual
+            },
+            telnet_user,
+            telnet_fields,
+            telnet_credential,
+            telnet_credentials,
+            telnet_user_prompt,
+            telnet_password_prompt,
             group,
             group_ids,
             route: RouteChoice::of(&draft.route),
@@ -541,7 +658,7 @@ impl HostForm {
             editing_connected,
             _subscriptions: subscriptions,
         };
-        if protocol == ProtocolChoice::Serial {
+        if protocol == ProtocolKind::Serial {
             form.look_for_ports(window, cx);
         }
         form
@@ -563,10 +680,11 @@ impl HostForm {
         form
     }
 
-    /// Make the form one for an SSH or a serial host: a new host's choice.
+    /// Make the form one for an SSH, a Telnet or a serial host: a new host's
+    /// choice.
     fn set_protocol(
         &mut self,
-        protocol: ProtocolChoice,
+        protocol: ProtocolKind,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -575,14 +693,27 @@ impl HostForm {
         }
         self.protocol = protocol;
         let placeholder = match (protocol, self.temporary) {
-            (ProtocolChoice::Serial, _) => t!("host.dialog.name_placeholder_serial"),
-            (ProtocolChoice::Ssh, true) => t!("host.dialog.temporary_name_placeholder"),
-            (ProtocolChoice::Ssh, false) => t!("host.dialog.name_placeholder"),
+            (ProtocolKind::Serial, _) => t!("host.dialog.name_placeholder_serial"),
+            (_, true) => t!("host.dialog.temporary_name_placeholder"),
+            (_, false) => t!("host.dialog.name_placeholder"),
         };
         self.name.update(cx, |input, cx| {
             input.set_placeholder(placeholder, window, cx)
         });
-        if protocol == ProtocolChoice::Serial && self.ports.is_none() {
+        // The port follows the protocol while it is still one's default.
+        if let Some(port) = default_port(protocol) {
+            let typed = self.port.read(cx).value().trim().to_string();
+            let untouched = [SSH_PORT, TELNET_PORT]
+                .iter()
+                .any(|default| default.to_string() == typed);
+            self.port.update(cx, |input, cx| {
+                input.set_placeholder(port.to_string(), window, cx);
+                if untouched {
+                    input.set_value(port.to_string(), window, cx);
+                }
+            });
+        }
+        if protocol == ProtocolKind::Serial && self.ports.is_none() {
             self.look_for_ports(window, cx);
         }
         cx.notify();
@@ -810,6 +941,88 @@ impl HostForm {
         })
     }
 
+    /// The way to the Telnet host the form describes, or why there is
+    /// nothing to test yet.
+    fn telnet_test(&self, cx: &App) -> Result<TelnetTest, SharedString> {
+        let (host, port) = self.endpoint(cx)?;
+        let route = self.committed_route(cx)?;
+        let request = TelnetTest::new(host, port, self.store.read(cx).route_login(&route));
+        Ok(match route {
+            Route::Proxy(_) => request.with_proxy_password(self.proxy_secret.read(cx).password(cx)),
+            _ => request,
+        })
+    }
+
+    /// The Telnet credential the form has selected.
+    fn selected_telnet_credential(&self, cx: &App) -> Option<&Credential> {
+        self.telnet_credential
+            .read(cx)
+            .selected_index(cx)
+            .and_then(|ix| self.telnet_credentials.get(ix.row))
+    }
+
+    /// Whether the form types a Telnet password of its own into the device.
+    fn telnet_password_typed(&self) -> bool {
+        self.telnet_auto_login && self.telnet_source == TelnetSource::Manual
+    }
+
+    /// The draft of a Telnet host in `group`, without its route and notes,
+    /// or what is wrong with the form. The password is not in it: it goes
+    /// to the keychain apart.
+    fn telnet_draft(&self, group: Option<GroupId>, cx: &App) -> Result<HostDraft, SharedString> {
+        let (host, port) = self.endpoint(cx)?;
+        let name = self.name.read(cx).value().trim().to_string();
+        let name = if name.is_empty() { host.clone() } else { name };
+        let mut draft = HostDraft::telnet(name, host, port, group);
+        draft.protocol = Protocol::Telnet(TelnetSettings {
+            user_prompt: self
+                .telnet_user_prompt
+                .read(cx)
+                .value()
+                .trim()
+                .to_string()
+                .into(),
+            password_prompt: self
+                .telnet_password_prompt
+                .read(cx)
+                .value()
+                .trim()
+                .to_string()
+                .into(),
+        });
+        if self.telnet_auto_login {
+            match self.telnet_source {
+                TelnetSource::Manual => {
+                    draft.auth = AuthKind::Password;
+                    draft.user = self.telnet_user.read(cx).value().trim().to_string().into();
+                }
+                TelnetSource::Credential => {
+                    let credential = self
+                        .selected_telnet_credential(cx)
+                        .ok_or_else(|| t!("host.dialog.choose_credential"))?;
+                    draft.auth = AuthKind::default();
+                    draft.user = credential.user.clone();
+                    draft = draft.with_credential(credential.id);
+                }
+            }
+        }
+        Ok(draft)
+    }
+
+    /// The proxy password typed for `route`, to save under the proxy's
+    /// entry: a change of it, or `None` to leave the entry as it is.
+    fn proxy_change(&self, route: &Route, cx: &App) -> Option<(SecretRef, Option<String>)> {
+        match route {
+            Route::Proxy(proxy) => proxy.password_secret().and_then(|secret| {
+                self.proxy_secret
+                    .read(cx)
+                    .password_change(cx)
+                    .map(|change| (secret, change))
+            }),
+            _ => None,
+        }
+    }
+
     /// Log in with the form's current values without saving them, and report
     /// the outcome as a notification. The login runs on a thread of its own;
     /// a host key seen for the first time is put to the user in a dialog
@@ -818,20 +1031,55 @@ impl HostForm {
         if self.testing_connection {
             return;
         }
-        if self.protocol == ProtocolChoice::Serial {
-            self.test_serial(window, cx);
-            return;
-        }
-        let request = match self.login_test(cx) {
-            Ok(request) => request,
-            Err(reason) => {
-                window.push_notification(connection_test_notification(Err(reason.into())), cx);
+        let tester = self.tester.clone();
+        let (test, success): (TestJob, _) = match self.protocol {
+            ProtocolKind::Serial => {
+                self.test_serial(window, cx);
                 return;
             }
+            ProtocolKind::Ssh => match self.login_test(cx) {
+                Ok(request) => (
+                    Box::new(move |trust| tester.test(request, trust)),
+                    t!("host.test.connected"),
+                ),
+                Err(reason) => {
+                    window.push_notification(connection_test_notification(Err(reason.into())), cx);
+                    return;
+                }
+            },
+            ProtocolKind::Telnet => match self.telnet_test(cx) {
+                Ok(request) => {
+                    let reached = t!(
+                        "host.test.telnet_reached",
+                        address = request.host(),
+                        port = request.port()
+                    );
+                    (
+                        Box::new(move |trust| tester.test_telnet(request, trust)),
+                        reached,
+                    )
+                }
+                Err(reason) => {
+                    window.push_notification(connection_test_notification(Err(reason.into())), cx);
+                    return;
+                }
+            },
         };
+        self.run_test(test, success, window, cx);
+    }
+
+    /// Run `test` on a thread of its own, put a host key seen for the first
+    /// time to the user in a dialog above this one, and report the outcome
+    /// as a notification, `success` when it went through.
+    fn run_test(
+        &mut self,
+        test: TestJob,
+        success: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let (trust_tx, trust_rx) = std::sync::mpsc::channel::<TrustQuestion>();
         let (result_tx, result_rx) = std::sync::mpsc::channel();
-        let tester = self.tester.clone();
         let spawned = std::thread::Builder::new()
             .name("shellrs-connection-test".into())
             .spawn(move || {
@@ -840,7 +1088,7 @@ impl HostForm {
                     let (reply_tx, reply_rx) = std::sync::mpsc::channel();
                     trust_tx.send((prompt, reply_tx)).is_ok() && reply_rx.recv().unwrap_or(false)
                 });
-                let _ = result_tx.send(tester.test(request, trust));
+                let _ = result_tx.send(test(trust));
             });
         if let Err(error) = spawned {
             window.push_notification(
@@ -884,7 +1132,11 @@ impl HostForm {
                 };
                 this.update_in(cx, |this, window, cx| {
                     this.testing_connection = false;
-                    window.push_notification(connection_test_notification(result), cx);
+                    let notification = match result {
+                        Ok(()) => Notification::success(success.clone()),
+                        Err(reason) => connection_test_notification(Err(reason)),
+                    };
+                    window.push_notification(notification, cx);
                     cx.notify();
                 })
                 .ok();
@@ -946,7 +1198,10 @@ impl HostForm {
 
     /// Validate and write to the store. Returns whether the dialog may close.
     pub fn commit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if self.protocol == ProtocolChoice::Serial {
+        if self.protocol == ProtocolKind::Telnet {
+            return self.commit_telnet(window, cx);
+        }
+        if self.protocol == ProtocolKind::Serial {
             let draft = match self.serial_draft(self.selected_group(cx), cx) {
                 Ok(draft) => draft,
                 Err(error) => {
@@ -1011,15 +1266,7 @@ impl HostForm {
             }
         };
         // The proxy's password goes the same way, under the proxy's entry.
-        let proxy_change = match &route {
-            Route::Proxy(proxy) => proxy.password_secret().and_then(|secret| {
-                self.proxy_secret
-                    .read(cx)
-                    .password_change(cx)
-                    .map(|change| (secret, change))
-            }),
-            _ => None,
-        };
+        let proxy_change = self.proxy_change(&route, cx);
         let notes = self.notes.read(cx).value().trim().to_string();
         let draft = draft.with_route(route).with_notes(notes);
 
@@ -1043,10 +1290,49 @@ impl HostForm {
         true
     }
 
+    /// [`Self::commit`] for a Telnet host: as an SSH host's, with the
+    /// password of its 自动登录, when typed here, going to the keychain.
+    fn commit_telnet(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let checked = self
+            .telnet_draft(self.selected_group(cx), cx)
+            .and_then(|draft| Ok((draft, self.committed_route(cx)?)));
+        let (draft, route) = match checked {
+            Ok(checked) => checked,
+            Err(error) => {
+                window.push_notification(form_error_notification(error), cx);
+                return false;
+            }
+        };
+        let proxy_change = self.proxy_change(&route, cx);
+        let notes = self.notes.read(cx).value().trim().to_string();
+        let draft = draft.with_route(route).with_notes(notes);
+        let password_change = self
+            .telnet_password_typed()
+            .then(|| self.telnet_fields.read(cx).password_change(cx))
+            .flatten()
+            .map(|change| (draft.password_secret(), change));
+        let editing = self.editing;
+        self.store.update(cx, |store, cx| {
+            match editing {
+                Some(id) => {
+                    store.update(id, draft, cx);
+                }
+                None => {
+                    store.insert(draft, cx);
+                }
+            }
+            for (secret, change) in password_change.into_iter().chain(proxy_change) {
+                store.save_secret(secret, change, cx);
+            }
+        });
+        self.clear_secrets(window, cx);
+        true
+    }
+
     /// The dialog is about to close and take the form with it; drop the
     /// plaintext now rather than waiting for the entity.
     fn clear_secrets(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        for fields in [&self.fields, &self.proxy_secret] {
+        for fields in [&self.fields, &self.telnet_fields, &self.proxy_secret] {
             fields.update(cx, |fields, cx| fields.clear(window, cx));
         }
     }
@@ -1060,7 +1346,24 @@ impl HostForm {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<HostId> {
-        if self.protocol == ProtocolChoice::Serial {
+        if self.protocol == ProtocolKind::Telnet {
+            let draft = match self.telnet_draft(None, cx) {
+                Ok(draft) => draft,
+                Err(error) => {
+                    window.push_notification(form_error_notification(error), cx);
+                    return None;
+                }
+            };
+            let password = self
+                .telnet_password_typed()
+                .then(|| Zeroizing::new(self.telnet_fields.read(cx).password(cx)));
+            self.clear_secrets(window, cx);
+            return Some(
+                self.store
+                    .update(cx, |store, cx| store.insert_temporary(draft, password, cx)),
+            );
+        }
+        if self.protocol == ProtocolKind::Serial {
             let draft = match self.serial_draft(None, cx) {
                 Ok(draft) => draft,
                 Err(error) => {
@@ -1134,34 +1437,67 @@ impl HostForm {
 
     /// The field that picks a saved credential, with what it logs in as.
     fn credential_field(&self, cx: &App) -> Field {
-        let summary = match self.selected_credential(cx) {
+        self.credential_choice(
+            CredentialChoice {
+                state: &self.credential,
+                selected: self.selected_credential(cx),
+                none: self.credentials.is_empty(),
+                id: "host-credential",
+                summary_id: "host-credential-summary",
+                empty: t!("host.dialog.no_credentials"),
+                hint: t!("host.dialog.no_credentials_hint"),
+            },
+            cx,
+        )
+    }
+
+    /// A Telnet host's credential, among the password credentials.
+    fn telnet_credential_field(&self, cx: &App) -> Field {
+        self.credential_choice(
+            CredentialChoice {
+                state: &self.telnet_credential,
+                selected: self.selected_telnet_credential(cx),
+                none: self.telnet_credentials.is_empty(),
+                id: "host-telnet-credential",
+                summary_id: "host-telnet-credential-summary",
+                empty: t!("host.dialog.no_password_credentials"),
+                hint: t!("host.dialog.no_password_credentials_hint"),
+            },
+            cx,
+        )
+    }
+
+    fn credential_choice(&self, choice: CredentialChoice<'_>, _: &App) -> Field {
+        let summary = match choice.selected {
             Some(credential) => Some(credential_summary(credential, self.key_dir.as_deref())),
-            None if self.credentials.is_empty() => Some(t!("host.dialog.no_credentials_hint")),
+            None if choice.none => Some(choice.hint),
             None => None,
         };
+        let empty = choice.empty;
+        let summary_id = choice.summary_id;
         Field::new()
             .label(t!("host.dialog.credential"))
             .required(true)
             .col_span(4)
             .child(
-                Select::new(&self.credential)
-                    .id("host-credential")
+                Select::new(choice.state)
+                    .id(choice.id)
                     .placeholder(t!("host.dialog.choose_credential"))
                     .search_placeholder(t!("host.dialog.search_credentials"))
-                    .empty(|_, cx| {
+                    .empty(move |_, cx| {
                         div()
                             .py_4()
                             .text_sm()
                             .text_center()
                             .text_color(cx.theme().muted_foreground)
-                            .child(t!("host.dialog.no_credentials"))
+                            .child(empty.clone())
                     })
                     .small(),
             )
             .when_some(summary, |field, summary: SharedString| {
                 field.description_fn(move |_, _| {
                     div()
-                        .id("host-credential-summary")
+                        .id(summary_id)
                         .test_support()
                         .aria_label(summary.clone())
                         .child(summary.clone())
@@ -1180,17 +1516,13 @@ impl HostForm {
             .col_span(4)
             .child(
                 SegmentedControl::new("host-protocol")
-                    .selected_index(
-                        ProtocolChoice::ALL
-                            .iter()
-                            .position(|each| *each == protocol),
-                    )
+                    .selected_index(ProtocolKind::ALL.iter().position(|each| *each == protocol))
                     .on_change(cx.listener(|this, ix: &usize, window, cx| {
-                        if let Some(protocol) = ProtocolChoice::ALL.get(*ix) {
+                        if let Some(protocol) = ProtocolKind::ALL.get(*ix) {
                             this.set_protocol(*protocol, window, cx);
                         }
                     }))
-                    .segments(ProtocolChoice::ALL.map(|each| {
+                    .segments(ProtocolKind::ALL.map(|each| {
                         Segment::new(each.label()).when(fixed && each != protocol, |segment| {
                             segment
                                 .disabled(true)
@@ -1600,13 +1932,19 @@ fn available_jump_hosts(hosts: &[JumpHost], hops: &[Option<HostId>]) -> Vec<Jump
 
 impl Render for HostForm {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let serial = self.protocol == ProtocolChoice::Serial;
-        let source = self.source;
+        let serial = self.protocol == ProtocolKind::Serial;
+        // Whether the form saves a password of the host's own.
+        let typed_password = match self.protocol {
+            ProtocolKind::Ssh => self.source == AuthSource::Password,
+            ProtocolKind::Telnet => self.telnet_password_typed(),
+            ProtocolKind::Serial => false,
+        };
         let keychain = self.fields.read(cx).keychain_available();
-        let secret_note = if keychain {
-            t!("host.dialog.keychain_note")
-        } else {
-            t!("host.dialog.no_keychain_note")
+        let secret_note = match (keychain, self.protocol) {
+            (true, _) => t!("host.dialog.keychain_note"),
+            // Telnet asks nobody: the password is typed in the terminal.
+            (false, ProtocolKind::Telnet) => t!("host.dialog.telnet_no_keychain_note"),
+            (false, _) => t!("host.dialog.no_keychain_note"),
         };
         // Four columns so the address and its port share a row, as they are
         // written (`host:port`), and a serial line's framing takes one row;
@@ -1620,10 +1958,10 @@ impl Render for HostForm {
                     .child(Input::new(&self.name).id("host-name").small()),
             )
             .child(self.protocol_field(cx));
-        let form = if serial {
-            self.serial_fields(form, cx)
-        } else {
-            self.ssh_fields(form, cx)
+        let form = match self.protocol {
+            ProtocolKind::Ssh => self.ssh_fields(form, cx),
+            ProtocolKind::Telnet => self.telnet_fields(form, cx),
+            ProtocolKind::Serial => self.serial_fields(form, cx),
         };
         // What only a saved host has.
         let form = if self.temporary {
@@ -1664,17 +2002,14 @@ impl Render for HostForm {
                         .child(t!("host.dialog.temporary_note")),
                 )
             })
-            .when(
-                !self.temporary && !serial && source == AuthSource::Password,
-                |form| {
-                    form.child(
-                        div()
-                            .text_sm()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(secret_note),
-                    )
-                },
-            )
+            .when(!self.temporary && typed_password, |form| {
+                form.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(secret_note),
+                )
+            })
             .when(self.editing_connected, |form| {
                 form.child(
                     div()
@@ -1687,46 +2022,135 @@ impl Render for HostForm {
 }
 
 impl HostForm {
+    /// Where an SSH or Telnet host is: its address, and its port beside it.
+    fn address_fields(&self, form: Form) -> Form {
+        form.child(
+            Field::new()
+                .label(t!("host.dialog.address"))
+                .required(true)
+                .col_span(3)
+                .child(Input::new(&self.address).id("host-address").small()),
+        )
+        .child(
+            Field::new()
+                .label(t!("host.dialog.port"))
+                .child(Input::new(&self.port).id("host-port").small()),
+        )
+    }
+
+    /// A Telnet host's fields: where it is, and its 自动登录 when it has one:
+    /// the user name and password, typed here or a credential's, and the
+    /// prompts to answer.
+    fn telnet_fields(&self, form: Form, cx: &mut Context<Self>) -> Form {
+        let auto_login = self.telnet_auto_login;
+        let source = self.telnet_source;
+        let form = self.address_fields(form).child(
+            Field::new().col_span(4).child(
+                Checkbox::new("host-telnet-auto-login")
+                    .label(t!("host.dialog.telnet_auto_login"))
+                    .checked(auto_login)
+                    .small()
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                        this.telnet_auto_login = *checked;
+                        cx.notify();
+                    })),
+            ),
+        );
+        if !auto_login {
+            return form;
+        }
+        let form = form.child(
+            Field::new()
+                .label(t!("host.dialog.auth"))
+                .col_span(4)
+                .child(
+                    SegmentedControl::new("host-telnet-auth")
+                        .selected_index(TelnetSource::ALL.iter().position(|each| *each == source))
+                        .on_change(cx.listener(|this, ix: &usize, _, cx| {
+                            if let Some(source) = TelnetSource::ALL.get(*ix) {
+                                this.telnet_source = *source;
+                                cx.notify();
+                            }
+                        }))
+                        .segments(TelnetSource::ALL.map(|each| Segment::new(each.label()))),
+                ),
+        );
+        let form = match source {
+            TelnetSource::Manual => form
+                .child(
+                    Field::new()
+                        .label(t!("host.dialog.user"))
+                        .col_span(2)
+                        .child(Input::new(&self.telnet_user).id("host-telnet-user").small()),
+                )
+                .child(
+                    Field::new()
+                        .label(t!("host.dialog.password"))
+                        .col_span(2)
+                        .child(
+                            self.telnet_fields
+                                .read(cx)
+                                .password_input("host-telnet-password"),
+                        ),
+                ),
+            TelnetSource::Credential => form.child(self.telnet_credential_field(cx)),
+        };
+        let prompts = Form::new()
+            .columns(2)
+            .child(
+                Field::new()
+                    .label(t!("host.dialog.telnet_user_prompt"))
+                    .child(
+                        Input::new(&self.telnet_user_prompt)
+                            .id("host-telnet-user-prompt")
+                            .small(),
+                    ),
+            )
+            .child(
+                Field::new()
+                    .label(t!("host.dialog.telnet_password_prompt"))
+                    .child(
+                        Input::new(&self.telnet_password_prompt)
+                            .id("host-telnet-password-prompt")
+                            .small(),
+                    ),
+            );
+        form.child(
+            Field::new()
+                .label_indent(false)
+                .col_span(4)
+                .child(prompts)
+                .description(t!("host.dialog.telnet_prompt_note")),
+        )
+    }
+
     /// An SSH host's fields: where it is, and how it logs in.
     fn ssh_fields(&self, form: Form, cx: &mut Context<Self>) -> Form {
         let source = self.source;
-        let form = form
-            .child(
-                Field::new()
-                    .label(t!("host.dialog.address"))
-                    .required(true)
-                    .col_span(3)
-                    .child(Input::new(&self.address).id("host-address").small()),
-            )
-            .child(
-                Field::new()
-                    .label(t!("host.dialog.port"))
-                    .child(Input::new(&self.port).id("host-port").small()),
-            )
-            .child(
-                Field::new()
-                    .label(t!("host.dialog.auth"))
-                    .col_span(4)
-                    .child(
-                        SegmentedControl::new("host-auth-source")
-                            .selected_index(AuthSource::ALL.iter().position(|each| *each == source))
-                            .on_change(cx.listener(|this, ix: &usize, _, cx| {
-                                if let Some(source) = AuthSource::ALL.get(*ix) {
-                                    this.set_source(*source, cx);
-                                }
-                            }))
-                            .segments(AuthSource::ALL.map(|each| Segment::new(each.label()))),
-                    )
-                    .when(source == AuthSource::NoPassword, |field| {
-                        field.description_fn(|_, _| {
-                            div()
-                                .id("host-no-password-note")
-                                .test_support()
-                                .aria_label(t!("host.dialog.no_password_note"))
-                                .child(t!("host.dialog.no_password_note"))
-                        })
-                    }),
-            );
+        let form = self.address_fields(form).child(
+            Field::new()
+                .label(t!("host.dialog.auth"))
+                .col_span(4)
+                .child(
+                    SegmentedControl::new("host-auth-source")
+                        .selected_index(AuthSource::ALL.iter().position(|each| *each == source))
+                        .on_change(cx.listener(|this, ix: &usize, _, cx| {
+                            if let Some(source) = AuthSource::ALL.get(*ix) {
+                                this.set_source(*source, cx);
+                            }
+                        }))
+                        .segments(AuthSource::ALL.map(|each| Segment::new(each.label()))),
+                )
+                .when(source == AuthSource::NoPassword, |field| {
+                    field.description_fn(|_, _| {
+                        div()
+                            .id("host-no-password-note")
+                            .test_support()
+                            .aria_label(t!("host.dialog.no_password_note"))
+                            .child(t!("host.dialog.no_password_note"))
+                    })
+                }),
+        );
         match source.auth() {
             Some(auth) => self.own_fields(form, auth, cx),
             None => form.child(self.credential_field(cx)),
@@ -1744,6 +2168,24 @@ fn example_device() -> &'static str {
     } else {
         "/dev/ttyUSB0"
     }
+}
+
+/// A connection test, run on a thread of its own with the way to answer a
+/// trust question.
+type TestJob = Box<dyn FnOnce(TrustCallback) -> Result<(), String> + Send>;
+
+/// A credential select and what goes around it.
+struct CredentialChoice<'a> {
+    state: &'a Entity<SelectState<Vec<SharedString>>>,
+    selected: Option<&'a Credential>,
+    /// Whether there are no credentials to pick at all.
+    none: bool,
+    id: &'static str,
+    summary_id: &'static str,
+    /// What the open select says with nothing to list.
+    empty: SharedString,
+    /// What the field says with nothing to list.
+    hint: SharedString,
 }
 
 /// How a host the form commits logs in.

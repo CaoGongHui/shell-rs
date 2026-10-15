@@ -815,6 +815,7 @@ fn a_problem_found_while_the_window_is_built_is_shown_once_it_is_open(cx: &mut T
                 store,
                 cx.new(|_| settings_store()),
                 remote,
+                fake_telnet_terminals(),
                 fake_serial_terminals(),
                 fake_local_terminals(),
                 Arc::new(FakeSftpProvider::default()),

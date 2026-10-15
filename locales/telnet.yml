@@ -1,0 +1,8 @@
+_version: 2
+
+telnet.lost:
+  zh-CN: Telnet 连接已断开：%{error}
+  en: "The Telnet connection was lost: %{error}"
+telnet.write_failed:
+  zh-CN: 无法发送到 Telnet 服务器：%{error}
+  en: "Couldn’t send to the Telnet server: %{error}"

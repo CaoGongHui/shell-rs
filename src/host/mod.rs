@@ -11,6 +11,7 @@ mod login;
 mod model;
 mod outline;
 mod private_key;
+mod protocol;
 mod quick_connect;
 mod secret_fields;
 mod serial_settings;
@@ -29,12 +30,14 @@ pub use host_dialog::{
 pub use host_panel::{HostPanel, host_menu};
 pub use login::{
     HostConnection, HostLogin, JumpLogin, LoginMethod, LoginRoute, ProxyLogin, SerialLine,
+    TelnetAutoLogin, TelnetLogin,
 };
 pub use model::*;
 pub use outline::{
     HostNode, NodeDrop, first_matching_host, group_options, host_tree_items, matches_query,
 };
 pub use private_key::{GeneratedKey, KeyAlgorithm, PastedKey, PastedKeyError, read_public_key};
+pub use protocol::{Protocol, ProtocolKind, TelnetSettings};
 pub use quick_connect::{QuickChoice, QuickHost, open_quick_connect_dialog, quick_hosts};
 pub use secret_fields::SecretFields;
 pub use serial_settings::*;
