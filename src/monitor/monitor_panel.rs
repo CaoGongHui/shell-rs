@@ -6,9 +6,8 @@ use std::time::{Duration, Instant};
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Sizable as _,
     button::{Button, ButtonVariants as _},
-    group_box::{GroupBox, GroupBoxVariants as _},
     h_flex,
-    progress::{Progress, ProgressCircle},
+    progress::Progress,
     scroll::ScrollableElement as _,
     spinner::Spinner,
     tooltip::Tooltip,
@@ -20,12 +19,13 @@ use gpui_kit::*;
 use super::MonitorDetail;
 use super::linux::{self, Parsed, Parts};
 use super::model::{
-    DiskUsage, InterfaceRate, Load, Memory, Snapshot, SystemInfo, Tracker, bars_per_row,
-    format_rate,
+    DiskUsage, InterfaceRate, Memory, Snapshot, SystemInfo, Tracker, bars_per_row, format_rate,
 };
 use crate::app::{CatalogIcon, ToggleMonitorDetail};
 use crate::i18n::{t, tn};
-use crate::shared::{format_bytes, format_duration, format_percent};
+use crate::shared::{
+    amount, card, format_bytes, format_duration, format_percent, gauge, load_color, meter, numeric,
+};
 use crate::terminal::{ExecResult, ExecTarget, RemoteTerminalId, exec_answer};
 
 /// Time between readings of the load. The second comes sooner: the CPU's
@@ -313,29 +313,6 @@ fn render_problem(problem: &Problem, cx: &App) -> impl IntoElement {
         .child(text)
 }
 
-/// A card: its icon and title, with `meta` at the end of the title row.
-fn card(
-    id: &'static str,
-    icon: impl Into<Icon>,
-    title: impl Into<SharedString>,
-    meta: Option<AnyElement>,
-    cx: &App,
-) -> GroupBox {
-    GroupBox::new().id(id).fill().child(
-        h_flex()
-            .gap_2()
-            .child(icon.into().small().text_color(cx.theme().muted_foreground))
-            .child(
-                div()
-                    .flex_1()
-                    .text_sm()
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(title.into()),
-            )
-            .children(meta),
-    )
-}
-
 /// A card's quiet note at the end of its title row: 「1 核」.
 fn note(text: SharedString, cx: &App) -> AnyElement {
     div()
@@ -370,21 +347,6 @@ fn unfold_button(
             dispatch.dispatch_action(&ToggleMonitorDetail(detail), window, cx)
         })
         .into_any_element()
-}
-
-fn load_color(percent: f32, cx: &App) -> Hsla {
-    match Load::of(percent) {
-        Load::Normal => cx.theme().success,
-        Load::High => cx.theme().warning,
-        Load::Critical => cx.theme().danger,
-    }
-}
-
-/// Numbers that change every reading: monospaced, so they hold still.
-fn numeric(text: impl Into<SharedString>, cx: &App) -> Div {
-    div()
-        .font_family(cx.theme().mono_font_family.clone())
-        .child(text.into())
 }
 
 fn render_system(system: &SystemInfo, uptime: Option<Duration>, cx: &App) -> impl IntoElement {
@@ -445,57 +407,6 @@ fn render_system(system: &SystemInfo, uptime: Option<Duration>, cx: &App) -> imp
 
 /// A ring with the share in its middle, as big as the eye needs to catch a
 /// change across the room.
-fn gauge(id: &'static str, percent: Option<f32>, cx: &App) -> impl IntoElement {
-    let color = load_color(percent.unwrap_or(0.), cx);
-    ProgressCircle::new(id)
-        .value(percent.unwrap_or(0.))
-        .color(color)
-        .size_16()
-        .child(
-            v_flex()
-                .items_center()
-                .text_color(color)
-                .child(
-                    numeric(
-                        percent.map_or("—".into(), |p| format!("{}", p.round() as u32)),
-                        cx,
-                    )
-                    .text_lg()
-                    .font_weight(FontWeight::SEMIBOLD),
-                )
-                .child(div().text_xs().child("%")),
-        )
-}
-
-/// A labelled bar: the label and the share above it.
-fn meter(
-    id: &'static str,
-    label: SharedString,
-    percent: Option<f32>,
-    cx: &App,
-) -> impl IntoElement {
-    let color = load_color(percent.unwrap_or(0.), cx);
-    let text = percent.map_or("—".into(), format_percent);
-    v_flex()
-        .gap_1p5()
-        .child(
-            h_flex().justify_between().text_sm().child(label).child(
-                numeric(text.clone(), cx)
-                    .id(id)
-                    .test_support()
-                    .aria_label(text)
-                    .text_color(color)
-                    .font_weight(FontWeight::SEMIBOLD),
-            ),
-        )
-        .child(
-            Progress::new(SharedString::from(format!("{id}-bar")))
-                .small()
-                .value(percent.unwrap_or(0.))
-                .color(color),
-        )
-}
-
 /// How the per-core bars lay out this frame.
 struct CoresLayout {
     /// Every row, not only the first.
@@ -654,18 +565,6 @@ fn render_cores(cores: &[f32], layout: &CoresLayout, cx: &App) -> impl IntoEleme
 }
 
 /// 「421.02 MB / 973.25 MB」, the total quieter.
-fn amount(id: &'static str, used: u64, total: u64, cx: &App) -> impl IntoElement {
-    let (used, total) = (format_bytes(used), format_bytes(total));
-    h_flex()
-        .id(id)
-        .test_support()
-        .aria_label(format!("{used} / {total}"))
-        .gap_1()
-        .text_xs()
-        .child(numeric(used, cx))
-        .child(numeric(format!("/ {total}"), cx).text_color(cx.theme().muted_foreground))
-}
-
 fn render_memory(memory: &Memory, cx: &App) -> impl IntoElement {
     card(
         "monitor-memory",

@@ -7,6 +7,7 @@ use gpui_kit::*;
 
 use super::model::{DetailSection, SectionBody};
 use crate::i18n::t;
+use crate::shared::detail_row;
 use crate::terminal::{ExecResult, TerminalView, exec_answer};
 
 /// Something read off the host for a dialog.
@@ -98,25 +99,13 @@ fn render_body(prefix: &'static str, section: &DetailSection, cx: &App) -> AnyEl
         SectionBody::Rows(rows) => lines(
             rows.iter()
                 .map(|(label, value)| {
-                    h_flex()
-                        .id(line_id(label.id()))
-                        .test_support()
-                        .aria_label(value.clone())
-                        .items_start()
-                        .gap_3()
-                        .px_3()
-                        .py_2()
-                        .text_sm()
-                        .child(
-                            div()
-                                .w(rems(9.))
-                                .flex_shrink_0()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(label.text()),
-                        )
-                        // Long IDs and names wrap rather than go off the edge.
-                        .child(div().flex_1().min_w_0().child(value.clone()))
-                        .into_any_element()
+                    detail_row(
+                        line_id(label.id()).into(),
+                        label.text(),
+                        value.clone().into(),
+                        cx,
+                    )
+                    .into_any_element()
                 })
                 .collect(),
         ),

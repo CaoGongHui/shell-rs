@@ -14,6 +14,7 @@ use crate::{
     host::{
         CredentialId, ForwardId, GroupId, HostId, HostNode, NodeDrop, SnippetCategoryId, SnippetId,
     },
+    kubernetes::KubernetesCommand,
     monitor::MonitorDetail,
     processes::ProcessSort,
     services::ServiceCommand,
@@ -257,6 +258,8 @@ id_actions! {
     /// Show a tool in the right sidebar, or hide the sidebar if it is
     /// already showing that tool.
     ToggleTool(ToolKind);
+    /// Browse Kubernetes resources and logs on the SSH host.
+    KubernetesAction(KubernetesCommand);
     /// 目录跟随 in a terminal's 文件: follow the terminal's folder, or stop.
     ToggleDirectoryFollow(ExplorerId);
     /// 自动配置 in 「启用目录跟随？」: set the terminal's shell up to report
@@ -403,6 +406,7 @@ pub enum ToolKind {
     History,
     Files,
     Docker,
+    Kubernetes,
     Services,
     Processes,
     Connections,
@@ -411,11 +415,12 @@ pub enum ToolKind {
 }
 
 impl ToolKind {
-    pub const ALL: [ToolKind; 9] = [
+    pub const ALL: [ToolKind; 10] = [
         ToolKind::Snippets,
         ToolKind::History,
         ToolKind::Files,
         ToolKind::Docker,
+        ToolKind::Kubernetes,
         ToolKind::Services,
         ToolKind::Processes,
         ToolKind::Connections,
@@ -431,6 +436,7 @@ impl ToolKind {
             ToolKind::History => "history",
             ToolKind::Files => "files",
             ToolKind::Docker => "docker",
+            ToolKind::Kubernetes => "kubernetes",
             ToolKind::Services => "services",
             ToolKind::Processes => "processes",
             ToolKind::Connections => "connections",
@@ -451,6 +457,7 @@ impl ToolKind {
             ToolKind::History => t!("tools.kind.history"),
             ToolKind::Files => t!("tools.kind.files"),
             ToolKind::Docker => "Docker".into(),
+            ToolKind::Kubernetes => "Kubernetes".into(),
             ToolKind::Services => t!("tools.kind.services"),
             ToolKind::Processes => t!("tools.kind.processes"),
             ToolKind::Connections => t!("tools.kind.connections"),
@@ -468,6 +475,7 @@ impl ToolKind {
             // Not the SFTP button's folder tree, which opens a tab.
             ToolKind::Files => return Icon::new(IconName::Folder),
             ToolKind::Docker => return Icon::default().path(DOCKER_ICON),
+            ToolKind::Kubernetes => CatalogIcon::ShipWheel,
             ToolKind::Services => CatalogIcon::ServerCog,
             ToolKind::Processes => CatalogIcon::ListFilter,
             ToolKind::Connections => CatalogIcon::Network,

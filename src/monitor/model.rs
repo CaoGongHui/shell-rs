@@ -230,26 +230,6 @@ fn busy_percent(now: CpuTimes, then: CpuTimes) -> Option<f32> {
     (total > 0).then(|| (busy as f64 * 100. / total as f64) as f32)
 }
 
-/// How hard a resource is worked, for its colour.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Load {
-    Normal,
-    High,
-    Critical,
-}
-
-impl Load {
-    pub fn of(percent: f32) -> Self {
-        if percent >= 90. {
-            Load::Critical
-        } else if percent >= 70. {
-            Load::High
-        } else {
-            Load::Normal
-        }
-    }
-}
-
 /// 「5.44 KB/s」.
 pub fn format_rate(bytes_per_second: f64) -> String {
     format!(
@@ -402,8 +382,8 @@ mod tests {
 
     #[test]
     fn load_goes_high_at_seventy_and_critical_at_ninety() {
-        assert_eq!(Load::of(69.9), Load::Normal);
-        assert_eq!(Load::of(70.), Load::High);
-        assert_eq!(Load::of(90.), Load::Critical);
+        assert_eq!(crate::shared::Load::of(69.9), crate::shared::Load::Normal);
+        assert_eq!(crate::shared::Load::of(70.), crate::shared::Load::High);
+        assert_eq!(crate::shared::Load::of(90.), crate::shared::Load::Critical);
     }
 }

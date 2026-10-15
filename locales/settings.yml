@@ -55,6 +55,9 @@ settings.category.external_cli:
 settings.category.application:
   zh-CN: 应用
   en: General
+settings.sidebar_tools.kubernetes:
+  zh-CN: 开启后可从 SSH 终端右侧浏览集群资源和容器日志。关闭后隐藏入口并停止后台刷新，立即生效。
+  en: Browse cluster resources and container logs beside SSH terminals. Turning this off hides the tool and stops background refreshes immediately.
 settings.category.about:
   zh-CN: 关于
   en: About

@@ -730,6 +730,11 @@ fn fixed_context_bindings() -> Vec<KeyBinding> {
 
     let primary = |key: &str| format!("{PRIMARY}-{key}");
     let mut bindings = vec![
+        KeyBinding::new(
+            &primary("s"),
+            KubernetesAction(crate::kubernetes::KubernetesCommand::SaveYaml),
+            Some(crate::kubernetes::YAML_KEY_CONTEXT),
+        ),
         // Over a previewed image, the interface zoom keys zoom the image;
         // 0 and 9 as in macOS Preview.
         KeyBinding::new(&primary("="), ZoomPreviewIn, Some(IMAGE_PREVIEW_CONTEXT)),

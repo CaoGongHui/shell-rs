@@ -407,7 +407,18 @@ impl Workspace {
                 this.sync_cli_server(cx);
                 this.sync_updater(cx);
                 this.sync_analytics(window, cx);
-                // 侧栏功能 may have taken a tool out, or put one back.
+                if !settings
+                    .read(cx)
+                    .settings()
+                    .sidebar_tools
+                    .shows(crate::app::ToolKind::Kubernetes)
+                {
+                    if this.tools.read(cx).tool() == crate::app::ToolKind::Kubernetes {
+                        this.tool_sidebar_wanted = false;
+                    }
+                    this.tools
+                        .update(cx, |tools, cx| tools.disable_kubernetes(cx));
+                }
                 this.sync_tool_sidebar(window, cx);
             }),
             cx.subscribe_in(
@@ -2847,6 +2858,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_delete_snippet_category))
             .on_action(cx.listener(Self::on_toggle_snippet_category))
             .on_action(cx.listener(Self::on_refresh_docker))
+            .on_action(cx.listener(Self::on_kubernetes_action))
             .on_action(cx.listener(Self::on_toggle_docker_project))
             .on_action(cx.listener(Self::on_show_docker_object))
             .on_action(cx.listener(Self::on_control_containers))

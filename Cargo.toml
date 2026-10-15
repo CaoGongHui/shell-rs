@@ -48,6 +48,7 @@ async-channel = "2"
 # update has to be drawn.
 async-io = "2"
 base64 = "0.22"
+flate2 = "1"
 clap = { version = "4", features = ["derive"] }
 dirs = "6"
 # Canonical local paths without the `\\?\` prefix std adds on Windows.
@@ -87,6 +88,7 @@ semver = { version = "1", features = ["serde"] }
 # 匿名使用统计: the system's name and version for Aptabase, as its own Tauri
 # plugin reads them.
 os_info = { version = "3", default-features = false }
+serde_yaml_ng = "0.10.0"
 
 [target.'cfg(unix)'.dependencies]
 # `access(2)`: whether the folder ShellRS runs from can take its update.

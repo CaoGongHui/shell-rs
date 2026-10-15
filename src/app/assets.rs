@@ -60,6 +60,8 @@ icon_assets!(
         Keyboard,
         RotateCcw,
         Network,
+        Boxes,
+        ShipWheel,
         RadioTower,
         ArrowDownLeft,
         ArrowUpRight,

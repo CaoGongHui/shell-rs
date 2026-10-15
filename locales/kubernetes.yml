@@ -1,0 +1,641 @@
+_version: 2
+
+k8s.no_matches:
+  zh-CN: 没有匹配的资源，请修改或清空搜索条件。
+  en: No matching resources. Change or clear the search.
+
+k8s.edit_yaml:
+  zh-CN: 编辑 YAML
+  en: Edit YAML
+k8s.edit_yaml_note:
+  zh-CN: 编辑配置后保存。标识、版本和状态字段不可修改；保存前需要确认。
+  en: Edit the configuration, then save. Identity, version and status fields are read-only. Saving requires confirmation.
+k8s.save_yaml:
+  zh-CN: 保存修改…
+  en: Save changes…
+k8s.restart:
+  zh-CN: 重启
+  en: Restart
+k8s.resource_actions:
+  zh-CN: 资源操作
+  en: Resource actions
+k8s.save_title:
+  zh-CN: "保存 %{name} 的修改？"
+  en: "Save changes to %{name}?"
+k8s.restart_title:
+  zh-CN: "重启 %{name}？"
+  en: "Restart %{name}?"
+k8s.delete_title:
+  zh-CN: "删除 %{name}？"
+  en: "Delete %{name}?"
+k8s.operation_scope:
+  zh-CN: "集群：%{context}\n资源：%{resource}\n\n%{effect}"
+  en: "Cluster: %{context}\nResource: %{resource}\n\n%{effect}"
+k8s.save_effect:
+  zh-CN: 配置将更新到集群，可能触发工作负载更新。如果资源已被修改，保存会提示冲突，请刷新后重新编辑。
+  en: The configuration will be updated in the cluster and may trigger a workload rollout. If the resource has changed, saving will report a conflict. Refresh before editing again.
+k8s.restart_effect:
+  zh-CN: 按当前更新策略触发工作负载重启，运行中的 Pod 将被替换，服务可能短暂中断。
+  en: Restart the workload using its update strategy. Running pods will be replaced and service may be interrupted.
+k8s.pod_restart_effect:
+  zh-CN: 删除当前 Pod，由控制器创建替代 Pod。临时数据可能丢失，服务可能中断；Job 中的任务可能重新执行。
+  en: Delete this pod so its controller can create a replacement. Temporary data may be lost, service interrupted, and Job tasks may run again.
+k8s.delete_effect:
+  zh-CN: 资源将从集群删除，受其控制的资源可能一并删除。此操作无法撤销。
+  en: The resource will be deleted from the cluster. Resources it controls may also be deleted. This cannot be undone.
+k8s.pod_delete_effect:
+  zh-CN: 删除当前 Pod，临时数据可能丢失；若有控制器管理，控制器可能创建替代 Pod。
+  en: Delete this pod. Temporary data may be lost, and a managing controller may create a replacement.
+k8s.namespace_delete_effect:
+  zh-CN: 命名空间及其中所有资源将被删除，服务和数据可能丢失。此操作无法撤销。
+  en: The namespace and all resources in it will be deleted. Services and data may be lost. This cannot be undone.
+k8s.volume_delete_effect:
+  zh-CN: 删除存储资源可能导致持久数据丢失，结果取决于存储与回收策略。此操作无法撤销。
+  en: Deleting this storage resource may destroy persistent data, depending on its storage and reclaim policy. This cannot be undone.
+k8s.saved:
+  zh-CN: 资源修改已保存
+  en: Resource changes saved
+k8s.restart_requested:
+  zh-CN: 重启请求已提交
+  en: Restart requested
+k8s.delete_requested:
+  zh-CN: 删除请求已提交
+  en: Deletion requested
+k8s.operation_failed:
+  zh-CN: "操作失败：%{error}"
+  en: "Operation failed: %{error}"
+k8s.operation_unsupported:
+  zh-CN: 此资源不支持该操作。
+  en: This operation is not supported for this resource.
+k8s.mutation_identity_missing:
+  zh-CN: 资源标识或版本不完整，请刷新详情后重试。
+  en: The resource identity or version is incomplete. Refresh its details and retry.
+k8s.edit_identity_fixed:
+  zh-CN: 不能修改 apiVersion、kind、名称、命名空间、UID 或资源版本。
+  en: API version, kind, name, namespace, UID and resource version cannot be changed.
+k8s.edit_status_readonly:
+  zh-CN: YAML 必须是单个资源，不能包含 status 字段。
+  en: YAML must contain a single resource without a status field.
+k8s.yaml_invalid:
+  zh-CN: "YAML 无效：%{error}"
+  en: "Invalid YAML: %{error}"
+k8s.edit_unchanged:
+  zh-CN: 配置没有变化。
+  en: The configuration has not changed.
+k8s.edit_changed:
+  zh-CN: 编辑内容已变化，请重新保存并确认。
+  en: The draft has changed. Save and confirm it again.
+k8s.confirmation_expired:
+  zh-CN: 确认的目标已改变，请重新打开资源后重试。
+  en: The confirmation target has changed. Reopen the resource and retry.
+k8s.edit_too_large:
+  zh-CN: 资源超过 256 KB 编辑上限，请使用终端中的 kubectl 修改。
+  en: The resource exceeds the 256 KB editing limit. Edit it with kubectl in the terminal.
+k8s.pod_restart_unavailable:
+  zh-CN: 此 Pod 没有可自动重建的工作负载控制器，或已运行结束，不能直接重启。
+  en: This pod has no workload controller to recreate it, or has already finished. It cannot be restarted directly.
+k8s.rollout_restart_unavailable:
+  zh-CN: 此工作负载已暂停或使用 OnDelete 策略。请恢复自动更新，或逐个重建其 Pod。
+  en: This workload is paused or uses OnDelete. Resume automatic updates or recreate its pods individually.
+k8s.restart_terminating:
+  zh-CN: 此资源正在删除，不能重启。请等待删除完成后查看替代资源。
+  en: This resource is being deleted and cannot be restarted. Wait for deletion to finish, then inspect its replacement.
+
+k8s.copy_name:
+  zh-CN: 复制名称
+  en: Copy name
+k8s.copy_hint:
+  zh-CN: 选择文字复制，或右键复制字段。
+  en: Select text to copy, or right-click a field.
+k8s.copy_overview:
+  zh-CN: 复制概要
+  en: Copy summary
+k8s.more_properties:
+  zh-CN: 显示全部属性
+  en: Show all properties
+k8s.fewer_properties:
+  zh-CN: 收起次要属性
+  en: Hide secondary properties
+k8s.performance:
+  zh-CN: 性能
+  en: Performance
+k8s.metrics_interval:
+  zh-CN: CPU、内存每 10 秒刷新，节点磁盘每 30 秒刷新。
+  en: CPU and memory refresh every 10 s; node disk every 30 s.
+k8s.metrics_unavailable:
+  zh-CN: 用量暂不可用，悬停查看原因。保留上次读数，60 秒后重试。
+  en: Usage unavailable. Hover for details. Previous readings are retained; retrying in 60 s.
+k8s.of_capacity:
+  zh-CN: 用量 / 节点总量
+  en: Usage / node capacity
+k8s.of_limit:
+  zh-CN: 用量 / 容器限制
+  en: Usage / container limits
+k8s.no_metric_total:
+  zh-CN: 总量或限制不可用，仅显示实际用量。
+  en: Capacity or limits unavailable; showing usage only.
+k8s.node_filesystem:
+  zh-CN: 节点文件系统
+  en: Node filesystem
+k8s.disk_unavailable:
+  zh-CN: 磁盘用量暂不可用，悬停查看原因。保留上次读数。
+  en: Disk usage unavailable. Hover for details. Previous readings are retained.
+
+k8s.nodes:
+  zh-CN: 节点
+  en: Nodes
+k8s.resources:
+  zh-CN: 资源
+  en: Resources
+k8s.relations:
+  zh-CN: 关系图
+  en: Relationships
+k8s.relations_partial:
+  zh-CN: 部分关系未能读取，悬停查看原因，稍后可刷新。
+  en: Some relationships could not be read. Hover for details or refresh to retry.
+k8s.relations_limit:
+  zh-CN: 关系数据已达到读取上限，可打开具体资源继续查看。
+  en: Relationship data reached its retrieval limit. Open a specific resource to continue.
+k8s.cluster_scope:
+  zh-CN: 集群级资源
+  en: Cluster scope
+k8s.reference_only:
+  zh-CN: 仅引用
+  en: Reference only
+k8s.container_missing:
+  zh-CN: 此容器已不在 Pod 配置中。请返回 Pod 并刷新关系图。
+  en: This container is no longer in the Pod configuration. Return to the Pod and refresh its relationships.
+k8s.back:
+  zh-CN: 返回上个资源
+  en: Back to previous resource
+k8s.pod:
+  zh-CN: 所属 Pod
+  en: Pod
+k8s.relation.owns:
+  zh-CN: 控制
+  en: Owns
+k8s.relation.selects:
+  zh-CN: 选择 Pod
+  en: Selects pods
+k8s.relation.routes:
+  zh-CN: 路由
+  en: Routes to
+k8s.relation.runs:
+  zh-CN: 运行 Pod
+  en: Runs pods
+k8s.relation.contains:
+  zh-CN: 包含
+  en: Contains
+k8s.relation.uses:
+  zh-CN: 使用
+  en: Uses
+k8s.relation.mounts:
+  zh-CN: 挂载
+  en: Mounts
+k8s.relation.binds:
+  zh-CN: 绑定
+  en: Binds to
+k8s.relation.scales:
+  zh-CN: 扩缩容
+  en: Scales
+k8s.relation.protects:
+  zh-CN: 保护 Pod
+  en: Protects pods
+k8s.cpu_capacity:
+  zh-CN: CPU 总量
+  en: CPU capacity
+k8s.cpu_allocatable:
+  zh-CN: CPU 可分配量
+  en: Allocatable CPU
+k8s.memory_capacity:
+  zh-CN: 内存总量
+  en: Memory capacity
+k8s.memory_allocatable:
+  zh-CN: 内存可分配量
+  en: Allocatable memory
+k8s.pod_capacity:
+  zh-CN: Pod 可分配数量
+  en: Allocatable pods
+k8s.node_os:
+  zh-CN: 操作系统
+  en: Operating system
+k8s.node_arch:
+  zh-CN: 架构
+  en: Architecture
+k8s.node_kernel:
+  zh-CN: 内核
+  en: Kernel
+k8s.node_kubelet:
+  zh-CN: Kubelet 版本
+  en: Kubelet version
+k8s.node_runtime:
+  zh-CN: 容器运行时
+  en: Container runtime
+k8s.node_addresses:
+  zh-CN: 节点地址
+  en: Node addresses
+k8s.node_conditions:
+  zh-CN: 节点状况
+  en: Node conditions
+k8s.node_taints:
+  zh-CN: 污点
+  en: Taints
+
+k8s.context:
+  zh-CN: 集群（context）
+  en: Cluster (context)
+k8s.namespace:
+  zh-CN: 命名空间
+  en: Namespace
+k8s.all:
+  zh-CN: 全部命名空间
+  en: All namespaces
+k8s.kind:
+  zh-CN: 资源类型
+  en: Resource type
+k8s.search:
+  zh-CN: 搜索名称、状态、标签
+  en: Search names, status, labels
+k8s.count:
+  zh-CN: "%{count} 项资源 · %{namespaces} 个命名空间"
+  en: "Resources: %{count} · Namespaces: %{namespaces}"
+k8s.empty:
+  zh-CN: 当前范围内没有符合条件的资源，可切换命名空间或资源类型。
+  en: No matching resources in this scope. Try another namespace or resource type.
+k8s.failed:
+  zh-CN: "查询失败：%{error}。确认主机已安装 kubectl、已配置 kubeconfig 且有查询权限后重试。"
+  en: "Query failed: %{error}. Check kubectl, kubeconfig and access permissions on the host, then retry."
+k8s.incomplete:
+  zh-CN: 返回数据不完整或超过 SSH 查询的 1 MB 上限，请缩小查询范围后重试。
+  en: The response is incomplete or exceeds the SSH query limit of 1 MB. Narrow the scope and retry.
+k8s.no_context:
+  zh-CN: 主机没有可用的当前 context，请先配置 kubeconfig。
+  en: No current context is available on the host. Configure kubeconfig first.
+k8s.open_details:
+  zh-CN: 查看详情…
+  en: View details…
+k8s.details:
+  zh-CN: 详情
+  en: Details
+k8s.logs:
+  zh-CN: 日志
+  en: Logs
+k8s.commands:
+  zh-CN: 生成命令
+  en: Commands
+k8s.yaml:
+  zh-CN: 资源 YAML（只读）
+  en: Resource YAML (read-only)
+k8s.related_pods:
+  zh-CN: 关联 Pod（点击查看容器和日志）
+  en: Related pods (open for containers and logs)
+k8s.choose_pod:
+  zh-CN: 请选择关联 Pod，再选择容器查看日志。
+  en: Open a related pod, then select a container to view logs.
+k8s.container:
+  zh-CN: 容器
+  en: Container
+k8s.tail:
+  zh-CN: 最近行数
+  en: Tail lines
+k8s.since:
+  zh-CN: 时间范围
+  en: Since
+k8s.previous:
+  zh-CN: 上一次容器
+  en: Previous container
+k8s.read_logs:
+  zh-CN: 查询日志
+  en: Read logs
+k8s.log_search:
+  zh-CN: 检索已读取的日志（区分大小写）
+  en: Search retrieved logs (case-sensitive)
+k8s.regex:
+  zh-CN: 正则表达式
+  en: Regex
+k8s.log_count:
+  zh-CN: "匹配 %{count} / %{total} 行"
+  en: "%{count} / %{total} lines match"
+k8s.log_limit:
+  zh-CN: 缓冲区保留当前范围内最新读取的日志，最多 512 KB / 10000 行。实时预览每 2 秒刷新；超长行仅预览前 16 KB，可复制完整内容。
+  en: The buffer holds the latest retrieved window, up to 512 KB / 10000 lines. Live preview refreshes every 2 seconds; long lines display up to 16 KB and can be copied in full.
+k8s.command_note:
+  zh-CN: 命令绑定当前 SSH 主机上的 context、命名空间和资源。复制后可粘贴到终端执行。
+  en: Commands target this context, namespace and resource on the SSH host. Copy and paste into the terminal to run.
+k8s.command.describe:
+  zh-CN: 查询状态与事件
+  en: Describe status and events
+k8s.command.yaml:
+  zh-CN: 查询 YAML
+  en: Get YAML
+k8s.command.logs:
+  zh-CN: 查询容器日志
+  en: Get container logs
+k8s.command.follow:
+  zh-CN: 实时跟踪日志
+  en: Follow logs
+k8s.command.exec:
+  zh-CN: 进入容器（/bin/sh）
+  en: Enter container (/bin/sh)
+k8s.summary:
+  zh-CN: 状态与配置
+  en: Status and configuration
+k8s.created:
+  zh-CN: 创建时间
+  en: Created
+k8s.labels:
+  zh-CN: 标签
+  en: Labels
+k8s.images:
+  zh-CN: 容器与镜像
+  en: Containers and images
+k8s.no_pods:
+  zh-CN: 当前选择器没有匹配的 Pod。
+  en: No pods match this selector.
+k8s.no_selector:
+  zh-CN: 此资源没有直接的 Pod 选择器，可在 Pod 列表中按名称或标签筛选。
+  en: This resource has no direct pod selector. Filter the Pod list by name or label.
+k8s.no_logs:
+  zh-CN: 所选范围内没有日志。
+  en: No logs in this range.
+k8s.no_log_matches:
+  zh-CN: 没有符合检索条件的日志。
+  en: No matching log lines.
+k8s.name:
+  zh-CN: 名称
+  en: Name
+k8s.pod_ip:
+  zh-CN: Pod IP
+  en: Pod IP
+k8s.host_ip:
+  zh-CN: 主机 IP
+  en: Host IP
+k8s.cluster_ip:
+  zh-CN: Cluster IP
+  en: Cluster IP
+k8s.external_ip:
+  zh-CN: 外部地址
+  en: External address
+k8s.node:
+  zh-CN: 节点
+  en: Node
+k8s.copied:
+  zh-CN: 已复制
+  en: Copied
+k8s.live:
+  zh-CN: 实时预览（2 秒）
+  en: Live preview (2 s)
+k8s.follow:
+  zh-CN: 自动滚动
+  en: Auto-scroll
+k8s.copy_logs:
+  zh-CN: 复制检索结果
+  en: Copy search results
+k8s.log_clipped:
+  zh-CN: 本次日志已达到缓冲上限，仅显示已读取的有界窗口，可缩小时间范围或行数。
+  en: Logs reached the buffer limit. This preview shows a bounded retrieved window; reduce the time range or tail.
+
+k8s.key_properties:
+  zh-CN: "重点属性"
+  en: "Key properties"
+
+k8s.metadata:
+  zh-CN: "基本信息"
+  en: "Metadata"
+
+k8s.relations_tree_note:
+  zh-CN: "仅展示直接上下游，点击节点继续查看。"
+  en: "Only direct relationships are shown. Open a node to continue."
+
+
+
+
+
+
+
+
+k8s.service_account:
+  zh-CN: "ServiceAccount"
+  en: "ServiceAccount"
+
+k8s.ready_containers:
+  zh-CN: "就绪容器"
+  en: "Ready containers"
+
+k8s.restarts:
+  zh-CN: "重启次数"
+  en: "Restarts"
+
+k8s.resource_requests:
+  zh-CN: "资源请求"
+  en: "Resource requests"
+
+k8s.resource_limits:
+  zh-CN: "资源限制"
+  en: "Resource limits"
+
+k8s.ports:
+  zh-CN: "端口"
+  en: "Ports"
+
+k8s.phase:
+  zh-CN: "阶段"
+  en: "Phase"
+
+k8s.qos:
+  zh-CN: "QoS"
+  en: "QoS"
+
+k8s.started:
+  zh-CN: "启动时间"
+  en: "Started"
+
+k8s.priority_class:
+  zh-CN: "优先级类别"
+  en: "Priority class"
+
+k8s.desired_replicas:
+  zh-CN: "期望副本"
+  en: "Desired replicas"
+
+k8s.ready_replicas:
+  zh-CN: "就绪副本"
+  en: "Ready replicas"
+
+k8s.updated_replicas:
+  zh-CN: "更新副本"
+  en: "Updated replicas"
+
+k8s.available_replicas:
+  zh-CN: "可用副本"
+  en: "Available replicas"
+
+k8s.unavailable_replicas:
+  zh-CN: "不可用副本"
+  en: "Unavailable replicas"
+
+k8s.update_strategy:
+  zh-CN: "更新策略"
+  en: "Update strategy"
+
+k8s.min_ready_seconds:
+  zh-CN: "最短就绪时间（秒）"
+  en: "Minimum ready time (seconds)"
+
+k8s.service_type:
+  zh-CN: "Service 类型"
+  en: "Service type"
+
+k8s.external_name:
+  zh-CN: "外部域名"
+  en: "External name"
+
+k8s.external_traffic_policy:
+  zh-CN: "外部流量策略"
+  en: "External traffic policy"
+
+k8s.ingress_class:
+  zh-CN: "IngressClass"
+  en: "IngressClass"
+
+k8s.routes:
+  zh-CN: "路由规则"
+  en: "Routes"
+
+k8s.storage_class:
+  zh-CN: "StorageClass"
+  en: "StorageClass"
+
+k8s.volume:
+  zh-CN: "绑定卷"
+  en: "Bound volume"
+
+k8s.storage_requested:
+  zh-CN: "申请容量"
+  en: "Requested storage"
+
+k8s.storage_capacity:
+  zh-CN: "实际容量"
+  en: "Storage capacity"
+
+k8s.reclaim_policy:
+  zh-CN: "回收策略"
+  en: "Reclaim policy"
+
+k8s.volume_mode:
+  zh-CN: "卷模式"
+  en: "Volume mode"
+
+k8s.access_modes:
+  zh-CN: "访问模式"
+  en: "Access modes"
+
+k8s.completions:
+  zh-CN: "目标完成数量"
+  en: "Completions"
+
+k8s.parallelism:
+  zh-CN: "并发数量"
+  en: "Parallelism"
+
+k8s.active_pods:
+  zh-CN: "运行中的 Pod"
+  en: "Active pods"
+
+k8s.succeeded_pods:
+  zh-CN: "成功的 Pod"
+  en: "Succeeded pods"
+
+k8s.failed_pods:
+  zh-CN: "失败的 Pod"
+  en: "Failed pods"
+
+k8s.backoff_limit:
+  zh-CN: "重试上限"
+  en: "Backoff limit"
+
+k8s.completed:
+  zh-CN: "完成时间"
+  en: "Completed"
+
+k8s.schedule:
+  zh-CN: "调度表达式"
+  en: "Schedule"
+
+k8s.time_zone:
+  zh-CN: "时区"
+  en: "Time zone"
+
+k8s.suspended:
+  zh-CN: "暂停调度"
+  en: "Suspended"
+
+k8s.concurrency_policy:
+  zh-CN: "并发策略"
+  en: "Concurrency policy"
+
+k8s.last_schedule:
+  zh-CN: "最近调度"
+  en: "Last scheduled"
+
+k8s.min_replicas:
+  zh-CN: "最少副本"
+  en: "Minimum replicas"
+
+k8s.max_replicas:
+  zh-CN: "最多副本"
+  en: "Maximum replicas"
+
+k8s.current_replicas:
+  zh-CN: "当前副本"
+  en: "Current replicas"
+
+k8s.scale_target:
+  zh-CN: "扩缩容目标"
+  en: "Scale target"
+
+k8s.selector:
+  zh-CN: "选择器"
+  en: "Selector"
+
+k8s.conditions:
+  zh-CN: "状态条件"
+  en: "Conditions"
+
+k8s.graph.upstream:
+  zh-CN: 上游
+  en: Upstream
+k8s.graph.current:
+  zh-CN: 当前资源
+  en: Current resource
+k8s.graph.downstream:
+  zh-CN: 下游
+  en: Downstream
+k8s.graph.empty:
+  zh-CN: 无直接关联
+  en: No direct relationships
+k8s.graph.previous:
+  zh-CN: 上一页
+  en: Previous page
+k8s.graph.next:
+  zh-CN: 下一页
+  en: Next page
+k8s.query_too_large:
+  zh-CN: 单项资源或查询范围过大，请选择具体命名空间或更精确的资源后重试。
+  en: The resource or query scope is too large. Select a namespace or a more specific resource and retry.
+
+k8s.terminating:
+  zh-CN: 删除中
+  en: Terminating
+k8s.graph.dependencies:
+  zh-CN: 配置与存储引用
+  en: Configuration and storage references
+k8s.config_keys:
+  zh-CN: 配置项
+  en: Configuration keys
+k8s.immutable:
+  zh-CN: 禁止修改数据
+  en: Immutable data
+k8s.reference_changed:
+  zh-CN: 引用的资源已被删除或重建，请返回并刷新关系图。
+  en: The referenced resource was deleted or recreated. Go back and refresh relationships.

@@ -90,6 +90,27 @@ pub fn confirm_danger(
     window: &mut Window,
     cx: &mut App,
 ) {
+    confirm_danger_with_cancel(
+        title,
+        description,
+        verb,
+        on_ok,
+        Rc::new(|_, _| {}),
+        window,
+        cx,
+    );
+}
+
+/// The same confirmation with an owner callback to discard a prepared command.
+pub fn confirm_danger_with_cancel(
+    title: SharedString,
+    description: Option<SharedString>,
+    verb: impl Into<SharedString>,
+    on_ok: DeleteHandler,
+    on_cancel: DeleteHandler,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let verb = verb.into();
     window.open_alert_dialog(cx, move |alert, _, _| {
         alert
@@ -108,6 +129,13 @@ pub fn confirm_danger(
                 let on_ok = on_ok.clone();
                 move |_, window, cx| {
                     on_ok(window, cx);
+                    true
+                }
+            })
+            .on_cancel({
+                let on_cancel = on_cancel.clone();
+                move |_, window, cx| {
+                    on_cancel(window, cx);
                     true
                 }
             })

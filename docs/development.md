@@ -39,6 +39,10 @@ cargo fmt --check
 
 上传交互参考 [WinSCP 上传流程](https://winscp.net/eng/docs/task_upload)，协议适配参考 [russh-sftp 请求接口](https://docs.rs/russh-sftp/3.0.0/russh_sftp/client/struct.RawSftpSession.html) 与 [OpenSSH 扩展规范](https://raw.githubusercontent.com/openssh/openssh-portable/master/PROTOCOL)。
 
+## Kubernetes
+
+Kubernetes 工具的模块边界、kubectl 查询范围、RBAC 与注入测试见 [Kubernetes 开发与测试](kubernetes.md#开发与测试)。
+
 ## README 截图
 
 `docs/screenshots/` 里的截图来自真实窗口（macOS 的 `screencapture -o -l <窗口号>`，2 倍分辨率）。截图时不要用自己的数据：把数据目录复制一份，改掉分组、主机的名称和地址，用 `SHELLRS_DATA_DIR` 指向这份副本启动 ShellRS；钥匙串里的密码按「用户@地址:端口」保存，所以副本里没改地址的主机照样能真实连接。截好后检查状态栏、对话框和终端输出里有没有真实的 IP、主机名或业务信息，有就打码。

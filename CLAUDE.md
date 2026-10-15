@@ -8,7 +8,7 @@ ShellRS（crate 与二进制都叫 `shellrs`）是 Xshell / WinSCP 式的 SSH �
 
 - **术语。** 保存的一项叫「主机」（量词「台」），代码和库里叫 host（`Host`、`HostId`、`HostStore`、`hosts` 表）。它以前叫「会话」/ `Session`，已全部改掉，新代码和文案别再用。填 IP / 域名的字段叫「地址」（`Host.address`）。SSH 协议层的 session（「SSH 会话通道」、russh 的 `Session`、SFTP 会话）照旧。英文用词见「多语言」的用词表。
 - **两种不保存的连接。** 「外部连接」：堡垒机像调 Xshell（`ssh://`、`-url`）或 WinSCP（`sftp://`）一样拉起 ShellRS，只开一个终端或 SFTP 标签（`HostStore::is_external`）。「临时连接」：标题栏「临时连接…」打开，功能齐全。两者共同的「不保存」在代码里叫 temporary（`HostInfo::temporary`）。
-- **全是真的。** SQLite（`~/Library/Application Support/shellrs/shellrs.db`，`SHELLRS_DATA_DIR` 可覆盖目录）、本地终端（`portable-pty` + `alacritty_terminal`）、SSH（`russh`）、SFTP（双栏、传输队列、断点续传）、端口转发（`-L` / `-R` / `-D`）、凭据、连接方式（直连、多级跳板、HTTP / SOCKS5 代理）、右侧栏九个工具、内置编辑器和预览、外部 CLI、在线升级、匿名使用统计（Aptabase）。密码和口令只进系统钥匙串（`keyring`），**数据库里永远不出现秘密**。
+- **全是真的。** SQLite（`~/Library/Application Support/shellrs/shellrs.db`，`SHELLRS_DATA_DIR` 可覆盖目录）、本地终端（`portable-pty` + `alacritty_terminal`）、SSH（`russh`）、SFTP（双栏、传输队列、断点续传）、端口转发（`-L` / `-R` / `-D`）、凭据、连接方式（直连、多级跳板、HTTP / SOCKS5 代理）、右侧栏十个工具、内置编辑器和预览、外部 CLI、在线升级、匿名使用统计（Aptabase）。密码和口令只进系统钥匙串（`keyring`），**数据库里永远不出现秘密**。
 
 做 UI 之前先读 `gpui-kit` 与 `gpui-kit-design-guides` 两个技能（其中的 Coding Guides 和 Design Guides 在本仓库是规范，不是参考）。不要凭记忆臆造 gpui-kit API：以 `~/.cargo/registry/src/*/gpui-component-0.6.1/`、`gpui-base-0.6.1/` 的源码或 `https://gpui-kit.com/component/<name>.md` 为准。
 
@@ -49,9 +49,10 @@ ShellRS（crate 与二进制都叫 `shellrs`）是 Xshell / WinSCP 式的 SSH �
 - **右侧栏**：窗口最右一列竖排的工具切换。
   - 显示规则：只跟着 SSH 远程终端出现，SFTP、本地终端、设置、开始页都不显示。它是工作区级的一份，开合和所选工具在所有终端间共用。默认收起，宽 320 px，只能往宽里拉。⌘⌥B / Ctrl+Alt+B 切换。
   - 中间区分屏时不隐藏：跟着最近一次在前（切到或焦点点进）、而且还在屏幕上的远程终端；点进另一半的 SFTP、本地终端等不换；屏幕上一个远程终端都没有才隐藏。标题写出主机（「系统监控 · web-01」），状态栏也跟焦点走。用户比较过「分屏就隐藏」，选了这个。
-  - 工具从上到下：命令片段、历史命令、文件、Docker、系统服务、进程管理、网络连接、系统监控、GPU/NPU（「文件」排在历史命令之后，用户定的）。
-  - 「设置 › 终端 › 侧栏功能」（在「终端交互」和「通知」之间，用户定的）是两排图标（`settings/sidebar_tools.rs`）：上排显示、下排不显示，图标下写名称，点击或拖到另一排就切换，悬停显示用途（用户嫌复选框不好使）。GPU/NPU 默认不显示（不是每台机器都有卡），以后的 K8s 之类也加在这里。`settings.json` 的 `sidebar_tools` 只存和默认不同的（`ToolKind::key`，发布后不能改），新工具自带默认值、不用迁移。组内「恢复默认」只管这一组（gpui-kit 只有整页重置）。只在设置里改：图标列的右键勾选菜单做过又去掉了（用户嫌意义不大、增加复杂度），别加回来。全部隐藏时图标列整个消失，只能回设置。过滤只在 `offered_tools`，设置变了要 `sync_tool_sidebar`。
-  - 已知不是 Linux 的主机不显示系统监控、GPU/NPU、网络连接、进程管理、系统服务；已知是 Windows 的再去掉 Docker 和历史命令；外部连接只有命令片段。
+  - Kubernetes 使用 SSH 主机上的 kubectl 和 kubeconfig，提供资源、关系、日志、性能与经确认的 YAML 编辑、重启和删除；惰性创建，开关统一使用侧栏功能。查询取消、命令边界与测试见 `docs/kubernetes.md`。
+  - 工具从上到下：命令片段、历史命令、文件、Docker、Kubernetes、系统服务、进程管理、网络连接、系统监控、GPU/NPU（「文件」排在历史命令之后，用户定的）。
+  - 「设置 › 终端 › 侧栏功能」（在「终端交互」和「通知」之间，用户定的）是两排图标（`settings/sidebar_tools.rs`）：上排显示、下排不显示，图标下写名称，点击或拖到另一排就切换，悬停显示用途（用户嫌复选框不好使）。GPU/NPU 默认不显示（不是每台机器都有卡），Kubernetes 默认显示，也在这里切换。`settings.json` 的 `sidebar_tools` 只存和默认不同的（`ToolKind::key`，发布后不能改），新工具自带默认值、不用迁移。组内「恢复默认」只管这一组（gpui-kit 只有整页重置）。只在设置里改：图标列的右键勾选菜单做过又去掉了（用户嫌意义不大、增加复杂度），别加回来。全部隐藏时图标列整个消失，只能回设置。过滤只在 `offered_tools`，设置变了要 `sync_tool_sidebar`。
+  - 已知不是 Linux 的主机不显示系统监控、GPU/NPU、网络连接、进程管理、系统服务；已知是 Windows 的再去掉 Docker、Kubernetes 和历史命令；外部连接只有命令片段。
   - 系统监控每 2 秒读一次（运行时长随读数刷新，不自己走），磁盘每 30 秒，只在显示时读。≥ 70% 黄、≥ 90% 红。
   - GPU/NPU（用户要的 AI 主机显卡运维，没合并 PR #19 塞进系统监控的做法）：NVIDIA 读 `nvidia-smi` 的 CSV 查询和计算进程，华为昇腾解析 `npu-smi info` 的表格，其他厂商暂不支持；`ps` 补进程的用户和命令行。按 8 卡设计：汇总（显存写占用比例、下面一行已用 / 总量，半格放不下几百 GB）、每卡三行（利用率、显存各一行，名称和数值定宽，两根条一样长；点开看详情，「全部展开 / 全部收起」，只有一张卡时默认展开）、计算进程（右键结束，沿用进程管理的 `EndProcess`）。读完 2 秒后再读；运行时长在同一个脚本里读 `/proc/uptime`，随读数 2 秒一跳、不自己走（用户定的，同系统监控）；刷新按钮只在点了刷新时转（每 2 秒转一次用户嫌过度）。每个工具 `timeout -s KILL 3`；读失败或被停掉就停止自动读取，点刷新再读（卡掉了时 `nvidia-smi` 会卡在驱动里，一直重试会堆积进程）。利用率和显存不变色（跑满、预占显存是常态），只有温度（≥ 80 °C 黄、≥ 90 °C 红）和健康状态（ECC 不可纠正错误、昇腾 Health 不是 OK）上色。昇腾的解析只按公开样例写，没在真机上验证过。
   - 放不下的文字：型号、驱动、UUID、系统名这类说明性的字段折行显示，不截断（GPUI 会把过长的串按字符折开）；只有密集列表里的长文本（进程命令行、行里的型号）截断，鼠标停上去显示全文（用户问过，定的这条）。
@@ -158,7 +159,7 @@ cargo test -- --ignored                     # 会读写真实钥匙串的测试�
   - `file_icons.rs`：文件图标 `FileIcon`（按设置画单色或彩色），彩色的匹配表 `file_icons_table.rs` 和 `assets/icons/files/` 由 `scripts/file_icons.py` 从 Material Icon Theme 生成，不手改。
 - `editor/`：编辑器标签（`EditorPanel`），语言、缩进和状态栏文字是 `model.rs` 的纯函数。
 - `forward/`：端口转发的运行（`ForwardManager`、每条规则一个工作线程、SOCKS 解析）和界面。`credential/`：凭据的界面。
-- `monitor/`、`gpu/`、`netstat/`、`processes/`、`services/`、`docker/`、`history/`、`snippets/`：右侧栏的八个命令类工具（第九个「文件」是 `explorer/` 的侧栏模式）。各自是「命令（`linux.rs` 等）+ 纯解析和模型（`model.rs`）+ 面板」，确认和通知在工作区。
+- `monitor/`、`gpu/`、`netstat/`、`processes/`、`services/`、`docker/`、`kubernetes/`、`history/`、`snippets/`：右侧栏的九个命令类工具（第十个「文件」是 `explorer/` 的侧栏模式）。各自是「命令（`linux.rs` 等）+ 纯解析和模型（`model.rs`）+ 面板」，确认和通知在工作区。
 - `secrets/`：`SecretStore`（钥匙串）、`SecretRef`（条目归属）、`TemporarySecretStore`（不保存的连接的密码只在内存）。
 - `settings/`：`AppSettings`、写 `settings.json` 的 `SettingsStore`、把设置落到窗口上的 `apply`、设置标签。
 - `cli/`：外部 CLI（`shellrs hosts/credentials/exec/upload/download/sync`，给 AI Agent 用）、套接字协议、应用里的服务端、主机和凭据改动的校验（`manage.rs`）、PATH 和 Agent skill 的安装。
@@ -224,7 +225,7 @@ cargo test -- --ignored                     # 会读写真实钥匙串的测试�
 | 传输队列 / 书签 | Transfers / Bookmarks |
 | 显示隐藏文件 | Show hidden files |
 | 废纸篓 | macOS 写 Trash，Windows 写 Recycle Bin |
-| 右侧栏九个工具（GPU/NPU 两种语言都写 GPU/NPU） | Snippets / History / Files / Docker / Services / Processes / Network / Monitor / GPU/NPU |
+| 右侧栏十个工具（GPU/NPU 两种语言都写 GPU/NPU） | Snippets / History / Files / Docker / Kubernetes / Services / Processes / Network / Monitor / GPU/NPU |
 | 侧栏功能 / 恢复默认 | Sidebar tools / Restore defaults |
 | 设置八类（外观、终端、SFTP、关键字高亮、键盘快捷键、外部 CLI、应用、关于） | Appearance / Terminal / SFTP / Highlighting / Keyboard shortcuts / External CLI / General / About |
 | 图标风格：单色 / 彩色 | Icon style: Monochrome / Color |

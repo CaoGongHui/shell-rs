@@ -253,6 +253,7 @@ pub(super) fn description(tool: ToolKind) -> SharedString {
         ToolKind::History => t!("settings.sidebar_tools.history"),
         ToolKind::Files => t!("settings.sidebar_tools.files"),
         ToolKind::Docker => t!("settings.sidebar_tools.docker"),
+        ToolKind::Kubernetes => t!("settings.sidebar_tools.kubernetes"),
         ToolKind::Services => t!("settings.sidebar_tools.services"),
         ToolKind::Processes => t!("settings.sidebar_tools.processes"),
         ToolKind::Connections => t!("settings.sidebar_tools.connections"),

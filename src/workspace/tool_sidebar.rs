@@ -13,6 +13,7 @@ use crate::explorer::ExplorerPanel;
 use crate::gpu::GpuPanel;
 use crate::history::HistoryPanel;
 use crate::host::{HostId, HostOs, HostStore, SnippetCategoryId};
+use crate::kubernetes::{KubernetesCommand, KubernetesPanel};
 use crate::monitor::{MonitorDetail, MonitorPanel};
 use crate::netstat::NetstatPanel;
 use crate::processes::{Process, ProcessDetails, ProcessPanel, ProcessSort};
@@ -40,7 +41,9 @@ impl ToolKind {
             ToolKind::Snippets | ToolKind::Files => true,
             // Wherever `sh` runs `docker`: Linux, and a Mac with Docker
             // Desktop; and bash's history file wherever `sh` reads it.
-            ToolKind::Docker | ToolKind::History => os != Some(HostOs::Windows),
+            ToolKind::Docker | ToolKind::History | ToolKind::Kubernetes => {
+                os != Some(HostOs::Windows)
+            }
         }
     }
 
@@ -51,6 +54,7 @@ impl ToolKind {
             ToolKind::History => "tool-history",
             ToolKind::Files => "tool-files",
             ToolKind::Docker => "tool-docker",
+            ToolKind::Kubernetes => "tool-kubernetes",
             ToolKind::Services => "tool-services",
             ToolKind::Processes => "tool-processes",
             ToolKind::Connections => "tool-connections",
@@ -97,9 +101,13 @@ pub struct ToolSidebar {
     /// terminal, made the first time it is shown.
     files: Option<Entity<ExplorerPanel>>,
     docker: Entity<DockerPanel>,
+    /// Created only when Kubernetes is first selected; unused terminals
+    /// do not allocate its inputs, subscriptions or query state.
+    kubernetes: Option<Entity<KubernetesPanel>>,
     services: Entity<ServicePanel>,
     processes: Entity<ProcessPanel>,
     netstat: Entity<NetstatPanel>,
+    dispatch: FocusHandle,
     gpu: Entity<GpuPanel>,
     focus_handle: FocusHandle,
 }
@@ -123,16 +131,36 @@ impl ToolSidebar {
             history: cx.new(|cx| HistoryPanel::new(dispatch.clone(), window, cx)),
             files: None,
             docker: cx.new(|_| DockerPanel::new(dispatch.clone())),
+            kubernetes: None,
             services: cx.new(|cx| ServicePanel::new(dispatch.clone(), window, cx)),
             processes: cx.new(|cx| ProcessPanel::new(dispatch.clone(), window, cx)),
             netstat: cx.new(|cx| NetstatPanel::new(dispatch.clone(), window, cx)),
-            gpu: cx.new(|cx| GpuPanel::new(dispatch, cx)),
+            gpu: cx.new(|cx| GpuPanel::new(dispatch.clone(), cx)),
+            dispatch,
             focus_handle: cx.focus_handle(),
         }
     }
 
     pub fn tool(&self) -> ToolKind {
         self.tool
+    }
+
+    pub fn disable_kubernetes(&mut self, cx: &mut Context<Self>) {
+        if let Some(panel) = self.kubernetes.take() {
+            panel.update(cx, |panel, cx| panel.set_target(None, false, cx));
+            cx.notify();
+        }
+    }
+
+    pub fn kubernetes_command(
+        &mut self,
+        command: &KubernetesCommand,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(panel) = &self.kubernetes {
+            panel.update(cx, |panel, cx| panel.command(command, window, cx));
+        }
     }
 
     /// Work on the SSH terminal now in front, and say whether the dock is
@@ -280,6 +308,12 @@ impl ToolSidebar {
             view: terminal.view.clone(),
         });
         let showing = |tool| self.shown && self.tool == tool;
+        let kubernetes = showing(ToolKind::Kubernetes);
+        if let Some(panel) = &self.kubernetes {
+            panel.update(cx, |panel, cx| {
+                panel.set_target(target.clone(), kubernetes, cx)
+            });
+        }
         let (monitor, netstat, processes, services, docker, history, gpu) = (
             showing(ToolKind::Monitor),
             showing(ToolKind::Connections),
@@ -331,13 +365,17 @@ impl ToolSidebar {
     /// sidebar itself: left on an element no longer drawn, it would take
     /// every window-level shortcut's dispatch path with it.
     pub fn show(&mut self, tool: ToolKind, window: &mut Window, cx: &mut Context<Self>) {
-        if self.tool == tool {
+        if self.tool == tool && (tool != ToolKind::Kubernetes || self.kubernetes.is_some()) {
             return;
         }
         if self.focus_handle.contains_focused(window, cx) {
             window.focus(&self.focus_handle, cx);
         }
         self.tool = tool;
+        if tool == ToolKind::Kubernetes && self.kubernetes.is_none() {
+            self.kubernetes =
+                Some(cx.new(|cx| KubernetesPanel::new(self.dispatch.clone(), window, cx)));
+        }
         self.sync_tools(cx);
         cx.notify();
     }
@@ -430,6 +468,10 @@ impl Render for ToolSidebar {
                         None => Empty.into_any_element(),
                     },
                     ToolKind::Docker => self.docker.clone().into_any_element(),
+                    ToolKind::Kubernetes => self.kubernetes.as_ref().map_or_else(
+                        || div().into_any_element(),
+                        |panel| panel.clone().into_any_element(),
+                    ),
                     ToolKind::Services => self.services.clone().into_any_element(),
                     ToolKind::Processes => self.processes.clone().into_any_element(),
                     ToolKind::Connections => self.netstat.clone().into_any_element(),
