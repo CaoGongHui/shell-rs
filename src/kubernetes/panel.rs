@@ -40,6 +40,7 @@ pub struct KubernetesPanel {
     namespaces: Vec<String>,
     namespaces_ready: bool,
     kind: ResourceKind,
+    /// The tab: 0 resources (the default, Pods), 1 nodes.
     section: usize,
     resource_kind: ResourceKind,
     rows: Rc<Vec<Resource>>,
@@ -173,7 +174,7 @@ impl KubernetesPanel {
             namespaces: Vec::new(),
             namespaces_ready: false,
             kind: ResourceKind::Pod,
-            section: 1,
+            section: 0,
             resource_kind: ResourceKind::Pod,
             rows: Rc::new(Vec::new()),
             selected: None,
@@ -239,8 +240,8 @@ impl KubernetesPanel {
                 if self.section != *section {
                     self.section = *section;
                     self.kind = match section {
-                        0 => ResourceKind::Node,
-                        _ => self.resource_kind,
+                        0 => self.resource_kind,
+                        _ => ResourceKind::Node,
                     };
                     self.rows = Rc::new(Vec::new());
                     self.selected = None;
@@ -276,7 +277,7 @@ impl KubernetesPanel {
             }
             KubernetesCommand::Kind(kind) => {
                 if self.kind != *kind {
-                    self.section = 1;
+                    self.section = 0;
                     self.resource_kind = *kind;
                     self.kind = *kind;
                     self.rows = Rc::new(Vec::new());
@@ -753,8 +754,8 @@ impl Render for KubernetesPanel {
                             .underline()
                             .small()
                             .selected_index(self.section)
-                            .child(Tab::new().label(t!("k8s.nodes")))
                             .child(Tab::new().label(t!("k8s.resources")))
+                            .child(Tab::new().label(t!("k8s.nodes")))
                             .on_click(move |ix, window, cx| {
                                 defer_dispatch(
                                     &sections,
@@ -797,7 +798,7 @@ impl Render for KubernetesPanel {
                             .small()
                             .disabled(self.context.is_none() || !self.namespaces_ready)),
                     ))
-                    .when(self.section == 1, |header| {
+                    .when(self.section == 0, |header| {
                         header
                             .child(scope_field(t!("k8s.kind"), Select::new(&self.kind_select).id("k8s-kind")
                                     .accessibility_label(t!("k8s.kind"))

@@ -1113,7 +1113,7 @@ async fn kubernetes_node_metrics_are_on_demand_serial_and_stop_on_tab_change(
     reply(cx, handle, &factory, NAMESPACES).await;
     reply(cx, handle, &factory, PODS).await;
     in_frame(cx, handle, |window, cx| {
-        window.within("k8s-sections").click(0usize, cx)
+        window.within("k8s-sections").click(1usize, cx)
     });
     reply(
         cx,

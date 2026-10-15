@@ -251,8 +251,8 @@ k8s.node_taints:
   en: Taints
 
 k8s.context:
-  zh-CN: 集群（context）
-  en: Cluster (context)
+  zh-CN: 集群
+  en: Cluster
 k8s.namespace:
   zh-CN: 命名空间
   en: Namespace
@@ -261,7 +261,7 @@ k8s.all:
   en: All namespaces
 k8s.kind:
   zh-CN: 资源类型
-  en: Resource type
+  en: Type
 k8s.search:
   zh-CN: 搜索名称、状态、标签
   en: Search names, status, labels

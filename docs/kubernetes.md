@@ -14,7 +14,7 @@ Kubernetes 面板在首次选择时才创建。未使用时不创建其输入控
 
 - **集群（context）**：读取 `kubectl config current-context` 和 `kubectl config get-contexts -o name`，支持选择其他 context。所有 API 请求带 `--context`，不会执行 `use-context` 或改动 kubeconfig。
 - **命名空间**：通过 kubectl 按 Kubernetes API 分页读取完整列表，名称排序。默认“全部命名空间”，查询跨命名空间的 API 路径；选择一个 namespace 后，查询限定到该命名空间的路径。
-- **面板**：节点、资源同级切换，共享当前 context。节点展示容量、地址和就绪状态；节点、Namespace、PV、StorageClass 的查询不带命名空间参数。
+- **面板**：资源、节点两个标签，默认是资源（Pod），共享当前 context。节点展示容量、地址和就绪状态；节点、Namespace、PV、StorageClass 的查询不带命名空间参数。
 - **资源类型**：Pod、Deployment（deploy）、StatefulSet（sts）、DaemonSet、ReplicaSet、Service（svc）、Ingress、Job、CronJob、PVC、Namespace、ConfigMap、Secret、ServiceAccount、PV、StorageClass、HPA、PDB、EndpointSlice。Secret 的列表与详情仅读取元数据，不读取 `data` / `stringData`。
 - **搜索**：在当前类型和命名空间查询结果中，按名称、命名空间、状态、标签进行不区分大小写的过滤，不额外执行服务器命令。
 
