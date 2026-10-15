@@ -488,16 +488,19 @@ async fn a_terminal_tab_can_be_renamed_and_follow_the_host_again(cx: &mut TestAp
     let (handle, workspace) = open_workspace(cx);
     let tab = ("terminal-tab", INITIAL_WEB_TERMINAL);
 
+    // Undetected hosts show the fallback mark in the tab too, in colour once
+    // the terminal is up.
+    cx.wait_for(handle.into(), Duration::from_secs(2), |window, cx| {
+        window.render_frame(cx);
+        window
+            .find(("terminal-tab-os", INITIAL_WEB_TERMINAL))
+            .label()
+            == Some("未探测到系统")
+    })
+    .await;
     cx.update_window(handle.into(), |_, window, cx| {
         window.render_frame(cx);
         assert_eq!(window.find(tab).label(), Some("web-01"));
-        // Undetected hosts show the fallback mark in the tab too.
-        assert_eq!(
-            window
-                .find(("terminal-tab-os", INITIAL_WEB_TERMINAL))
-                .label(),
-            Some("未探测到系统")
-        );
         window.dispatch_action(
             Box::new(RenameTerminal(RemoteTerminalId(INITIAL_WEB_TERMINAL))),
             cx,

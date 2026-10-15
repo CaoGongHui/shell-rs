@@ -88,8 +88,7 @@ icon_assets!(
         GripVertical,
         FileSearch,
         SquareDashedText,
-        CopyPlus,
-        Cable
+        CopyPlus
     ]
 );
 

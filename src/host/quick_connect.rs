@@ -297,6 +297,7 @@ impl ListDelegate for QuickConnectList {
                             HostMark::new(
                                 ("quick-connect-os", host.id.0),
                                 host.name.clone(),
+                                host.address.clone(),
                                 host.os,
                             )
                             .serial(host.serial)

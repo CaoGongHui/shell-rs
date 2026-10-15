@@ -5,7 +5,6 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants as _},
     h_flex,
     menu::{ContextMenuExt as _, PopupMenu},
-    tooltip::Tooltip,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -61,10 +60,11 @@ impl ClosableTabTitle {
         }
     }
 
-    /// Show this tab's own connection state, never its host's aggregate state.
-    /// Only a connection that is not up gets a dot, so a dot always means
-    /// something to look at. Tabs that do not own a remote connection leave
-    /// this unset.
+    /// Show this tab's own connection state, never its host's aggregate state:
+    /// a connection that is not up greys the label, as the panel greys the
+    /// mark it passes in (`HostMark::connection_state`). Colour means
+    /// connected; there is no dot to look for. Tabs that do not own a remote
+    /// connection leave this unset.
     pub fn connection_state(mut self, state: ConnectionState) -> Self {
         self.connection_state = Some(state);
         self
@@ -96,49 +96,20 @@ impl ClosableTabTitle {
 
 impl RenderOnce for ClosableTabTitle {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        // The badge must not change the mark's layout box or baseline. Put
-        // its center at the circular mark's lower-right corner: the two
-        // circles remain separate without shifting the icon or title text.
-        let status = self.connection_state.and_then(|state| match state {
-            ConnectionState::Connected => None,
-            ConnectionState::Connecting => Some((state, cx.theme().warning)),
-            ConnectionState::Disconnected => Some((state, cx.theme().danger)),
-        });
-        let leading = match status {
-            Some((state, color)) => {
-                let label = state.label();
-                div()
-                    .relative()
-                    .flex_shrink_0()
-                    .child(self.leading)
-                    .child(
-                        div()
-                            .id("connection-status")
-                            .test_support()
-                            .role(Role::Status)
-                            .aria_label(label.clone())
-                            .absolute()
-                            // Half the size_1p5 diameter, in the same rem
-                            // units, centers the dot on the mark's corner.
-                            .right(-rems(0.1875))
-                            .bottom(-rems(0.1875))
-                            .size_1p5()
-                            .flex_shrink_0()
-                            .rounded_full()
-                            .bg(color)
-                            .tooltip(move |window, cx| {
-                                Tooltip::new(label.clone()).build(window, cx)
-                            }),
-                    )
-                    .into_any_element()
-            }
-            None => self.leading,
-        };
+        let offline = self
+            .connection_state
+            .is_some_and(|state| !state.is_connected());
         let row = h_flex()
             .id("title")
             .gap_1()
-            .child(leading)
-            .child(self.label.clone())
+            .child(self.leading)
+            .child(
+                div()
+                    .when(offline, |label| {
+                        label.text_color(cx.theme().muted_foreground)
+                    })
+                    .child(self.label.clone()),
+            )
             .when(self.modified, |row| {
                 row.child(
                     div()

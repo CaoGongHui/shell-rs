@@ -504,6 +504,7 @@ impl EditorPanel {
                 HostMark::new(
                     ("editor-host", id.0),
                     host.map(|host| host.name.clone()).unwrap_or_default(),
+                    host.map(|host| host.address.clone()).unwrap_or_default(),
                     host.and_then(|host| host.os),
                 )
                 .small()

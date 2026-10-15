@@ -375,12 +375,19 @@ impl Render for HostPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Plain snapshots for the row renderer: render callbacks must not
         // read entities.
-        let host_marks: Rc<HashMap<HostId, (Option<HostOs>, bool)>> = Rc::new(
+        let host_marks: Rc<HashMap<HostId, MarkOf>> = Rc::new(
             self.store
                 .read(cx)
                 .hosts()
                 .iter()
-                .map(|host| (host.id, (host.os, host.is_serial())))
+                .map(|host| {
+                    let mark = MarkOf {
+                        os: host.os,
+                        serial: host.is_serial(),
+                        address: host.address.clone(),
+                    };
+                    (host.id, mark)
+                })
                 .collect(),
         );
         let tooltips: Rc<HashMap<HostId, RowTooltip>> = Rc::new(
@@ -559,11 +566,18 @@ fn group_host_counts(
     counts
 }
 
+/// What a host row's mark is drawn from, taken in `render`.
+struct MarkOf {
+    os: Option<HostOs>,
+    serial: bool,
+    address: SharedString,
+}
+
 fn render_row(
     entry: &TreeEntry,
     selected: bool,
     group_counts: &HashMap<GroupId, usize>,
-    host_marks: &HashMap<HostId, (Option<HostOs>, bool)>,
+    host_marks: &HashMap<HostId, MarkOf>,
     interactions: &RowInteractions,
     cx: &mut App,
 ) -> ListItem {
@@ -590,12 +604,16 @@ fn render_row(
             ("group-row", id.0).into(),
         ),
         Some(HostNode::Host(id)) => (
-            HostMark::new(
-                ("host-os", id.0),
-                item.label.clone(),
-                host_marks.get(&id).and_then(|(os, _)| *os),
-            )
-            .serial(host_marks.get(&id).is_some_and(|(_, serial)| *serial))
+            {
+                let mark = host_marks.get(&id);
+                HostMark::new(
+                    ("host-os", id.0),
+                    item.label.clone(),
+                    mark.map(|mark| mark.address.clone()).unwrap_or_default(),
+                    mark.and_then(|mark| mark.os),
+                )
+                .serial(mark.is_some_and(|mark| mark.serial))
+            }
             .small()
             .without_tooltip()
             .into_any_element(),

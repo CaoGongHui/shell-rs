@@ -9,6 +9,9 @@ shared.host_mark.unknown_os:
 shared.host_mark.serial:
   zh-CN: 串口
   en: Serial port
+shared.host_mark.with_state:
+  zh-CN: "%{mark} · %{state}"
+  en: "%{mark} · %{state}"
 shared.duration.days.one:
   en: "%{count} day %{clock}"
 shared.duration.days.other:

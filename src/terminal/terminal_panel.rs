@@ -264,14 +264,11 @@ impl BasePanel for TerminalPanel {
 impl Panel for TerminalPanel {
     fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let id = self.id;
-        let os = self
-            .store
-            .read(cx)
-            .host(self.host_id)
-            .and_then(|host| host.os);
-        let mark = HostMark::new(("terminal-tab-os", id.0), self.default_title(cx), os)
-            .serial(self.serial)
-            .small();
+        let host = self.store.read(cx).host(self.host_id);
+        let (address, os) = (
+            host.map(|host| host.address.clone()).unwrap_or_default(),
+            host.and_then(|host| host.os),
+        );
         let tab_menu = self.tab_menu(cx);
         let state = match self.lifecycle(cx) {
             TerminalLifecycle::Starting => ConnectionState::Connecting,
@@ -280,6 +277,15 @@ impl Panel for TerminalPanel {
             | TerminalLifecycle::Failed(_)
             | TerminalLifecycle::Closing => ConnectionState::Disconnected,
         };
+        let mark = HostMark::new(
+            ("terminal-tab-os", id.0),
+            self.default_title(cx),
+            address,
+            os,
+        )
+        .serial(self.serial)
+        .connection_state(state)
+        .small();
         ClosableTabTitle::new(("terminal-tab", id.0), mark, self.tab_title(cx))
             .connection_state(state)
             .closable(("close-terminal", id.0), Box::new(CloseTerminal(id)))

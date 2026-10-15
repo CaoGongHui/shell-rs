@@ -154,10 +154,7 @@ async fn authentication_prompt_is_masked_and_drives_connected_state(cx: &mut Tes
     cx.update_window(handle.into(), |_, window, cx| {
         window.render_frame(cx);
         assert_eq!(
-            window
-                .within(("terminal-tab", 1u64))
-                .find("connection-status")
-                .label(),
+            mark_state(window, ("terminal-tab-os", 1u64)).as_deref(),
             Some("连接中")
         );
         let password = window.find(("ssh-auth-answer", 0usize));
@@ -174,10 +171,7 @@ async fn authentication_prompt_is_masked_and_drives_connected_state(cx: &mut Tes
     cx.wait_for(handle.into(), Duration::from_secs(2), |window, cx| {
         window.render_frame(cx);
         window.find("status-connection").label() == Some("已连接 prompt-host")
-            && window
-                .within(("terminal-tab", 1u64))
-                .try_find("connection-status")
-                .is_none()
+            && mark_state(window, ("terminal-tab-os", 1u64)).is_none()
     })
     .await;
 
@@ -270,11 +264,7 @@ async fn canceling_unknown_host_prompt_keeps_host_disconnected(cx: &mut TestAppC
     cx.wait_for(handle.into(), Duration::from_secs(2), |window, cx| {
         window.render_frame(cx);
         window.find("status-connection").label() == Some("未连接 prompt-host")
-            && window
-                .within(("terminal-tab", 1u64))
-                .find("connection-status")
-                .label()
-                == Some("未连接")
+            && mark_state(window, ("terminal-tab-os", 1u64)).as_deref() == Some("未连接")
             && factory.canceled.load(Ordering::SeqCst) == 1
     })
     .await;
@@ -510,14 +500,9 @@ async fn disconnecting_one_tab_leaves_the_other_tabs_of_its_host(cx: &mut TestAp
 
     cx.update_window(handle.into(), |_, window, cx| {
         window.render_frame(cx);
-        // Connected tabs carry no dot.
+        // Connected tabs show their mark in colour.
         for id in [INITIAL_WEB_TERMINAL, second.0] {
-            assert!(
-                window
-                    .within(("terminal-tab", id))
-                    .try_find("connection-status")
-                    .is_none()
-            );
+            assert_eq!(mark_state(window, ("terminal-tab-os", id)), None);
         }
         window.dispatch_action(Box::new(DisconnectTerminal(second)), cx);
     })
@@ -548,23 +533,16 @@ async fn disconnecting_one_tab_leaves_the_other_tabs_of_its_host(cx: &mut TestAp
 
     cx.update_window(handle.into(), |_, window, cx| {
         window.render_frame(cx);
-        assert!(
-            window
-                .within(("terminal-tab", INITIAL_WEB_TERMINAL))
-                .try_find("connection-status")
-                .is_none()
+        assert!(mark_state(window, ("terminal-tab-os", INITIAL_WEB_TERMINAL)).is_none());
+        // The disconnected tab's mark goes grey and says why, where it was.
+        assert_eq!(
+            window.find(("terminal-tab-os", second.0)).label(),
+            Some("未探测到系统 · 未连接")
         );
-        let tab = window.within(("terminal-tab", second.0));
-        assert_eq!(tab.find("connection-status").label(), Some("未连接"));
-        let mark = tab.find(("terminal-tab-os", second.0)).bounds();
-        let dot = tab.find("connection-status").bounds();
+        let mark = window.find(("terminal-tab-os", second.0)).bounds();
         let title = window.find(("terminal-tab", second.0)).bounds();
         let close = window.find(("close-terminal", second.0)).bounds();
         assert_eq!(mark.center().y, close.center().y);
-        let centers = dot.center() - mark.center();
-        let distance = (f32::from(centers.x).powi(2) + f32::from(centers.y).powi(2)).sqrt();
-        assert!(distance > f32::from(mark.size.width + dot.size.width) / 2.);
-        assert!(dot.right() < close.left());
         assert_eq!(mark.center().y, title.center().y);
         window.click(("terminal", second.0), cx);
         window.press("enter", cx);
@@ -573,10 +551,7 @@ async fn disconnecting_one_tab_leaves_the_other_tabs_of_its_host(cx: &mut TestAp
     cx.wait_for(handle.into(), Duration::from_secs(2), |window, cx| {
         window.render_frame(cx);
         remote_lifecycle(&workspace, second, cx) == TerminalLifecycle::Running
-            && window
-                .within(("terminal-tab", second.0))
-                .try_find("connection-status")
-                .is_none()
+            && mark_state(window, ("terminal-tab-os", second.0)).is_none()
     })
     .await;
 }
@@ -595,11 +570,7 @@ async fn failed_connection_tab_reports_disconnected_then_recovers(cx: &mut TestA
         matches!(
             remote_lifecycle(&workspace, terminal_id, cx),
             TerminalLifecycle::Failed(_)
-        ) && window
-            .within(("terminal-tab", terminal_id.0))
-            .find("connection-status")
-            .label()
-            == Some("未连接")
+        ) && mark_state(window, ("terminal-tab-os", terminal_id.0)).as_deref() == Some("未连接")
     })
     .await;
     in_frame(cx, handle, |window, cx| {
@@ -608,10 +579,7 @@ async fn failed_connection_tab_reports_disconnected_then_recovers(cx: &mut TestA
     cx.wait_for(handle.into(), Duration::from_secs(2), |window, cx| {
         window.render_frame(cx);
         remote_lifecycle(&workspace, terminal_id, cx) == TerminalLifecycle::Running
-            && window
-                .within(("terminal-tab", terminal_id.0))
-                .try_find("connection-status")
-                .is_none()
+            && mark_state(window, ("terminal-tab-os", terminal_id.0)).is_none()
     })
     .await;
 }
@@ -675,12 +643,7 @@ async fn a_windows_host_updates_the_tree_tab_and_recent_marks(cx: &mut TestAppCo
     });
     cx.update_window(handle.into(), |_, window, cx| {
         window.render_frame(cx);
-        assert!(
-            window
-                .within(("terminal-tab", terminal))
-                .try_find("connection-status")
-                .is_none()
-        );
+        assert_eq!(mark_state(window, ("terminal-tab-os", terminal)), None);
         window.click(("close-terminal", terminal), cx);
     })
     .unwrap();
@@ -1251,7 +1214,8 @@ async fn enter_retries_canceled_authentication_in_the_same_tab(cx: &mut TestAppC
 }
 
 /// Exercise the production title in the same TabBar used by the dock, with
-/// and without its badge. Geometry must be invariant under state/selection.
+/// and without a connection state. Geometry must be invariant under
+/// state/selection.
 struct TabStatusLayout {
     state: ConnectionState,
     selected: usize,
@@ -1271,31 +1235,41 @@ impl gpui_kit::Render for TabStatusLayout {
         use gpui_kit::{InteractiveElement as _, ParentElement as _};
         use shellrs::shared::{ClosableTabTitle, HostMark};
         window.set_rem_size(px(self.rem));
-        let title = |id| {
-            ClosableTabTitle::new(
-                ("layout-title", id),
-                HostMark::new(("layout-mark", id), "host", Some(HostOs::Ubuntu)).small(),
+        let title = |id, state: Option<ConnectionState>| {
+            let mark = HostMark::new(
+                ("layout-mark", id),
                 "host",
-            )
-            .closable(("layout-close", id), Box::new(shellrs::app::CloseActiveTab))
+                "10.0.0.1",
+                Some(HostOs::Ubuntu),
+            );
+            let mark = match state {
+                Some(state) => mark.connection_state(state),
+                None => mark,
+            };
+            let title = ClosableTabTitle::new(("layout-title", id), mark.small(), "host")
+                .closable(("layout-close", id), Box::new(shellrs::app::CloseActiveTab));
+            match state {
+                Some(state) => title.connection_state(state),
+                None => title,
+            }
         };
         TabBar::new("layout-tabs")
             .selected_index(self.selected)
             .child(
                 Tab::new()
                     .debug_selector(|| "plain-tab".into())
-                    .child(title(0u64)),
+                    .child(title(0u64, None)),
             )
             .child(
                 Tab::new()
                     .debug_selector(|| "status-tab".into())
-                    .child(title(1u64).connection_state(self.state)),
+                    .child(title(1u64, Some(self.state))),
             )
     }
 }
 
 #[gpui_kit::test]
-fn connection_badge_preserves_icon_alignment_and_fits_the_tab(cx: &mut TestAppContext) {
+fn a_tabs_connection_state_keeps_its_mark_and_label_in_place(cx: &mut TestAppContext) {
     init_app(cx);
     let (view, cx) = cx.add_window_view(|_, _| TabStatusLayout {
         state: ConnectionState::Connected,
@@ -1325,39 +1299,24 @@ fn connection_badge_preserves_icon_alignment_and_fits_the_tab(cx: &mut TestAppCo
                     let plain_mark = window.find(("layout-mark", 0u64)).bounds();
                     let mark = window.find(("layout-mark", 1u64)).bounds();
                     let close = window.find(("layout-close", 1u64)).bounds();
-                    assert_eq!(title.size, plain.size, "badge must not affect title layout");
-                    assert_eq!(mark.size, plain_mark.size, "badge must not shrink the icon");
+                    assert_eq!(title.size, plain.size, "state must not affect title layout");
+                    assert_eq!(mark.size, plain_mark.size, "state must not shrink the icon");
                     assert_eq!(
                         mark.center() - title.origin,
                         plain_mark.center() - plain.origin
                     );
                     assert_eq!(mark.center().y, close.center().y);
                     assert_eq!(mark.center().y, title.center().y);
-                    // A connection that is up is the normal state: no dot.
-                    let dot = window
-                        .within(("layout-title", 1u64))
-                        .try_find("connection-status");
-                    assert_eq!(dot.is_none(), state == ConnectionState::Connected);
-                    let Some(dot) = dot else {
-                        return;
+                    assert!(
+                        mark.bottom() <= clipped_tab.bottom(),
+                        "mark must fit the tab"
+                    );
+                    // A connection that is up is the normal state, in colour.
+                    let expected = match state {
+                        ConnectionState::Connected => None,
+                        _ => Some(state.label().to_string()),
                     };
-                    let dot = dot.bounds();
-                    let centers = dot.center() - mark.center();
-                    let distance =
-                        (f32::from(centers.x).powi(2) + f32::from(centers.y).powi(2)).sqrt();
-                    assert!(
-                        distance > f32::from(mark.size.width + dot.size.width) / 2.,
-                        "circles must not overlap"
-                    );
-                    assert!(
-                        dot.bottom() <= clipped_tab.bottom() - px(1.),
-                        "badge must fit the dock tab"
-                    );
-                    assert!(
-                        dot.right() < mark.right() + px(rem / 4.),
-                        "badge must stop before the label"
-                    );
-                    assert!(dot.right() < close.left());
+                    assert_eq!(mark_state(window, ("layout-mark", 1u64)), expected);
                 });
             }
         }

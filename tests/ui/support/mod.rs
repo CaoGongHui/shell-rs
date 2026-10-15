@@ -199,6 +199,14 @@ pub fn enabled(button: &gpui_kit::test::ElementSnapshot) -> bool {
     button.focused().is_some()
 }
 
+/// What a tab's host mark says of the tab's own connection: `None` while it
+/// is up and the mark is in colour, else the state its grey mark names after
+/// the system (`未连接`, `连接中`).
+pub fn mark_state(window: &gpui_kit::Window, mark: impl Into<ElementId>) -> Option<String> {
+    let label = window.find(mark).label()?.to_string();
+    label.split_once(" · ").map(|(_, state)| state.to_string())
+}
+
 /// Draw a frame, run `body` against it, and let what it started settle.
 pub fn in_frame<R>(
     cx: &mut TestAppContext,

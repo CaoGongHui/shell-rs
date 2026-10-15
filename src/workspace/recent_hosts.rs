@@ -47,6 +47,8 @@ struct RecentRow {
     connected: bool,
     os: Option<HostOs>,
     serial: bool,
+    /// The host's own address, which colours a mark without a brand.
+    host_address: SharedString,
 }
 
 impl RecentHosts {
@@ -86,6 +88,7 @@ impl RecentHosts {
                 connected: host.state.is_connected(),
                 os: host.os,
                 serial: host.is_serial(),
+                host_address: host.address.clone(),
             })
             .collect()
     }
@@ -200,8 +203,13 @@ impl RecentHosts {
                 h_flex()
                     .gap_3()
                     .child(
-                        HostMark::new(("recent-host-os", id.0), row.name.clone(), row.os)
-                            .serial(row.serial),
+                        HostMark::new(
+                            ("recent-host-os", id.0),
+                            row.name.clone(),
+                            row.host_address.clone(),
+                            row.os,
+                        )
+                        .serial(row.serial),
                     )
                     .child(
                         v_flex()

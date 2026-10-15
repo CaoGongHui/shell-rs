@@ -1020,13 +1020,17 @@ impl Panel for ExplorerPanel {
         let name = host
             .map(|s| s.name.clone())
             .unwrap_or_else(|| "SFTP".into());
+        let address = host.map(|s| s.address.clone()).unwrap_or_default();
         let os = host.and_then(|s| s.os);
         let id = self.id;
         let menu = self.tab_menu(cx);
+        let state = self.connection_state();
         // The host's mark, as on the host's terminal tabs.
-        let mark = HostMark::new(("explorer-tab-os", id.0), name, os).small();
+        let mark = HostMark::new(("explorer-tab-os", id.0), name, address, os)
+            .connection_state(state)
+            .small();
         ClosableTabTitle::new(("explorer-tab", id.0), mark, self.tab_title(cx))
-            .connection_state(self.connection_state())
+            .connection_state(state)
             .closable(("close-explorer", id.0), Box::new(CloseExplorer(id)))
             .context_menu(move |popup, _, cx| menu.build(popup, cx))
     }

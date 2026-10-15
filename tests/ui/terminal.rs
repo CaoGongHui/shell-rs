@@ -76,12 +76,6 @@ async fn creates_independent_local_terminals_from_button_and_shortcut(cx: &mut T
         window.render_frame(cx);
         assert!(window.find(("local-terminal", 1_u64)).visible());
         assert_eq!(window.find(("local-terminal", 1_u64)).focused(), Some(true));
-        assert!(
-            window
-                .within(("local-terminal-tab", 1_u64))
-                .try_find("connection-status")
-                .is_none()
-        );
         #[cfg(target_os = "macos")]
         window.press("cmd-t", cx);
         #[cfg(not(target_os = "macos"))]
