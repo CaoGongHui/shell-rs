@@ -29,6 +29,11 @@ pub(super) fn remote(command: &str) -> String {
     format!("sh -c 'printf \"%b\" \"{encoded}\" | sh'")
 }
 
+/// sshd hands a command to the login shell as one argument, which Linux caps
+/// at 128 KiB (MAX_ARG_STRLEN). `remote` sends every byte of the script as
+/// five (`\0NNN`), so a write carries about 25 KB of JSON.
+pub(super) const COMMAND_LIMIT: usize = 127 * 1024;
+
 /// The executable precedes the payload, so request-timeout insertion cannot
 /// modify a ConfigMap value which happens to contain the word "kubectl".
 pub(super) fn remote_stdin(command: &str, value: &serde_json::Value) -> String {

@@ -168,7 +168,7 @@ mod tests {
             settings.language = InterfaceLanguage::English;
             settings
                 .sidebar_tools
-                .set(crate::app::ToolKind::Kubernetes, false);
+                .set(crate::app::ToolKind::Kubernetes, true);
         });
         assert!(matches!(written, Some(Ok(()))));
 
@@ -177,7 +177,7 @@ mod tests {
         assert_eq!(reloaded.settings().appearance, Appearance::Dark);
         assert_eq!(reloaded.settings().language, InterfaceLanguage::English);
         assert!(
-            !reloaded
+            reloaded
                 .settings()
                 .sidebar_tools
                 .shows(crate::app::ToolKind::Kubernetes)
@@ -185,11 +185,11 @@ mod tests {
     }
 
     #[test]
-    fn old_settings_files_keep_kubernetes_enabled() {
+    fn kubernetes_is_hidden_until_turned_on() {
         for json in [r#"{}"#, r#"{"sidebar_tools":{}}"#] {
             let settings: AppSettings = serde_json::from_str(json).unwrap();
             assert!(
-                settings
+                !settings
                     .sidebar_tools
                     .shows(crate::app::ToolKind::Kubernetes)
             );

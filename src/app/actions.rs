@@ -466,9 +466,10 @@ impl ToolKind {
     }
 
     /// Whether the sidebar offers the tool until the user says otherwise.
-    /// Not GPU/NPU: most hosts have neither.
+    /// Not GPU/NPU or Kubernetes: most hosts have neither accelerators nor
+    /// kubectl.
     pub fn shown_by_default(self) -> bool {
-        !matches!(self, ToolKind::Gpu)
+        !matches!(self, ToolKind::Gpu | ToolKind::Kubernetes)
     }
 
     pub fn label(self) -> SharedString {

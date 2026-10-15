@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -25,6 +26,7 @@ use super::{
 };
 use crate::app::{CatalogIcon, KubernetesAction};
 use crate::i18n::{UiLocale, t};
+use crate::shared::confirm_danger;
 use crate::terminal::{ExecTarget, exec_answer};
 
 /// Retains a single terminal's scoped browser. A change of SSH target
@@ -42,6 +44,10 @@ pub struct KubernetesPanel {
     resource_kind: ResourceKind,
     rows: Rc<Vec<Resource>>,
     selected: Option<String>,
+    /// The row right-clicked last, for the list's menu. The menu hangs off
+    /// the list's box, not the rows: a context menu on a `uniform_list` row
+    /// takes focus during layout and trips GPUI's focus assertion.
+    menu_hit: Rc<RefCell<Option<(ResourceKind, String, String)>>>,
     context_select: Entity<SelectState<SearchableVec<SharedString>>>,
     namespace_select: Entity<SelectState<SearchableVec<SharedString>>>,
     kind_select: Entity<SelectState<Vec<SharedString>>>,
@@ -51,7 +57,6 @@ pub struct KubernetesPanel {
     problem: Option<String>,
     generation: u64,
     task: Option<Task<()>>,
-    poll_task: Option<Task<()>>,
     details: Option<WeakEntity<KubernetesDetails>>,
     scroll: UniformListScrollHandle,
     dispatch: FocusHandle,
@@ -172,6 +177,7 @@ impl KubernetesPanel {
             resource_kind: ResourceKind::Pod,
             rows: Rc::new(Vec::new()),
             selected: None,
+            menu_hit: Rc::new(RefCell::new(None)),
             context_select,
             namespace_select,
             kind_select,
@@ -181,7 +187,6 @@ impl KubernetesPanel {
             problem: None,
             generation: 0,
             task: None,
-            poll_task: None,
             details: None,
             scroll: UniformListScrollHandle::new(),
             dispatch,
@@ -217,38 +222,9 @@ impl KubernetesPanel {
         }
         self.target = target;
         self.active = active;
-        self.poll_task = None;
+        // The list reads when shown, on a change of scope, after a change
+        // made here and on 刷新; it never refreshes itself (as Docker).
         self.read(true, cx);
-        if self.active && self.target.is_some() {
-            self.poll_task = Some(cx.spawn(async move |this, cx| {
-                loop {
-                    cx.background_executor()
-                        .timer(Duration::from_secs(30))
-                        .await;
-                    if this
-                        .update(cx, |this, cx| {
-                            // Local search never issues queries. Poll only visible, idle
-                            // lists, and leave errors for an explicit user retry.
-                            if !this.loading
-                                && this.problem.is_none()
-                                && this.rows.len() <= 1000
-                                && this
-                                    .details
-                                    .as_ref()
-                                    .and_then(WeakEntity::upgrade)
-                                    .is_none()
-                            {
-                                this.read(false, cx);
-                                cx.notify();
-                            }
-                        })
-                        .is_err()
-                    {
-                        return;
-                    }
-                }
-            }));
-        }
         cx.notify();
     }
 
@@ -353,7 +329,7 @@ impl KubernetesPanel {
                     let dispatch = self.dispatch.clone();
                     let focus = self.focus.clone();
                     window.open_dialog(cx, move |dialog, window, _| {
-                        let dispatch = dispatch.clone();
+                        let (dispatch, escape) = (dispatch.clone(), dispatch.clone());
                         let focus = focus.clone();
                         dialog
                             .title(
@@ -388,22 +364,59 @@ impl KubernetesPanel {
                                 .min(window.viewport_size().width * 0.94))
                             .max_h(window.viewport_size().height * 0.9)
                             .close_button(false)
-                            .overlay_closable(true)
+                            .overlay_closable(false)
+                            // Esc: with the YAML changed, ask before closing.
+                            .on_cancel({
+                                let view = view.clone();
+                                move |_, window, cx| {
+                                    if view.read(cx).unsaved_edit(cx).is_none() {
+                                        return true;
+                                    }
+                                    defer_dispatch(
+                                        &escape,
+                                        &KubernetesAction(KubernetesCommand::CloseDetails),
+                                        window,
+                                        cx,
+                                    );
+                                    false
+                                }
+                            })
                             .on_close(move |_, window, cx| focus.focus(window, cx))
                             .child(view.clone())
                     });
                 }
             }
-            KubernetesCommand::CloseDetails => {
-                if self
-                    .details
-                    .take()
-                    .and_then(|details| details.upgrade())
-                    .is_some()
+            // Only the details dialog sends these, from on top: the
+            // question's 放弃修改 waits until the question has closed.
+            KubernetesCommand::CloseDetails | KubernetesCommand::DiscardDetails => {
+                if matches!(command, KubernetesCommand::CloseDetails)
+                    && let Some(name) = self
+                        .details
+                        .as_ref()
+                        .and_then(WeakEntity::upgrade)
+                        .and_then(|details| details.read(cx).unsaved_edit(cx))
                 {
-                    window.close_dialog(cx);
-                    self.focus.focus(window, cx);
+                    let handle = self.dispatch.clone();
+                    confirm_danger(
+                        t!("k8s.discard_title", name = name),
+                        Some(t!("k8s.discard_description")),
+                        t!("k8s.discard"),
+                        Rc::new(move |window, cx| {
+                            defer_dispatch(
+                                &handle,
+                                &KubernetesAction(KubernetesCommand::DiscardDetails),
+                                window,
+                                cx,
+                            )
+                        }),
+                        window,
+                        cx,
+                    );
+                    return;
                 }
+                self.details = None;
+                window.close_dialog(cx);
+                self.focus.focus(window, cx);
             }
             command => {
                 if let Some(details) = self.details.as_ref().and_then(WeakEntity::upgrade) {
@@ -712,6 +725,12 @@ impl Render for KubernetesPanel {
         let dispatch = self.dispatch.clone();
         let selected = self.selected.clone();
         let sections = self.dispatch.clone();
+        let (hit, clear_hit, menu_hit, menu_handle) = (
+            self.menu_hit.clone(),
+            self.menu_hit.clone(),
+            self.menu_hit.clone(),
+            self.dispatch.clone(),
+        );
         let count = t!(
             "k8s.count",
             count = visible.len(),
@@ -811,6 +830,7 @@ impl Render for KubernetesPanel {
             )
             .child(
                 div()
+                    .id("k8s-list")
                     .flex_1()
                     .min_h_0()
                     .map(|body| {
@@ -850,7 +870,7 @@ impl Render for KubernetesPanel {
                                                     format!("{} · {}", resource.namespace, resource.summary)
                                                 };
                                                 let menu_resource = (resource.kind, resource.namespace.clone(), resource.name.clone());
-                                                let menu_handle = dispatch.clone();
+                                                let hit = hit.clone();
                                                 let more_resource = menu_resource.clone();
                                                 let more_handle = dispatch.clone();
                                                 let (status, tone) = resource.status.clone()
@@ -892,7 +912,9 @@ impl Render for KubernetesPanel {
                                                         .child(Button::new(SharedString::from(format!("{key}:more"))).ghost().small().icon(IconName::Ellipsis)
                                                             .tooltip(t!("k8s.resource_actions")).accessibility_label(t!("k8s.resource_actions"))
                                                             .dropdown_menu(move |menu, _, _| resource_menu(menu, more_resource.0, &more_resource.1, &more_resource.2, &more_handle))))
-                                                    .context_menu(move |menu, _, _| resource_menu(menu, menu_resource.0, &menu_resource.1, &menu_resource.2, &menu_handle))
+                                                    .on_mouse_down(MouseButton::Right, move |_, _, _| {
+                                                        hit.replace(Some(menu_resource.clone()));
+                                                    })
                                             })
                                             .collect::<Vec<_>>()
                                     },
@@ -902,7 +924,18 @@ impl Render for KubernetesPanel {
                             )
                         }
                     })
-                    .vertical_scrollbar(&self.scroll),
+                    .vertical_scrollbar(&self.scroll)
+                    .capture_any_mouse_down(move |event, _, _| {
+                        if matches!(event.button, MouseButton::Left | MouseButton::Right) {
+                            clear_hit.replace(None);
+                        }
+                    })
+                    .context_menu(move |menu, _, _| match menu_hit.borrow().as_ref() {
+                        Some((kind, namespace, name)) => {
+                            resource_menu(menu, *kind, namespace, name, &menu_handle)
+                        }
+                        None => menu,
+                    }),
             )
     }
 }

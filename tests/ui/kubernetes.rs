@@ -7,6 +7,29 @@ use shellrs::{
 
 use crate::support::*;
 
+/// A workspace with Kubernetes turned on in 侧栏功能, where it is off by
+/// default.
+fn open_workspace_with_kubernetes(
+    cx: &mut TestAppContext,
+    store: HostStore,
+    factory: Arc<dyn TerminalTransportFactory>,
+) -> (WindowHandle<Root>, Entity<Workspace>) {
+    let (handle, workspace) = open_workspace_with_remote_factory(cx, store, factory);
+    workspace.update(cx, |workspace, cx| {
+        workspace.settings().update(cx, |settings, cx| {
+            settings.update(
+                |settings| {
+                    settings
+                        .sidebar_tools
+                        .set(shellrs::app::ToolKind::Kubernetes, true)
+                },
+                cx,
+            )
+        });
+    });
+    (handle, workspace)
+}
+
 const SELECT_ALL: &str = if cfg!(target_os = "macos") {
     "cmd-a"
 } else {
@@ -49,7 +72,7 @@ async fn open_mutation_resource(
     operation: Option<ResourceOperation>,
 ) -> (WindowHandle<Root>, Arc<PendingFactory>) {
     let factory = Arc::new(PendingFactory::default());
-    let (handle, _) = open_workspace_with_remote_factory(cx, HostStore::seed(), factory.clone());
+    let (handle, _) = open_workspace_with_kubernetes(cx, HostStore::seed(), factory.clone());
     in_frame(cx, handle, |window, cx| {
         window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx)
     });
@@ -132,6 +155,43 @@ fn type_yaml(cx: &mut TestAppContext, handle: WindowHandle<Root>, text: &str) {
         window.click("k8s-detail-yaml", cx);
         window.press(SELECT_ALL, cx);
         window.input(text, cx);
+    });
+}
+
+#[gpui_kit::test]
+async fn kubernetes_closing_details_asks_before_dropping_changed_yaml(cx: &mut TestAppContext) {
+    let (handle, _factory) =
+        open_mutation_resource(cx, ResourceKind::ConfigMap, Some(ResourceOperation::Edit)).await;
+    cx.wait_for(handle.into(), Duration::from_secs(5), |window, _| {
+        window.try_find("k8s-save-yaml").is_some()
+    })
+    .await;
+    let mut draft = mutation_resource(ResourceKind::ConfigMap);
+    draft["data"]["greeting"] = serde_json::json!("new");
+    type_yaml(cx, handle, &serde_yaml_ng::to_string(&draft).unwrap());
+
+    in_frame(cx, handle, |window, cx| {
+        window.click("k8s-detail-close", cx)
+    });
+    wait_for_confirmation(cx, handle).await;
+    in_frame(cx, handle, |window, cx| window.click("cancel", cx));
+    in_frame(cx, handle, |window, _| {
+        assert!(
+            window.try_find("k8s-save-yaml").is_some(),
+            "keeping the changes keeps the details open"
+        )
+    });
+
+    in_frame(cx, handle, |window, cx| {
+        window.click("k8s-detail-yaml", cx);
+        window.press("escape", cx);
+    });
+    wait_for_confirmation(cx, handle).await;
+    in_frame(cx, handle, |window, cx| window.click("ok", cx));
+    cx.run_until_parked();
+    in_frame(cx, handle, |window, _| {
+        assert!(window.try_find("k8s-detail-yaml").is_none());
+        assert!(window.try_find("ok").is_none());
     });
 }
 
@@ -490,7 +550,7 @@ async fn kubernetes_unused_or_failed_does_not_interrupt_terminal_input(cx: &mut 
         "kubectl: command not found\n__SHELLRS_K8S_EXIT__:127\n",
     ]));
     let (handle, workspace) =
-        open_workspace_with_remote_factory(cx, HostStore::seed(), factory.clone());
+        open_workspace_with_kubernetes(cx, HostStore::seed(), factory.clone());
     in_frame(cx, handle, |window, cx| {
         window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx);
     });
@@ -633,7 +693,7 @@ async fn kubernetes_details_show_key_properties_and_keep_yaml_in_its_own_tab(
 #[gpui_kit::test]
 async fn kubernetes_relation_query_is_canceled_when_details_close(cx: &mut TestAppContext) {
     let factory = Arc::new(PendingFactory::default());
-    let (handle, _) = open_workspace_with_remote_factory(cx, HostStore::seed(), factory.clone());
+    let (handle, _) = open_workspace_with_kubernetes(cx, HostStore::seed(), factory.clone());
     in_frame(cx, handle, |window, cx| {
         window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx)
     });
@@ -752,7 +812,7 @@ async fn kubernetes_graph_container_opens_container_details_and_returns_to_pod(
     cx: &mut TestAppContext,
 ) {
     let factory = Arc::new(PendingFactory::default());
-    let (handle, _) = open_workspace_with_remote_factory(cx, HostStore::seed(), factory.clone());
+    let (handle, _) = open_workspace_with_kubernetes(cx, HostStore::seed(), factory.clone());
     in_frame(cx, handle, |window, cx| {
         window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx)
     });
@@ -888,7 +948,7 @@ fn open_kubernetes(
     cx: &mut TestAppContext,
     factory: Arc<FakeTerminalFactory>,
 ) -> WindowHandle<Root> {
-    let (handle, _) = open_workspace_with_remote_factory(cx, HostStore::seed(), factory);
+    let (handle, _) = open_workspace_with_kubernetes(cx, HostStore::seed(), factory);
     in_frame(cx, handle, |window, cx| {
         window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx)
     });
@@ -1044,7 +1104,7 @@ async fn kubernetes_node_metrics_are_on_demand_serial_and_stop_on_tab_change(
     cx: &mut TestAppContext,
 ) {
     let factory = Arc::new(PendingFactory::default());
-    let (handle, _) = open_workspace_with_remote_factory(cx, HostStore::seed(), factory.clone());
+    let (handle, _) = open_workspace_with_kubernetes(cx, HostStore::seed(), factory.clone());
     in_frame(cx, handle, |window, cx| {
         window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx)
     });
@@ -1251,7 +1311,7 @@ async fn kubernetes_sidebar_setting_hides_stops_and_reopens_the_tool(cx: &mut Te
         CONTEXTS, NAMESPACES, PODS, CONTEXTS, NAMESPACES, PODS, POD_DETAIL, LOGS, LOGS,
     ]));
     let (handle, workspace) =
-        open_workspace_with_remote_factory(cx, HostStore::seed(), factory.clone());
+        open_workspace_with_kubernetes(cx, HostStore::seed(), factory.clone());
     // Match the settings sidebar's integration fixture so its virtualized
     // category and both tool rows are rendered together.
     cx.simulate_window_resize(handle.into(), size(px(1280.), px(1400.)));
@@ -1567,7 +1627,7 @@ async fn kubernetes_details_close_button_works_if_focus_returns_to_terminal(
     let factory = Arc::new(FakeTerminalFactory::answering(&[
         CONTEXTS, NAMESPACES, PODS, POD_DETAIL,
     ]));
-    let (handle, workspace) = open_workspace_with_remote_factory(cx, HostStore::seed(), factory);
+    let (handle, workspace) = open_workspace_with_kubernetes(cx, HostStore::seed(), factory);
     in_frame(cx, handle, |window, cx| {
         window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx)
     });
@@ -1685,7 +1745,7 @@ async fn reply(
 #[gpui_kit::test]
 async fn kubernetes_live_logs_are_serial_cancelable_and_copyable(cx: &mut TestAppContext) {
     let factory = Arc::new(PendingFactory::default());
-    let (handle, _) = open_workspace_with_remote_factory(cx, HostStore::seed(), factory.clone());
+    let (handle, _) = open_workspace_with_kubernetes(cx, HostStore::seed(), factory.clone());
     in_frame(cx, handle, |window, cx| {
         window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx)
     });
@@ -1814,9 +1874,10 @@ async fn kubernetes_live_logs_are_serial_cancelable_and_copyable(cx: &mut TestAp
     let queries = factory.commands.lock().unwrap().len();
     cx.executor().advance_clock(Duration::from_secs(60));
     cx.run_until_parked();
-    assert_eq!(factory.commands.lock().unwrap().len(), queries + 1);
-    assert!(
-        script(factory.commands.lock().unwrap().last().unwrap()).contains("/api/v1/pods?limit=100")
+    assert_eq!(
+        factory.commands.lock().unwrap().len(),
+        queries,
+        "the list doesn't refresh itself"
     );
     in_frame(cx, handle, |window, _| {
         assert!(window.try_find("k8s-details").is_none())
@@ -1856,9 +1917,9 @@ async fn kubernetes_log_buffer_bounds_and_virtualizes_large_results(cx: &mut Tes
 }
 
 #[gpui_kit::test]
-async fn kubernetes_details_close_while_loading_and_on_backdrop(cx: &mut TestAppContext) {
+async fn kubernetes_details_close_while_loading_but_not_on_backdrop(cx: &mut TestAppContext) {
     let factory = Arc::new(PendingFactory::default());
-    let (handle, _) = open_workspace_with_remote_factory(cx, HostStore::seed(), factory.clone());
+    let (handle, _) = open_workspace_with_kubernetes(cx, HostStore::seed(), factory.clone());
     in_frame(cx, handle, |window, cx| {
         window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx)
     });
@@ -1897,6 +1958,13 @@ async fn kubernetes_details_close_while_loading_and_on_backdrop(cx: &mut TestApp
             cx,
         );
     });
+    in_frame(cx, handle, |window, cx| {
+        assert!(
+            window.find("k8s-details").visible(),
+            "a click beside the details doesn't close them"
+        );
+        window.click("k8s-detail-close", cx);
+    });
     in_frame(cx, handle, |window, _| {
         assert!(window.try_find("k8s-details").is_none());
     });
@@ -1907,7 +1975,7 @@ async fn kubernetes_finishes_namespace_discovery_when_resource_type_changes(
     cx: &mut TestAppContext,
 ) {
     let factory = Arc::new(PendingFactory::default());
-    let (handle, _) = open_workspace_with_remote_factory(cx, HostStore::seed(), factory.clone());
+    let (handle, _) = open_workspace_with_kubernetes(cx, HostStore::seed(), factory.clone());
     in_frame(cx, handle, |window, cx| {
         window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx)
     });
@@ -1945,7 +2013,7 @@ async fn kubernetes_rejects_old_scope_replies_and_explicitly_switches_context(
     cx: &mut TestAppContext,
 ) {
     let factory = Arc::new(PendingFactory::default());
-    let (handle, _) = open_workspace_with_remote_factory(cx, HostStore::seed(), factory.clone());
+    let (handle, _) = open_workspace_with_kubernetes(cx, HostStore::seed(), factory.clone());
     in_frame(cx, handle, |window, cx| {
         window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx)
     });
@@ -2007,7 +2075,7 @@ async fn kubernetes_large_lists_retry_smaller_pages_and_show_first_page_early(
     cx: &mut TestAppContext,
 ) {
     let factory = Arc::new(PendingFactory::default());
-    let (handle, _) = open_workspace_with_remote_factory(cx, HostStore::seed(), factory.clone());
+    let (handle, _) = open_workspace_with_kubernetes(cx, HostStore::seed(), factory.clone());
     in_frame(cx, handle, |window, cx| {
         window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx)
     });

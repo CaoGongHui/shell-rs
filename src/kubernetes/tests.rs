@@ -165,6 +165,27 @@ fn writes_quote_scope_preserve_payload_and_delete_with_uid_and_version_precondit
 }
 
 #[test]
+fn saves_too_long_for_one_shell_argument_are_refused() {
+    use super::mutation;
+    let mut resource = pod();
+    resource.name = "api-0".into();
+    resource.kind = ResourceKind::ConfigMap;
+    let original = json!({"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"api-0","namespace":"production","uid":"uid-1","resourceVersion":"12"}});
+    let with = |size: usize| {
+        let mut value = original.clone();
+        value["data"] = json!({"text": "x".repeat(size)});
+        value
+    };
+    let fits = mutation::replace("prod", &resource, &original, &with(20_000)).unwrap();
+    assert!(fits.len() <= super::commands::COMMAND_LIMIT);
+    assert_eq!(
+        mutation::replace("prod", &resource, &original, &with(30_000)),
+        Err(crate::i18n::t!("k8s.edit_too_large").to_string()),
+        "Linux takes at most 128 KiB in the login shell's one argument"
+    );
+}
+
+#[test]
 fn restart_is_scoped_guarded_and_only_offered_for_actual_workloads() {
     use super::mutation;
     let mut resource = pod();

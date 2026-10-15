@@ -82,6 +82,15 @@ k8s.yaml_invalid:
 k8s.edit_unchanged:
   zh-CN: 配置没有变化。
   en: The configuration has not changed.
+k8s.discard_title:
+  zh-CN: "放弃对 %{name} 的修改？"
+  en: "Discard changes to %{name}?"
+k8s.discard_description:
+  zh-CN: YAML 还没保存，关闭详情后这些修改会丢失。
+  en: The YAML isn’t saved. Closing the details loses these changes.
+k8s.discard:
+  zh-CN: 放弃修改
+  en: Discard changes
 k8s.edit_changed:
   zh-CN: 编辑内容已变化，请重新保存并确认。
   en: The draft has changed. Save and confirm it again.
@@ -89,8 +98,8 @@ k8s.confirmation_expired:
   zh-CN: 确认的目标已改变，请重新打开资源后重试。
   en: The confirmation target has changed. Reopen the resource and retry.
 k8s.edit_too_large:
-  zh-CN: 资源超过 256 KB 编辑上限，请使用终端中的 kubectl 修改。
-  en: The resource exceeds the 256 KB editing limit. Edit it with kubectl in the terminal.
+  zh-CN: 资源太大，无法经终端的连接保存（转成 JSON 后要在约 25 KB 以内），请在终端里用 kubectl 修改。
+  en: The resource is too large to save over the terminal’s connection, which takes about 25 KB of JSON. Edit it with kubectl in the terminal.
 k8s.pod_restart_unavailable:
   zh-CN: 此 Pod 没有可自动重建的工作负载控制器，或已运行结束，不能直接重启。
   en: This pod has no workload controller to recreate it, or has already finished. It cannot be restarted directly.

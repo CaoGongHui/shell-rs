@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -62,6 +63,8 @@ pub(super) struct KubernetesDetails {
     snapshot: Option<Value>,
     viewing_yaml: String,
     editing: bool,
+    /// The YAML editing started from: closing asks only when it changed.
+    edit_base: String,
     operation_busy: bool,
     operation_error: Option<String>,
     removed_operation: Option<ResourceOperation>,
@@ -79,6 +82,9 @@ pub(super) struct KubernetesDetails {
     output: String,
     log_lines: Rc<Vec<LogLine>>,
     log_scroll: UniformListScrollHandle,
+    /// The log line right-clicked last. The copy menu hangs off the list's
+    /// box: on a `uniform_list` row it would take focus during layout.
+    log_menu_hit: Rc<RefCell<Option<String>>>,
     log_measure: usize,
     live: bool,
     follow: bool,
@@ -123,6 +129,25 @@ pub(super) struct KubernetesDetails {
 }
 
 impl KubernetesDetails {
+    /// The resource as confirmations name it: “Deployment prod/api”.
+    fn scope(&self) -> String {
+        let name = if self.resource.namespace.is_empty() {
+            self.resource.name.clone()
+        } else {
+            format!("{}/{}", self.resource.namespace, self.resource.name)
+        };
+        format!("{} {name}", self.resource.kind.label())
+    }
+
+    /// The resource's name when its YAML has changes not sent yet. A save
+    /// on its way keeps the draft until it is answered, so it does not count.
+    pub(super) fn unsaved_edit(&self, cx: &App) -> Option<String> {
+        (self.editing
+            && !self.operation_busy
+            && self.details.read(cx).value().as_ref() != self.edit_base.as_str())
+        .then(|| self.scope())
+    }
+
     pub(super) fn stop_reads(&mut self, cx: &mut Context<Self>) {
         self.generation += 1;
         self.log_generation += 1;
@@ -182,7 +207,7 @@ impl KubernetesDetails {
         if !mutation::editable(self.resource.kind) {
             return;
         }
-        let resource = self.resource.clone();
+        let (resource, context) = (self.resource.clone(), self.context.clone());
         let generation = self.generation;
         self.operation_busy = true;
         self.operation_error = None;
@@ -190,12 +215,10 @@ impl KubernetesDetails {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    mutation::identity(&original, &resource)?;
-                    let yaml = mutation::yaml(&mutation::manifest(&original))?;
-                    if yaml.len() > mutation::EDIT_LIMIT {
-                        return Err(t!("k8s.edit_too_large").to_string());
-                    }
-                    Ok(yaml)
+                    let manifest = mutation::manifest(&original);
+                    // Refuse up front what could never be saved.
+                    mutation::replace(&context, &resource, &original, &manifest)?;
+                    mutation::yaml(&manifest)
                 })
                 .await;
             let _ = this.update_in(cx, |this, window, cx| {
@@ -207,6 +230,7 @@ impl KubernetesDetails {
                     Err(why) => this.operation_error = Some(why),
                     Ok(yaml) => {
                         this.editing = true;
+                        this.edit_base = yaml.clone();
                         this.tab = 4;
                         this.metrics_generation += 1;
                         this.metrics_task = None;
@@ -292,12 +316,7 @@ impl KubernetesDetails {
                     Err(why) => this.operation_error = Some(why),
                     Ok(script) => {
                         let token = uuid::Uuid::new_v4().to_string();
-                        let name = if this.resource.namespace.is_empty() {
-                            this.resource.name.clone()
-                        } else {
-                            format!("{}/{}", this.resource.namespace, this.resource.name)
-                        };
-                        let scope = format!("{} {name}", this.resource.kind.label());
+                        let scope = this.scope();
                         let (title, verb, consequence) = match operation {
                             ResourceOperation::Edit => (
                                 t!("k8s.save_title", name = scope),
@@ -580,6 +599,7 @@ impl KubernetesDetails {
             snapshot: None,
             viewing_yaml: String::new(),
             editing: false,
+            edit_base: String::new(),
             operation_busy: false,
             operation_error: None,
             removed_operation: None,
@@ -597,6 +617,7 @@ impl KubernetesDetails {
             output: String::new(),
             log_lines: Rc::new(Vec::new()),
             log_scroll: UniformListScrollHandle::new(),
+            log_menu_hit: Rc::new(RefCell::new(None)),
             log_measure: 0,
             live: false,
             follow: true,
@@ -1521,6 +1542,11 @@ impl KubernetesDetails {
         let lines = self.log_lines.clone();
         let dispatch = self.dispatch.clone();
         let measure = self.log_measure;
+        let (hit, clear_hit, menu_hit) = (
+            self.log_menu_hit.clone(),
+            self.log_menu_hit.clone(),
+            self.log_menu_hit.clone(),
+        );
         v_flex()
             .gap_3()
             .child(self.render_container(cx))
@@ -1718,16 +1744,11 @@ impl KubernetesDetails {
                                         .id(SharedString::from(format!("k8s-log-line:{ix}")))
                                         .test_support()
                                         .aria_label(line.text.clone())
-                                        .context_menu({
-                                            let handle = dispatch.clone();
+                                        .on_mouse_down(MouseButton::Right, {
+                                            let hit = hit.clone();
                                             let value = line.raw.clone();
-                                            move |menu, _, _| {
-                                                menu.action_context(handle.clone()).menu(
-                                                    t!("history.menu.copy"),
-                                                    Box::new(KubernetesAction(
-                                                        KubernetesCommand::CopyValue(value.clone()),
-                                                    )),
-                                                )
+                                            move |_, _, _| {
+                                                hit.replace(Some(value.clone()));
                                             }
                                         })
                                         .child(
@@ -1744,7 +1765,19 @@ impl KubernetesDetails {
                         .with_width_from_item(Some(measure))
                         .track_scroll(&self.log_scroll),
                     )
-                    .vertical_scrollbar(&self.log_scroll),
+                    .vertical_scrollbar(&self.log_scroll)
+                    .capture_any_mouse_down(move |event, _, _| {
+                        if matches!(event.button, MouseButton::Left | MouseButton::Right) {
+                            clear_hit.replace(None);
+                        }
+                    })
+                    .context_menu(move |menu, _, _| match menu_hit.borrow().clone() {
+                        Some(value) => menu.action_context(dispatch.clone()).menu(
+                            t!("history.menu.copy"),
+                            Box::new(KubernetesAction(KubernetesCommand::CopyValue(value))),
+                        ),
+                        None => menu,
+                    }),
             )
             .into_any_element()
     }

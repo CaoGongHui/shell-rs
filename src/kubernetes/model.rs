@@ -147,7 +147,11 @@ pub enum KubernetesCommand {
         terminal: u64,
         context: String,
     },
+    /// The details' close button and Esc: asks first if the YAML being
+    /// edited has changed.
     CloseDetails,
+    /// 放弃修改 in that question.
+    DiscardDetails,
     DetailTab(usize),
     Container(String),
     Tail(u32),

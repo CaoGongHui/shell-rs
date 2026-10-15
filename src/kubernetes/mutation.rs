@@ -184,14 +184,18 @@ pub(super) fn replace(
     edited: &Value,
 ) -> Result<String, String> {
     identity(original, resource)?;
-    Ok(commands::remote_stdin(
+    let command = commands::remote_stdin(
         &format!(
             "{} replace --raw={} -f -",
             commands::kubectl(context),
             commands::quote(&path(resource))
         ),
         edited,
-    ))
+    );
+    if command.len() > commands::COMMAND_LIMIT {
+        return Err(t!("k8s.edit_too_large").to_string());
+    }
+    Ok(command)
 }
 
 pub(super) fn delete(context: &str, resource: &Resource, value: &Value) -> Result<String, String> {
