@@ -173,6 +173,9 @@ settings.sidebar_tools.history:
 settings.sidebar_tools.files:
   zh-CN: 终端连接上的远程文件列表，可以跟随终端目录。
   en: The host’s files over the terminal’s connection, following its folder.
+settings.sidebar_tools.tmux:
+  zh-CN: 主机上的 tmux 会话：新建、连接、退出、重命名和结束。
+  en: The host’s tmux sessions, to start, attach, detach, rename and end.
 settings.sidebar_tools.docker:
   zh-CN: 容器、卷、镜像和网络。
   en: Containers, volumes, images and networks.

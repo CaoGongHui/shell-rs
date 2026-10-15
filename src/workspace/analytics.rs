@@ -125,6 +125,7 @@ impl Workspace {
             ToolKind::Connections => Counter::ToolNetstat,
             ToolKind::Monitor => Counter::ToolMonitor,
             ToolKind::Gpu => Counter::ToolGpu,
+            ToolKind::Tmux => Counter::ToolTmux,
         });
     }
 

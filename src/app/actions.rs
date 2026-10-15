@@ -75,6 +75,14 @@ gpui_kit::actions!(
         RefreshGpu,
         /// 全部展开 in GPU/NPU, or 全部收起 when every device is unfolded.
         ToggleAllGpuDevices,
+        /// Read the tmux sessions of the SSH terminal's host again.
+        RefreshTmux,
+        /// Open the dialog that names a new tmux session, then start it in
+        /// the SSH terminal in front.
+        NewTmuxSession,
+        /// Detach the SSH terminal in front from its tmux session, leaving
+        /// the session running.
+        DetachTmux,
         /// Open the new-snippet dialog, for a snippet of no category.
         NewSnippet,
         /// Open the new-category dialog of 命令片段.
@@ -270,6 +278,13 @@ id_actions! {
     /// Unfold a device of GPU/NPU to its details, or fold them away again,
     /// by its key.
     ToggleGpuDevice(String);
+    /// Attach the SSH terminal in front to a tmux session of its host, by
+    /// the session's id.
+    AttachTmuxSession(String);
+    /// Open the dialog that renames a tmux session, by its id.
+    RenameTmuxSession(String);
+    /// Ask, then end a tmux session and the programs in it, by its id.
+    KillTmuxSession(String);
     /// Sort the process list by memory or CPU, the most first; by the same
     /// again, the other way.
     SortProcesses(ProcessSort);
@@ -405,6 +420,7 @@ pub enum ToolKind {
     Snippets,
     History,
     Files,
+    Tmux,
     Docker,
     Kubernetes,
     Services,
@@ -415,10 +431,11 @@ pub enum ToolKind {
 }
 
 impl ToolKind {
-    pub const ALL: [ToolKind; 10] = [
+    pub const ALL: [ToolKind; 11] = [
         ToolKind::Snippets,
         ToolKind::History,
         ToolKind::Files,
+        ToolKind::Tmux,
         ToolKind::Docker,
         ToolKind::Kubernetes,
         ToolKind::Services,
@@ -435,6 +452,7 @@ impl ToolKind {
             ToolKind::Snippets => "snippets",
             ToolKind::History => "history",
             ToolKind::Files => "files",
+            ToolKind::Tmux => "tmux",
             ToolKind::Docker => "docker",
             ToolKind::Kubernetes => "kubernetes",
             ToolKind::Services => "services",
@@ -456,6 +474,7 @@ impl ToolKind {
             ToolKind::Snippets => t!("tools.kind.snippets"),
             ToolKind::History => t!("tools.kind.history"),
             ToolKind::Files => t!("tools.kind.files"),
+            ToolKind::Tmux => "tmux".into(),
             ToolKind::Docker => "Docker".into(),
             ToolKind::Kubernetes => "Kubernetes".into(),
             ToolKind::Services => t!("tools.kind.services"),
@@ -474,6 +493,7 @@ impl ToolKind {
             ToolKind::History => CatalogIcon::RotateCcwClock,
             // Not the SFTP button's folder tree, which opens a tab.
             ToolKind::Files => return Icon::new(IconName::Folder),
+            ToolKind::Tmux => CatalogIcon::Layers,
             ToolKind::Docker => return Icon::default().path(DOCKER_ICON),
             ToolKind::Kubernetes => CatalogIcon::ShipWheel,
             ToolKind::Services => CatalogIcon::ServerCog,

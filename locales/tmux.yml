@@ -1,0 +1,116 @@
+_version: 2
+
+# tmux: the right sidebar's tool for the host's tmux sessions. tmux's own
+# terms stay as tmux says them in English (attach, detach).
+
+tmux.panel.new:
+  zh-CN: 新建
+  en: New
+tmux.panel.detach:
+  zh-CN: 退出当前
+  en: Detach
+tmux.panel.detach_tooltip:
+  zh-CN: 终端退出所在的 tmux 会话，会话在后台继续运行
+  en: Detach the terminal from its tmux session, which keeps running
+tmux.panel.missing:
+  zh-CN: 远端未安装 tmux
+  en: tmux isn’t installed on the host
+tmux.panel.not_connected:
+  zh-CN: 终端没有连接。连接后这里显示主机上的 tmux 会话。
+  en: The terminal isn’t connected. Once it is, the host’s tmux sessions show here.
+tmux.panel.unsupported:
+  zh-CN: 暂不支持这台主机上的 tmux。
+  en: tmux on this host isn’t supported yet.
+tmux.panel.unlisted:
+  zh-CN: 无法列出 tmux 会话：%{error}
+  en: "Couldn’t list the tmux sessions: %{error}"
+tmux.panel.no_sessions:
+  zh-CN: 没有 tmux 会话
+  en: No tmux sessions
+
+tmux.session.attached:
+  zh-CN: 已连接 %{count}
+  en: "%{count} attached"
+tmux.session.detached:
+  zh-CN: 未连接
+  en: Detached
+tmux.session.current:
+  zh-CN: 当前
+  en: Current
+tmux.session.attach:
+  zh-CN: 连接
+  en: Attach
+tmux.session.attached_here:
+  zh-CN: 终端已在这个会话里
+  en: The terminal is in this session
+tmux.session.rename:
+  zh-CN: 重命名
+  en: Rename
+tmux.session.kill:
+  zh-CN: 结束会话
+  en: End session
+
+# The 新建 and 重命名 dialog.
+tmux.name.label:
+  zh-CN: 名称
+  en: Name
+tmux.name.placeholder:
+  zh-CN: 例如 train
+  en: For example, train
+tmux.name.description:
+  zh-CN: 留空时由 tmux 编号。只能用字母、数字、- 和 _。
+  en: Leave it empty for tmux to number it. Letters, digits, - and _ only.
+tmux.name.missing:
+  zh-CN: 请输入会话名称
+  en: Enter a session name
+tmux.name.invalid:
+  zh-CN: 名称只能用字母、数字、- 和 _，且不能以 - 开头
+  en: A name can have only letters, digits, - and _, and can’t start with -
+tmux.name.taken:
+  zh-CN: 已有名为“%{name}”的会话
+  en: There’s already a session named “%{name}”
+tmux.new.title:
+  zh-CN: 新建 tmux 会话
+  en: New tmux session
+tmux.new.confirm:
+  zh-CN: 新建
+  en: Create
+tmux.rename.title:
+  zh-CN: 重命名 tmux 会话
+  en: Rename tmux session
+
+tmux.new.failed:
+  zh-CN: 无法新建 tmux 会话：%{error}
+  en: "Couldn’t start a tmux session: %{error}"
+tmux.attach.failed:
+  zh-CN: 无法连接 tmux 会话“%{name}”：%{error}
+  en: "Couldn’t attach to tmux session “%{name}”: %{error}"
+tmux.detach.failed:
+  zh-CN: 无法退出 tmux 会话：%{error}
+  en: "Couldn’t detach from the tmux session: %{error}"
+tmux.rename.failed:
+  zh-CN: 无法重命名 tmux 会话“%{name}”：%{error}
+  en: "Couldn’t rename tmux session “%{name}”: %{error}"
+
+tmux.kill.title:
+  zh-CN: 结束 tmux 会话“%{name}”？
+  en: End tmux session “%{name}”?
+tmux.kill.description:
+  zh-CN: 会话里运行的程序都会被结束。
+  en: Every program running in it ends.
+tmux.kill.description_current:
+  zh-CN: 终端正在这个会话里，结束后回到 shell。会话里运行的程序都会被结束。
+  en: The terminal is in this session and goes back to its shell. Every program running in it ends.
+tmux.kill.confirm:
+  zh-CN: 结束会话
+  en: End session
+tmux.kill.done:
+  zh-CN: tmux 会话“%{name}”已结束
+  en: tmux session “%{name}” ended
+tmux.kill.failed:
+  zh-CN: 无法结束 tmux 会话“%{name}”：%{error}
+  en: "Couldn’t end tmux session “%{name}”: %{error}"
+
+tmux.error.status:
+  zh-CN: tmux 返回 %{status}
+  en: tmux exited with status %{status}

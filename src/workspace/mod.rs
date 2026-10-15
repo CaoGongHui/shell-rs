@@ -18,6 +18,7 @@ mod snippets;
 mod status_bar;
 mod tabs;
 mod title_bar;
+mod tmux;
 mod tool_sidebar;
 mod tools;
 mod updates;

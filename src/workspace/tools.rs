@@ -393,7 +393,7 @@ impl Workspace {
                     HostCommand {
                         script: docker::control_command(&ids, command),
                         outcome: docker::done,
-                        done: containers_done(&subject, command),
+                        done: Some(containers_done(&subject, command)),
                         failed: Box::new(move |why| containers_failed(&failed, command, why)),
                         then: ToolSidebar::refresh_docker,
                     },
@@ -466,7 +466,7 @@ impl Workspace {
                     HostCommand {
                         script: docker::remove_command(object, &id),
                         outcome: docker::done,
-                        done: removed(object, &name),
+                        done: Some(removed(object, &name)),
                         failed: Box::new(move |why| not_removed(object, &failed, why)),
                         then: ToolSidebar::refresh_docker,
                     },
@@ -536,7 +536,7 @@ impl Workspace {
                     HostCommand {
                         script: control_command(&name, command),
                         outcome: controlled,
-                        done: service_done(&name, command),
+                        done: Some(service_done(&name, command)),
                         failed: Box::new(move |why| service_failed(&failed, command, why)),
                         then: ToolSidebar::refresh_services,
                     },
@@ -772,23 +772,24 @@ pub(super) fn set_right_dock_open(
 }
 
 /// A command a tool runs on the host, and what follows it.
-struct HostCommand {
+pub(super) struct HostCommand {
     /// `None` when what it names cannot go into a command.
-    script: Option<String>,
+    pub script: Option<String>,
     /// How it went, from what it printed.
-    outcome: fn(&str) -> Result<(), String>,
-    /// The notification when it went: 「nginx.service 已停止」.
-    done: SharedString,
+    pub outcome: fn(&str) -> Result<(), String>,
+    /// The notification when it went: 「nginx.service 已停止」; none when
+    /// what it did shows by itself.
+    pub done: Option<SharedString>,
     /// The notification when it did not, from why: 「无法停止
     /// nginx.service：…」.
-    failed: Box<dyn FnOnce(&str) -> SharedString>,
+    pub failed: Box<dyn FnOnce(&str) -> SharedString>,
     /// What the sidebar does after: read the tool's list again.
-    then: fn(&mut ToolSidebar, &mut Context<ToolSidebar>),
+    pub then: fn(&mut ToolSidebar, &mut Context<ToolSidebar>),
 }
 
 /// Run `command` on the SSH terminal's own connection; how it went is a
 /// notification, and then the sidebar does what follows.
-fn run_on_host(
+pub(super) fn run_on_host(
     command: HostCommand,
     terminal: &ToolTerminal,
     workspace: WeakEntity<Workspace>,
@@ -816,10 +817,12 @@ fn run_on_host(
             };
             cx.update(|window, cx| {
                 let notification = match result {
-                    Ok(()) => Notification::success(done),
-                    Err(why) => Notification::error(failed(&why)),
+                    Ok(()) => done.map(Notification::success),
+                    Err(why) => Some(Notification::error(failed(&why))),
                 };
-                window.push_notification(notification, cx);
+                if let Some(notification) = notification {
+                    window.push_notification(notification, cx);
+                }
                 workspace
                     .update(cx, |this, cx| this.tools.update(cx, then))
                     .ok();

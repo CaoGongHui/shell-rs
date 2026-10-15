@@ -12,6 +12,8 @@ icon_assets!(
     [
         Server,
         Gpu,
+        Layers,
+        LogOut,
         ChevronsDownUp,
         Terminal,
         Upload,

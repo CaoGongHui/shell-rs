@@ -33,6 +33,7 @@ pub mod shared;
 pub mod snippets;
 pub mod ssh;
 pub mod terminal;
+pub mod tmux;
 pub mod update;
 pub mod workspace;
 

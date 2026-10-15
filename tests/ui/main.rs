@@ -29,6 +29,7 @@ mod sftp;
 mod shortcuts;
 mod snippets;
 mod terminal;
+mod tmux;
 mod transfer;
 mod update;
 mod workspace;

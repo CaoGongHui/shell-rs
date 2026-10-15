@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use gpui_kit::component::{
     ActiveTheme as _, Placement, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
@@ -20,6 +22,7 @@ use crate::processes::{Process, ProcessDetails, ProcessPanel, ProcessSort};
 use crate::services::{Service, ServicePanel};
 use crate::snippets::SnippetPanel;
 use crate::terminal::{ExecTarget, RemoteTerminalId, TerminalView};
+use crate::tmux::{TmuxPanel, TmuxTable};
 
 impl ToolKind {
     /// Whether the tool runs commands or SFTP on a channel of its own beside
@@ -39,9 +42,10 @@ impl ToolKind {
             | ToolKind::Monitor
             | ToolKind::Gpu => os.is_none_or(HostOs::is_linux),
             ToolKind::Snippets | ToolKind::Files => true,
-            // Wherever `sh` runs `docker`: Linux, and a Mac with Docker
-            // Desktop; and bash's history file wherever `sh` reads it.
-            ToolKind::Docker | ToolKind::History | ToolKind::Kubernetes => {
+            // Wherever `sh` runs `docker`, `kubectl` or `tmux`: Linux, and a
+            // Mac with Docker Desktop, kubectl or tmux; and bash's history
+            // file wherever `sh` reads it.
+            ToolKind::Docker | ToolKind::Kubernetes | ToolKind::Tmux | ToolKind::History => {
                 os != Some(HostOs::Windows)
             }
         }
@@ -53,6 +57,7 @@ impl ToolKind {
             ToolKind::Snippets => "tool-snippets",
             ToolKind::History => "tool-history",
             ToolKind::Files => "tool-files",
+            ToolKind::Tmux => "tool-tmux",
             ToolKind::Docker => "tool-docker",
             ToolKind::Kubernetes => "tool-kubernetes",
             ToolKind::Services => "tool-services",
@@ -100,6 +105,7 @@ pub struct ToolSidebar {
     /// The terminal in front's 文件, which the workspace owns: one per
     /// terminal, made the first time it is shown.
     files: Option<Entity<ExplorerPanel>>,
+    tmux: Entity<TmuxPanel>,
     docker: Entity<DockerPanel>,
     /// Created only when Kubernetes is first selected; unused terminals
     /// do not allocate its inputs, subscriptions or query state.
@@ -130,6 +136,7 @@ impl ToolSidebar {
             snippets: cx.new(|cx| SnippetPanel::new(store, dispatch.clone(), window, cx)),
             history: cx.new(|cx| HistoryPanel::new(dispatch.clone(), window, cx)),
             files: None,
+            tmux: cx.new(|_| TmuxPanel::new(dispatch.clone())),
             docker: cx.new(|_| DockerPanel::new(dispatch.clone())),
             kubernetes: None,
             services: cx.new(|cx| ServicePanel::new(dispatch.clone(), window, cx)),
@@ -202,6 +209,22 @@ impl ToolSidebar {
     /// 历史命令's 刷新.
     pub fn refresh_history(&mut self, cx: &mut Context<Self>) {
         self.history.update(cx, |history, cx| history.refresh(cx));
+    }
+
+    /// tmux's 刷新, and after a command.
+    pub fn refresh_tmux(&mut self, cx: &mut Context<Self>) {
+        self.tmux.update(cx, |tmux, cx| tmux.refresh(cx));
+    }
+
+    /// Read tmux again a moment after a command was typed into the
+    /// terminal.
+    pub fn refresh_tmux_soon(&mut self, cx: &mut Context<Self>) {
+        self.tmux.update(cx, |tmux, cx| tmux.refresh_soon(cx));
+    }
+
+    /// The tmux sessions of the host in front, as tmux last showed them.
+    pub fn tmux_table(&self, cx: &App) -> Option<Rc<TmuxTable>> {
+        self.tmux.read(cx).table()
     }
 
     /// Docker's 刷新, and after a command.
@@ -314,7 +337,7 @@ impl ToolSidebar {
                 panel.set_target(target.clone(), kubernetes, cx)
             });
         }
-        let (monitor, netstat, processes, services, docker, history, gpu) = (
+        let (monitor, netstat, processes, services, docker, history, gpu, tmux) = (
             showing(ToolKind::Monitor),
             showing(ToolKind::Connections),
             showing(ToolKind::Processes),
@@ -322,10 +345,13 @@ impl ToolSidebar {
             showing(ToolKind::Docker),
             showing(ToolKind::History),
             showing(ToolKind::Gpu),
+            showing(ToolKind::Tmux),
         );
         self.history.update(cx, |panel, cx| {
             panel.set_target(target.clone(), history, cx)
         });
+        self.tmux
+            .update(cx, |panel, cx| panel.set_target(target.clone(), tmux, cx));
         self.docker
             .update(cx, |panel, cx| panel.set_target(target.clone(), docker, cx));
         self.services.update(cx, |panel, cx| {
@@ -467,6 +493,7 @@ impl Render for ToolSidebar {
                         Some(files) => files.clone().into_any_element(),
                         None => Empty.into_any_element(),
                     },
+                    ToolKind::Tmux => self.tmux.clone().into_any_element(),
                     ToolKind::Docker => self.docker.clone().into_any_element(),
                     ToolKind::Kubernetes => self.kubernetes.as_ref().map_or_else(
                         || div().into_any_element(),
