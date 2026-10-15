@@ -23,6 +23,7 @@ mod kubernetes;
 mod monitor;
 mod netstat;
 mod processes;
+mod serial;
 mod services;
 mod settings;
 mod sftp;

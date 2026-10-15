@@ -58,9 +58,10 @@ pub use theme::{TerminalColors, TerminalTheme};
 pub(crate) use transport::send_event;
 pub use transport::{
     ChannelStream, ExecRequest, ExecResult, FixedLocalTerminalTransportProvider,
-    FixedRemoteTerminalTransportProvider, LocalTerminalTransportProvider,
-    RemoteTerminalTransportProvider, SftpChannel, SftpChannelRequest,
+    FixedRemoteTerminalTransportProvider, FixedSerialTerminalTransportProvider,
+    HostTerminalTransports, LocalTerminalTransportProvider, RemoteTerminalTransportProvider,
+    SerialTerminalTransportProvider, SftpChannel, SftpChannelRequest,
     SharedLocalTerminalTransportProvider, SharedRemoteTerminalTransportProvider,
-    SharedTerminalTransportFactory, TerminalChannels, TerminalTransport, TerminalTransportCommand,
-    TerminalTransportEvent, TerminalTransportFactory,
+    SharedSerialTerminalTransportProvider, SharedTerminalTransportFactory, TerminalChannels,
+    TerminalTransport, TerminalTransportCommand, TerminalTransportEvent, TerminalTransportFactory,
 };

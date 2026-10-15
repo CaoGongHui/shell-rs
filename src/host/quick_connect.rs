@@ -48,6 +48,7 @@ pub struct QuickHost {
     pub group: Option<SharedString>,
     pub notes: SharedString,
     pub os: Option<HostOs>,
+    pub serial: bool,
 }
 
 impl QuickHost {
@@ -91,6 +92,7 @@ pub fn quick_hosts(store: &HostStore) -> Vec<QuickHost> {
             .map(|group| SharedString::from(store.group_path(group))),
         notes: host.notes.clone(),
         os: host.os,
+        serial: host.is_serial(),
     };
     let mut hosts: Vec<QuickHost> = store
         .recent_hosts()
@@ -297,6 +299,7 @@ impl ListDelegate for QuickConnectList {
                                 host.name.clone(),
                                 host.os,
                             )
+                            .serial(host.serial)
                             .without_tooltip()
                             .small(),
                         )
@@ -501,6 +504,7 @@ mod tests {
             group: Some("公司 / CI".into()),
             notes: "构建服务器".into(),
             os: None,
+            serial: false,
         }
     }
 

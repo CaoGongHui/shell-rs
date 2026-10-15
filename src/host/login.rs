@@ -7,7 +7,23 @@ use std::path::PathBuf;
 
 use crate::secrets::SecretRef;
 
-use super::{AuthKind, Credential, CredentialKind, Host, ProxyKind, ProxySettings};
+use super::{AuthKind, Credential, CredentialKind, Host, ProxyKind, ProxySettings, SerialSettings};
+
+/// How a host's terminal connects, looked up by the store. Two equal values
+/// connect the same way, which is how an edit tells whether the host's
+/// terminals have to reconnect.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HostConnection {
+    Ssh(HostLogin),
+    Serial(SerialLine),
+}
+
+/// What a serial host's terminal opens: the device, and how its line is set.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SerialLine {
+    pub device: String,
+    pub settings: SerialSettings,
+}
 
 /// Which authentication methods a login tries. Each one starts by asking
 /// the server to let the user in with nothing at all, which a server without

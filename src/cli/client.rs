@@ -14,9 +14,9 @@ use unicode_width::UnicodeWidthStr as _;
 use super::link::OpenLink;
 use super::protocol::{
     AuthChoice, CredentialDeleted, CredentialDetails, CredentialKindChoice, Envelope, ErrorCode,
-    FrameKind, HostDeleted, HostDetails, HostInfo, PROTOCOL_VERSION, ProxyChoice, Reply, Request,
-    RouteDetails, TerminalContext, TransferCounters, TransferSummary, parse_json, read_frame,
-    write_json,
+    FlowControlChoice, FrameKind, HostDeleted, HostDetails, HostInfo, PROTOCOL_VERSION,
+    ParityChoice, ProxyChoice, Reply, Request, RouteDetails, SerialDetails, TerminalContext,
+    TransferCounters, TransferSummary, parse_json, read_frame, write_json,
 };
 use crate::host::HostOs;
 use crate::i18n::{t, tn};
@@ -430,18 +430,44 @@ fn print_host(host: &HostDetails, asked: Asked, console: &mut Console) -> io::Re
         }
         _ => {}
     }
+    let group = if host.temporary {
+        t!("cli.group.not_saved").to_string()
+    } else {
+        host.group.clone().unwrap_or_default()
+    };
+    let mut fields = vec![
+        (t!("cli.field.id"), host.id.clone()),
+        (t!("cli.field.name"), host.name.clone()),
+        (t!("cli.field.group"), group),
+    ];
+    match &host.serial {
+        Some(serial) => fields.extend(serial_fields(serial)),
+        None => fields.extend(ssh_fields(host)),
+    }
+    if let Some(os) = host.os.as_deref().and_then(HostOs::from_stored) {
+        fields.push((t!("cli.field.os"), os.label().to_string()));
+    }
+    if !host.notes.is_empty() {
+        fields.push((t!("cli.field.notes"), host.notes.clone()));
+    }
+    print_fields(&fields, console)
+}
+
+/// An SSH host's rows: where it is, how it logs in, how it is reached.
+fn ssh_fields(host: &HostDetails) -> Vec<(SharedString, String)> {
     let auth = match host.auth {
-        AuthChoice::Password => with_saved(t!("cli.auth.password"), host.password_saved),
-        AuthChoice::Credential => t!(
+        Some(AuthChoice::Password) => with_saved(t!("cli.auth.password"), host.password_saved),
+        Some(AuthChoice::Credential) => t!(
             "cli.auth.credential",
             id = host.credential.as_deref().unwrap_or_default()
         )
         .to_string(),
-        AuthChoice::NoPassword => t!("cli.auth.no_password").to_string(),
+        Some(AuthChoice::NoPassword) => t!("cli.auth.no_password").to_string(),
+        None => String::new(),
     };
     let route = match &host.route {
-        RouteDetails::Direct => t!("cli.route.direct").to_string(),
-        RouteDetails::Jump { hosts } => {
+        Some(RouteDetails::Direct) | None => t!("cli.route.direct").to_string(),
+        Some(RouteDetails::Jump { hosts }) => {
             let deleted = t!("cli.route.deleted_host");
             let hosts = hosts
                 .iter()
@@ -450,13 +476,13 @@ fn print_host(host: &HostDetails, asked: Asked, console: &mut Console) -> io::Re
                 .join(" → ");
             t!("cli.route.jump", hosts = hosts).to_string()
         }
-        RouteDetails::Proxy {
+        Some(RouteDetails::Proxy {
             kind,
             host,
             port,
             user,
             password_saved,
-        } => {
+        }) => {
             let user = user
                 .as_deref()
                 .map(|user| format!("{user}@"))
@@ -474,31 +500,43 @@ fn print_host(host: &HostDetails, asked: Asked, console: &mut Console) -> io::Re
             proxy.to_string()
         }
     };
-    let mut fields = vec![
-        (t!("cli.field.id"), host.id.clone()),
-        (t!("cli.field.name"), host.name.clone()),
-        (
-            t!("cli.field.group"),
-            if host.temporary {
-                t!("cli.group.not_saved").to_string()
-            } else {
-                host.group.clone().unwrap_or_default()
-            },
-        ),
+    vec![
         (
             t!("cli.field.address"),
-            format!("{}@{}:{}", host.user, host.host, host.port),
+            format!(
+                "{}@{}:{}",
+                host.user.as_deref().unwrap_or_default(),
+                host.host.as_deref().unwrap_or_default(),
+                host.port.unwrap_or_default()
+            ),
         ),
         (t!("cli.field.auth"), auth),
         (t!("cli.field.route"), route),
-    ];
-    if let Some(os) = host.os.as_deref().and_then(HostOs::from_stored) {
-        fields.push((t!("cli.field.os"), os.label().to_string()));
-    }
-    if !host.notes.is_empty() {
-        fields.push((t!("cli.field.notes"), host.notes.clone()));
-    }
-    print_fields(&fields, console)
+    ]
+}
+
+/// A serial host's rows: its device and line, and its flow control.
+fn serial_fields(serial: &SerialDetails) -> Vec<(SharedString, String)> {
+    let parity = match serial.parity {
+        ParityChoice::None => 'N',
+        ParityChoice::Odd => 'O',
+        ParityChoice::Even => 'E',
+    };
+    let flow = match serial.flow_control {
+        FlowControlChoice::None => t!("cli.flow.none").to_string(),
+        FlowControlChoice::RtsCts => "RTS/CTS".to_string(),
+        FlowControlChoice::XonXoff => "XON/XOFF".to_string(),
+    };
+    vec![
+        (
+            t!("cli.field.serial"),
+            format!(
+                "{} · {} {}{}{}",
+                serial.device, serial.baud, serial.data_bits, parity, serial.stop_bits
+            ),
+        ),
+        (t!("cli.field.flow_control"), flow),
+    ]
 }
 
 fn print_host_deleted(deleted: &HostDeleted, console: &mut Console) -> io::Result<()> {
@@ -760,6 +798,7 @@ fn format_bytes(bytes: u64) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::protocol::ProtocolChoice;
     use super::*;
 
     /// What `print` writes to stdout, as on a terminal.
@@ -781,13 +820,15 @@ mod tests {
             id: "Jwg5rHvXCxw89paM".into(),
             name: name.into(),
             group: None,
-            host: "10.0.0.9".into(),
-            port: 22,
-            user: "root".into(),
-            auth: AuthChoice::Password,
+            protocol: ProtocolChoice::Ssh,
+            host: Some("10.0.0.9".into()),
+            port: Some(22),
+            user: Some("root".into()),
+            auth: Some(AuthChoice::Password),
             credential: None,
             password_saved: None,
-            route: RouteDetails::Direct,
+            route: Some(RouteDetails::Direct),
+            serial: None,
             notes: String::new(),
             os: None,
             temporary: false,
@@ -808,9 +849,11 @@ mod tests {
             id: String::new(),
             name: name.to_string(),
             group: None,
+            protocol: ProtocolChoice::Ssh,
             user: "root".into(),
             host: "10.0.0.9".into(),
             port: 22,
+            line: None,
             os: None,
             temporary: false,
         };

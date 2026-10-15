@@ -95,15 +95,19 @@ impl Workspace {
 
     /// The tools the switch offers for the SSH terminal in front; none
     /// without one. Those 侧栏功能 leaves on, that work on the host: an
-    /// external connection (a bastion host's link) gets only those that run
-    /// nothing beside the terminal.
+    /// external connection (a bastion host's link) and a serial host, which
+    /// have no channel beside the terminal, get only those that run nothing
+    /// beside it.
     pub(super) fn offered_tools(&self, cx: &App) -> Vec<ToolKind> {
         let Some(terminal) = self.tool_terminal(cx) else {
             return Vec::new();
         };
         let store = self.store.read(cx);
         let os = store.host(terminal.host).and_then(|host| host.os);
-        let shell_only = store.is_external(terminal.host);
+        let shell_only = store.is_external(terminal.host)
+            || store
+                .host(terminal.host)
+                .is_some_and(|host| host.is_serial());
         let shown = self.settings().read(cx).settings().sidebar_tools;
         ToolKind::ALL
             .into_iter()

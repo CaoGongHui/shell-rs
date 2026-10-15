@@ -386,12 +386,17 @@ impl std::fmt::Debug for LoginTest {
 /// until a person decides; `false` also covers "nobody is there to ask".
 pub type TrustCallback = Box<dyn Fn(UnknownHostPrompt) -> bool + Send + Sync>;
 
-/// Logs in once with a [`LoginTest`] and hangs up, so the host form can
-/// check its values before saving them.
+/// Logs in once with a [`LoginTest`] and hangs up, or opens a serial port
+/// and closes it again, so the host form can check its values before saving
+/// them.
 pub trait ConnectionTester: Send + Sync + 'static {
     /// Blocks: call it on a thread of its own. `Err` holds the reason, worded
     /// for the user.
     fn test(&self, request: LoginTest, trust: TrustCallback) -> Result<(), String>;
+
+    /// Open `line` as a serial host's terminal would, and close it. Blocks
+    /// too, briefly; `Err` is why it would not open.
+    fn test_serial(&self, line: &crate::host::SerialLine) -> Result<(), String>;
 }
 
 pub type SharedConnectionTester = std::sync::Arc<dyn ConnectionTester>;

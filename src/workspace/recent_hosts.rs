@@ -46,6 +46,7 @@ struct RecentRow {
     group: Option<SharedString>,
     connected: bool,
     os: Option<HostOs>,
+    serial: bool,
 }
 
 impl RecentHosts {
@@ -84,6 +85,7 @@ impl RecentHosts {
                     .map(|id| SharedString::from(store.group_path(id))),
                 connected: host.state.is_connected(),
                 os: host.os,
+                serial: host.is_serial(),
             })
             .collect()
     }
@@ -197,11 +199,10 @@ impl RecentHosts {
             .child(
                 h_flex()
                     .gap_3()
-                    .child(HostMark::new(
-                        ("recent-host-os", id.0),
-                        row.name.clone(),
-                        row.os,
-                    ))
+                    .child(
+                        HostMark::new(("recent-host-os", id.0), row.name.clone(), row.os)
+                            .serial(row.serial),
+                    )
                     .child(
                         v_flex()
                             .min_w_0()

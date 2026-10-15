@@ -45,6 +45,7 @@ fn open_with(
                 cx.new(|_| HostStore::seed()),
                 cx.new(|_| settings_store()),
                 Arc::new(FixedRemoteTerminalTransportProvider::new(terminals.clone())),
+                fake_serial_terminals(),
                 fake_local_terminals(),
                 sftp.clone(),
                 Arc::new(local.clone()),

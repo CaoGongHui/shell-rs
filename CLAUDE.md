@@ -8,7 +8,7 @@ ShellRS（crate 与二进制都叫 `shellrs`）是 Xshell / WinSCP 式的 SSH �
 
 - **术语。** 保存的一项叫「主机」（量词「台」），代码和库里叫 host（`Host`、`HostId`、`HostStore`、`hosts` 表）。它以前叫「会话」/ `Session`，已全部改掉，新代码和文案别再用。填 IP / 域名的字段叫「地址」（`Host.address`）。SSH 协议层的 session（「SSH 会话通道」、russh 的 `Session`、SFTP 会话）照旧。英文用词见「多语言」的用词表。
 - **两种不保存的连接。** 「外部连接」：堡垒机像调 Xshell（`ssh://`、`-url`）或 WinSCP（`sftp://`）一样拉起 ShellRS，只开一个终端或 SFTP 标签（`HostStore::is_external`）。「临时连接」：标题栏「临时连接…」打开，功能齐全。两者共同的「不保存」在代码里叫 temporary（`HostInfo::temporary`）。
-- **全是真的。** SQLite（`~/Library/Application Support/shellrs/shellrs.db`，`SHELLRS_DATA_DIR` 可覆盖目录）、本地终端（`portable-pty` + `alacritty_terminal`）、SSH（`russh`）、SFTP（双栏、传输队列、断点续传）、端口转发（`-L` / `-R` / `-D`）、凭据、连接方式（直连、多级跳板、HTTP / SOCKS5 代理）、右侧栏十一个工具、内置编辑器和预览、外部 CLI、在线升级、匿名使用统计（Aptabase）。密码和口令只进系统钥匙串（`keyring`），**数据库里永远不出现秘密**。
+- **全是真的。** SQLite（`~/Library/Application Support/shellrs/shellrs.db`，`SHELLRS_DATA_DIR` 可覆盖目录）、本地终端（`portable-pty` + `alacritty_terminal`）、SSH（`russh`）、串口（`serial2`，`portable-pty` 本来就带着它）、SFTP（双栏、传输队列、断点续传）、端口转发（`-L` / `-R` / `-D`）、凭据、连接方式（直连、多级跳板、HTTP / SOCKS5 代理）、右侧栏十一个工具、内置编辑器和预览、外部 CLI、在线升级、匿名使用统计（Aptabase）。密码和口令只进系统钥匙串（`keyring`），**数据库里永远不出现秘密**。
 
 做 UI 之前先读 `gpui-kit` 与 `gpui-kit-design-guides` 两个技能（其中的 Coding Guides 和 Design Guides 在本仓库是规范，不是参考）。不要凭记忆臆造 gpui-kit API：以 `~/.cargo/registry/src/*/gpui-component-0.6.1/`、`gpui-base-0.6.1/` 的源码或 `https://gpui-kit.com/component/<name>.md` 为准。
 
@@ -20,6 +20,7 @@ ShellRS（crate 与二进制都叫 `shellrs`）是 Xshell / WinSCP 式的 SSH �
 - **SFTP**：Dock 标签，每次「打开 SFTP」新开一个、各自连接。操作对标 WinSCP Commander：两行工具栏、路径标签、WinSCP 的列、高亮多选、「名称」格才是项目、框选。本地侧与远程侧对称，本地删除进废纸篓；书签按主机、按侧持久化。传输进行中还能再发起，新批次在标签底部的传输队列里排队，不做前台进度对话框。传输逻辑按 WinSCP（用户反馈小文件太慢后定的）：一批里同时传的文件数是「设置 › SFTP › 传输 › 最大同时传输数量」（默认 3，可选 1–10），文件夹里的等文件夹建好；但走标签的同一条 SFTP 会话，不像 WinSCP 另开连接（不另登录，堡垒机上也能用）。小于 100 KB 的不走 `.filepart`、不续传（WinSCP 默认的 100 KB）。大小列默认整 KB，右键列标题可切换。「显示隐藏文件」（`.` 开头的）本地、远程各一个开关、互不影响，每侧对所有标签生效，存进设置，默认不显示；工具栏用睁眼 / 闭眼两个图标表示状态，不用选中效果；显示时隐藏文件的文字浅一些。文件图标默认单色（gpui-kit 规范：一个产品一套图标）；用户反馈后加了「设置 › SFTP › 图标风格」可换彩色（对标 WinSCP / Xftp），只管文件列表和传输确认框里的文件图标，工具栏、路径标签不变。彩色取自 Material Icon Theme（MIT），只带服务器、项目、主目录常见的约 160 个，普通文件夹改成黄色（它本身的蓝灰太像单色）；Linux 的 `/dev`、`/media` 不按它的项目含义配图标。「查找文件」只在远程侧（同 WinSCP，工具栏、空白处菜单、⌘F）：逐层发普通的 `List`（同时 4 个）。用户要求和 WinSCP 一致：掩码匹配整个名称（不带通配符也不是「包含」），普通掩码只找文件、以 `/` 结尾的找文件夹；进入链接到目录的符号链接，按 `List` 返回的真实路径防循环；不跳过 `/proc` 之类，没有数量上限。只有隐藏文件跟远程侧的「显示隐藏文件」走。它是单独的普通窗口（同 WinSCP，可以被主窗口盖住），不用 gpui-kit 的对话框（那只能是模态的）：每个 SFTP 标签最多一个，定位、编辑、下载把主窗口切到前面、查找窗口留着；关窗口就停止查找、丢掉结果，只记住上次的文件名。结果的排序、多选、框选和键同主窗口的文件列表（`Selection` 按路径、点标题循环排序、文件夹在前、「名称」格才是结果，指针处理和框选与文件面板共用 `marquee.rs`）；右键菜单就是下方那几个按钮（空白处只有「复制结果」），菜单项派发的是文件列表的 `ExplorerShortcut`，由查找窗口自己处理；下载、删除作用于所有选中的，删除在查找窗口里确认，经标签的 `DeletePaths` 执行，完成后标签把结果告诉窗口。SFTP 标签暂不做目录同步（外部 CLI 有 `shellrs sync`）、过滤、目录树和 Dock 布局持久化。
 - **主机树**：搜索匹配主机（名称、地址、用户）和分组名；分组名匹配时列出整个分组，回车只连本身匹配的第一台主机（按树的顺序）。首次启动是空库；分组可任意嵌套，主机可以不属于分组；删除分组连同子分组和主机，确认框写明数量。
 - **主机对话框**：
+  - 名称下面是「协议」：SSH / 串口（Telnet 以后再说）。协议在创建后不能改（用户定的）：编辑时另一段不可选，CLI `update` 改协议报错，store 的 `update_unnotified` 也拒绝。这样跳板、端口转发、开着的 SFTP 标签永远不会指向串口主机。
   - 认证方式三选一：「密码」（留空就每次连接时询问，不悄悄试密钥）、「使用凭据」、「无密码」（依次试服务器免认证、SSH Agent、`~/.ssh` 默认私钥，服务器要密码就报错、不询问）。主机自己没有私钥文件，要用私钥就建密钥凭据。
   - 「测试连接」是真登录，不强制填密码。
   - 连接方式三选一：直接连接、SSH 跳板、代理连接。跳板只走列出的链（跳板自己的连接方式不参与），不做拖动排序；删掉的跳板留「已删除的主机」占位，连接时直接报错。代理是 HTTP `CONNECT` 或 SOCKS5，失败直接报错、不弹问答。跳板和代理不叠加。
@@ -27,6 +28,10 @@ ShellRS（crate 与二进制都叫 `shellrs`）是 Xshell / WinSCP 式的 SSH �
   - 密钥的来源「本机文件 / 粘贴 / 生成新密钥」在同一个对话框里（Ed25519 默认，另有 RSA 4096）。粘贴和生成的私钥存成数据目录 `keys/` 下的文件，不进钥匙串：Windows 凭据管理器装不下 RSA 私钥。
   - 删除仍在用的凭据要确认，那些主机改回自己登录（密码凭据的改成「密码」，其余改成「无密码」）。
   - 主机对话框里不做「新建凭据…」（不叠弹层）。
+- **串口主机**（`serial2`）：本机的一个串口，设备存在 `Host.address`（库里 `address` 列），参数在 `serial_*` 五列；端口、用户名、认证、连接方式存新 SSH 主机的默认值、不用。
+  - 对话框：串口设备（`Input` 加右端下拉列出检测到的端口和「重新检测」，macOS 只列 `cu.*`）和波特率（常用值下拉、可手填）一行，数据位 / 校验位 / 停止位 / 流控一行四个 `Select`；默认 115200 8N1、无流控。流控只有无、RTS/CTS、XON/XOFF（`serial2` 没有 DSR/DTR，macOS、Linux 的 termios 也没有）。「测试连接」照样有（用户要的）：按表单的参数打开串口再关掉（`ConnectionTester::test_serial` → `serial::check`），只说明本机能不能打开。临时连接也能选串口。
+  - 连接是普通的远程终端标签（`TerminalPanel`、`CenterTab::Terminal`），状态点、回车重连都有；改参数经 `HostConnection` 比较后重连。每次「连接」照旧新开标签（用户定的），Unix 上 `TIOCEXCL` 独占，第二个标签报「已被占用」。
+  - 没有 SFTP、复制 IP、跳板、端口转发；右侧栏只有命令片段（同外部连接）；标签菜单有「发送 Break」（约 0.3 秒）。外部 CLI 的 `hosts` 能列、能建能改（`protocol`、`serial`），`exec`（含 `--terminal`）和传输报 `not_ssh`。
 - **端口转发**：侧栏第二个列表，不是 Dock 标签；标题栏「ShellRS」后面三个图标切换主机 / 端口转发 / 凭据。
   - 一条规则经由一台保存的主机，自己建连接：不算主机的连接状态，主机「断开连接」不停它；删除主机连同规则一起删。
   - 「创建」只保存不启动，可设「启动 ShellRS 时自动开启」；新建时「经由主机」留空，由用户自己选。
@@ -150,6 +155,7 @@ cargo test -- --ignored                     # 会读写真实钥匙串的测试�
   - `SshConnector`：所有登录都走它（终端、SFTP、exec、测试连接、端口转发、外部 CLI）。
   - 远程终端的传输：pty、系统探测、延迟、旁路 exec 和 SFTP 通道（右侧栏「文件」）。
   - 代理握手；外部 CLI 用的 `run_command`。
+- `serial/`：串口主机的终端传输（`SerialTransportProvider`，读线程加命令循环，同 `local_pty.rs`）和本机串口列表（`available_ports`）。
 - `terminal/`：本地 PTY 和它跑的 shell（`local_shell.rs`：命令行拆分、已安装的 shell、Windows 的默认 shell）、驱动 `alacritty_terminal` 的引擎、`TerminalView`（网格、选区、查找、清屏）、关键字高亮（`highlight.rs`）、终端字体全局量、右侧栏工具共用的 `ExecTarget`、目录报告（`directory.rs`：OSC 7 / 1337 的解析）和「文件」目录跟随的远端脚本（`directory_setup.rs`：检测、安装、bash / zsh 片段）。
 - `sftp/`：可注入的传输和本地目录接口、`RemotePath`、`RemoteFs` 协议适配、worker（批次、三次重连、空闲断网检测），以及：
   - `upload.rs` / `download.rs`：断点续传，续传记录由 `journal.rs` 管；
@@ -183,9 +189,9 @@ cargo test -- --ignored                     # 会读写真实钥匙串的测试�
   - 秘密不放进派生了 `Debug` 的 `HostDraft` / `CredentialDraft`。
   - 对话框里的密码字段是异步预填的，`*_loaded` 标志没置上之前，空字段不算「用户清空了」。
 - **私钥文件。** ShellRS 保存的私钥在 `keys/` 下（目录 0700、文件 0600，经临时文件改名写入）。只有没人再用时才删这个目录下的文件；用户自己的私钥文件从不改动或删除。
-- **登录快照在 UI 线程解析。** 工作线程读不到 store，拿到的是 `HostLogin`：凭据和跳板都已查好。它只含影响登录的字段并派生 `PartialEq`：改主机或凭据时比较前后快照，不同才发 `ConnectionSettingsChanged` 重连，所以只改名称不重连。
+- **登录快照在 UI 线程解析。** 工作线程读不到 store，拿到的是 `HostLogin`：凭据和跳板都已查好。它只含影响登录的字段并派生 `PartialEq`：改主机或凭据时比较前后快照，不同才发 `ConnectionSettingsChanged` 重连，所以只改名称不重连。比较的是 `HostConnection`（SSH 的 `HostLogin` 或串口的 `SerialLine`），终端按它经 `HostTerminalTransports` 选传输；`login_of` 只给 SSH 的使用方，串口主机不进钥匙串的清理（`ssh_login`）。
 - **id 由内存分配**，四个独立计数器，重启后从库里最大 id + 1 开始，删掉的最大号会被复用。对外只给 `PublicId`（16 位随机串，改名、改地址都不变，不复用），不给 `HostId`。
-- **改表**：现在 `SCHEMA_VERSION` 是 14，所有表都是 `STRICT`。
+- **改表**：现在 `SCHEMA_VERSION` 是 15，所有表都是 `STRICT`。
   - 改表要升版本、在 `STEPS` 里加一步，并加一个「用冻结的旧 schema 升级、再和新库比对」的测试。
   - 加列直接 `ALTER TABLE ADD COLUMN`，在 `SCHEMA` 里也写在最后一列之后。
   - 库只往前升：旧版本遇到新库直接报错、不动文件。迁移前先 `VACUUM INTO` 备份。
@@ -236,6 +242,9 @@ cargo test -- --ignored                     # 会读写真实钥匙串的测试�
 | 图标风格：单色 / 彩色 | Icon style: Monochrome / Color |
 | 应用更新 / 稳定版 / 重启并安装 / 查看更新内容 | Updates / Stable / Restart to update / What’s new |
 | 连接 / 断开连接 / 重新连接 | Connect / Disconnect / Reconnect |
+| 协议：SSH / 串口 | Protocol: SSH / Serial |
+| 串口设备 / 波特率 / 数据位 / 校验位（无 / 奇校验 / 偶校验）/ 停止位 / 流控 | Serial port / Baud rate / Data bits / Parity (None / Odd / Even) / Stop bits / Flow control |
+| 发送 Break | Send break |
 | 已连接 / 未连接 / 连接中 | Connected / Not connected / Connecting |
 | 目录、文件夹 | folder（上级目录 Parent folder，主目录 Home folder） |
 | SFTP 列：名称 / 大小 / 类型 / 修改时间 / 权限 / 所有者 | Name / Size / Type / Modified / Permissions / Owner |

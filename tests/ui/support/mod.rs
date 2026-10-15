@@ -32,7 +32,8 @@ pub use shellrs::host::{
     AuthKind, ConnectionState, CredentialDraft, CredentialId, CredentialKind, ForwardDraft,
     ForwardEndpoint, ForwardId, ForwardKind, ForwardRule, GeneratedKey, GroupDraft, GroupId,
     HostDatabase, HostDraft, HostId, HostLogin, HostOs, HostStore, JumpLogin, KeyAlgorithm,
-    LoginMethod, LoginRoute, PastedKey, ProxyKind, ProxySettings, Route, read_public_key,
+    LoginMethod, LoginRoute, PastedKey, ProxyKind, ProxySettings, Route, SerialLine,
+    read_public_key,
 };
 pub use shellrs::secrets::{InMemorySecretStore, SecretRef, SecretStore as _};
 pub use shellrs::settings::{Appearance, InterfaceLanguage, SettingsStore};
@@ -42,10 +43,11 @@ pub use shellrs::sftp::{
     SftpRoute, SftpTransport, SftpTransportProvider, TextFile, UploadRequest,
 };
 pub use shellrs::terminal::{
-    FixedLocalTerminalTransportProvider, FixedRemoteTerminalTransportProvider, LocalShell,
-    LocalTerminalId, RemoteTerminalId, RemoteTerminalTransportProvider, SftpChannel,
-    SharedTerminalTransportFactory, TerminalFont, TerminalLifecycle, TerminalSize,
-    TerminalTransport, TerminalTransportCommand, TerminalTransportEvent, TerminalTransportFactory,
+    FixedLocalTerminalTransportProvider, FixedRemoteTerminalTransportProvider,
+    FixedSerialTerminalTransportProvider, LocalShell, LocalTerminalId, RemoteTerminalId,
+    RemoteTerminalTransportProvider, SftpChannel, SharedTerminalTransportFactory, TerminalFont,
+    TerminalLifecycle, TerminalSize, TerminalTransport, TerminalTransportCommand,
+    TerminalTransportEvent, TerminalTransportFactory,
 };
 pub use shellrs::update::{
     Channel, InstallKind, Installer, Relaunch, Release, Staged, TrustedKeys, Unsupported,

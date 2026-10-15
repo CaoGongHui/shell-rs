@@ -46,6 +46,11 @@ impl ConnectionTester for SshConnectionTester {
             .map_err(|error| t!("ssh.test.runtime_failed", error = error).to_string())?;
         runtime.block_on(self.run(request, trust))
     }
+
+    /// A serial line has nothing of SSH: the serial module opens it.
+    fn test_serial(&self, line: &crate::host::SerialLine) -> Result<(), String> {
+        crate::serial::check(line)
+    }
 }
 
 /// What the host-key checks said along the way, which the connect error alone

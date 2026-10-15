@@ -235,6 +235,8 @@ id_actions! {
     DisconnectTerminal(RemoteTerminalId);
     /// Open the dialog that gives one remote terminal tab its own title.
     RenameTerminal(RemoteTerminalId);
+    /// Hold a serial host's line in the break condition for a moment.
+    SendBreak(RemoteTerminalId);
 
     /// Close a local terminal tab and terminate its child process.
     CloseLocalTerminal(LocalTerminalId);

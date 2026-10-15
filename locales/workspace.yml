@@ -235,8 +235,8 @@ workspace.credential.in_use_then_no_password.other:
   en: "%{count} hosts use this credential. Once it’s deleted, they switch to No password, sign in with the SSH agent and the private keys in ~/.ssh, and keep their usernames."
 
 workspace.forward.needs_host:
-  zh-CN: 端口转发经由一台主机的 SSH 连接，请先新建主机。
-  en: A port forward runs over a host’s SSH connection. Create a host first.
+  zh-CN: 端口转发经由一台主机的 SSH 连接，请先新建一台 SSH 主机。
+  en: A port forward runs over a host’s SSH connection. Create an SSH host first.
 workspace.forward.delete_running:
   zh-CN: 这条转发正在运行，会先停止。
   en: This forward is running and will be stopped first.

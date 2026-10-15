@@ -9,6 +9,7 @@ use gpui_kit::component::{
     form::{Field, Form},
     h_flex,
     input::{Input, InputState, Textarea, TextareaState},
+    menu::{DropdownMenu as _, PopupMenuItem},
     notification::Notification,
     searchable_list::{SearchableListItem, SearchableVec},
     select::{Select, SelectState},
@@ -25,8 +26,10 @@ use crate::i18n::{t, tn};
 
 use super::secret_fields::SecretFields;
 use super::{
-    AuthKind, Credential, CredentialId, CredentialKind, DEFAULT_USER, GroupId, Host, HostDraft,
-    HostDraftError, HostId, HostLogin, HostStore, ProxyKind, ProxySettings, Route, group_options,
+    AuthKind, COMMON_BAUD_RATES, Credential, CredentialId, CredentialKind, DEFAULT_USER, DataBits,
+    FlowControl, GroupId, Host, HostDraft, HostDraftError, HostId, HostLogin, HostStore, Parity,
+    Protocol, ProxyKind, ProxySettings, Route, SSH_PORT, SerialLine, SerialSettings, StopBits,
+    group_options,
 };
 pub use crate::shared::DeleteHandler;
 use crate::shared::{
@@ -38,6 +41,32 @@ use crate::shared::{
 /// the window's height.
 const DIALOG_TOP: f32 = 0.05;
 const DIALOG_MAX_HEIGHT: f32 = 0.9;
+
+/// What a host is, as the form's 「协议」 offers it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProtocolChoice {
+    Ssh,
+    Serial,
+}
+
+impl ProtocolChoice {
+    /// Every protocol, in the order the form lists them.
+    const ALL: [ProtocolChoice; 2] = [ProtocolChoice::Ssh, ProtocolChoice::Serial];
+
+    fn label(self) -> SharedString {
+        match self {
+            ProtocolChoice::Ssh => t!("host.protocol.ssh"),
+            ProtocolChoice::Serial => t!("host.protocol.serial"),
+        }
+    }
+
+    fn of(protocol: Protocol) -> Self {
+        match protocol {
+            Protocol::Ssh => ProtocolChoice::Ssh,
+            Protocol::Serial(_) => ProtocolChoice::Serial,
+        }
+    }
+}
 
 /// How a host logs in, as the form's 「认证方式」 offers it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -167,6 +196,8 @@ pub struct HostForm {
     /// and a commit that saves nothing.
     temporary: bool,
     name: Entity<InputState>,
+    /// Chosen when the host is created; an edit shows it but cannot change it.
+    protocol: ProtocolChoice,
     address: Entity<InputState>,
     port: Entity<InputState>,
     source: AuthSource,
@@ -198,6 +229,17 @@ pub struct HostForm {
     /// The proxy's password.
     proxy_secret: Entity<SecretFields>,
     notes: Entity<TextareaState>,
+    /// A serial host's device and line.
+    device: Entity<InputState>,
+    baud: Entity<InputState>,
+    data_bits: Entity<SelectState<Vec<SharedString>>>,
+    parity: Entity<SelectState<Vec<SharedString>>>,
+    stop_bits: Entity<SelectState<Vec<SharedString>>>,
+    flow: Entity<SelectState<Vec<SharedString>>>,
+    /// The serial ports of this computer, for the device field's menu:
+    /// `None` until a look comes back, or while it is looking again.
+    ports: Option<Vec<String>>,
+    _looking_for_ports: Task<()>,
     testing_connection: bool,
     /// Logs in with the form's current values for 「测试连接」.
     tester: SharedConnectionTester,
@@ -227,7 +269,7 @@ impl HostForm {
                     .is_some_and(|host| host.state != super::ConnectionState::Disconnected),
                 read.hosts()
                     .iter()
-                    .filter(|host| Some(host.id) != editing)
+                    .filter(|host| Some(host.id) != editing && !host.is_serial())
                     .map(JumpHost::of)
                     .collect::<Vec<_>>(),
             )
@@ -244,23 +286,85 @@ impl HostForm {
             HostDraft::new(
                 "",
                 "",
-                22,
+                SSH_PORT,
                 DEFAULT_USER,
                 AuthKind::default(),
                 preselect_group,
             )
         });
+        let protocol = ProtocolChoice::of(draft.protocol);
+        // A serial host's address is its device, which is not an address
+        // the SSH fields would show.
+        let (address_value, device_value) = match protocol {
+            ProtocolChoice::Ssh => (draft.address.clone(), SharedString::default()),
+            ProtocolChoice::Serial => (SharedString::default(), draft.address.clone()),
+        };
+        let line = draft.protocol.serial().unwrap_or_default();
 
         let name = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder(t!("host.dialog.name_placeholder"))
+                .placeholder(match protocol {
+                    ProtocolChoice::Ssh => t!("host.dialog.name_placeholder"),
+                    ProtocolChoice::Serial => t!("host.dialog.name_placeholder_serial"),
+                })
                 .default_value(draft.name.clone())
         });
         let address = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(t!("host.dialog.address_placeholder"))
-                .default_value(draft.address.clone())
+                .default_value(address_value)
         });
+        let device = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t!(
+                    "host.dialog.serial_device_placeholder",
+                    example = example_device()
+                ))
+                .default_value(device_value)
+        });
+        let baud = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(SerialSettings::default().baud.to_string())
+                .default_value(line.baud.to_string())
+        });
+        let choice = |labels: Vec<SharedString>,
+                      ix: Option<usize>,
+                      window: &mut Window,
+                      cx: &mut Context<Self>| {
+            cx.new(|cx| SelectState::new(labels, Some(IndexPath::new(ix.unwrap_or(0))), window, cx))
+        };
+        let data_bits = choice(
+            DataBits::ALL
+                .map(|bits| bits.value().to_string().into())
+                .to_vec(),
+            DataBits::ALL
+                .iter()
+                .position(|bits| *bits == line.data_bits),
+            window,
+            cx,
+        );
+        let parity = choice(
+            Parity::ALL.map(Parity::label).to_vec(),
+            Parity::ALL.iter().position(|parity| *parity == line.parity),
+            window,
+            cx,
+        );
+        let stop_bits = choice(
+            StopBits::ALL
+                .map(|bits| bits.value().to_string().into())
+                .to_vec(),
+            StopBits::ALL
+                .iter()
+                .position(|bits| *bits == line.stop_bits),
+            window,
+            cx,
+        );
+        let flow = choice(
+            FlowControl::ALL.map(FlowControl::label).to_vec(),
+            FlowControl::ALL.iter().position(|flow| *flow == line.flow),
+            window,
+            cx,
+        );
         let port = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("22")
@@ -387,18 +491,19 @@ impl HostForm {
             ),
         ];
 
-        if editing.is_some() {
+        if editing.is_some() && protocol == ProtocolChoice::Ssh {
             // The host's own password, even for a host that does not use one
             // now: it is what switching back would show.
             fields.update(cx, |fields, cx| {
                 fields.load_saved(Some(draft.password_secret()), None, cx)
             });
         }
-        Self {
+        let mut form = Self {
             store,
             editing,
             temporary: false,
             name,
+            protocol,
             address,
             port,
             source: match (credential_ix, draft.auth) {
@@ -423,11 +528,23 @@ impl HostForm {
             proxy_user,
             proxy_secret,
             notes,
+            device,
+            baud,
+            data_bits,
+            parity,
+            stop_bits,
+            flow,
+            ports: None,
+            _looking_for_ports: Task::ready(()),
             testing_connection: false,
             tester,
             editing_connected,
             _subscriptions: subscriptions,
+        };
+        if protocol == ProtocolChoice::Serial {
+            form.look_for_ports(window, cx);
         }
+        form
     }
 
     /// The form of a 临时连接: the login of a new host, without what only a
@@ -444,6 +561,119 @@ impl HostForm {
             input.set_placeholder(t!("host.dialog.temporary_name_placeholder"), window, cx)
         });
         form
+    }
+
+    /// Make the form one for an SSH or a serial host: a new host's choice.
+    fn set_protocol(
+        &mut self,
+        protocol: ProtocolChoice,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.protocol == protocol || self.editing.is_some() {
+            return;
+        }
+        self.protocol = protocol;
+        let placeholder = match (protocol, self.temporary) {
+            (ProtocolChoice::Serial, _) => t!("host.dialog.name_placeholder_serial"),
+            (ProtocolChoice::Ssh, true) => t!("host.dialog.temporary_name_placeholder"),
+            (ProtocolChoice::Ssh, false) => t!("host.dialog.name_placeholder"),
+        };
+        self.name.update(cx, |input, cx| {
+            input.set_placeholder(placeholder, window, cx)
+        });
+        if protocol == ProtocolChoice::Serial && self.ports.is_none() {
+            self.look_for_ports(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Find the serial ports of this computer again, off the UI thread.
+    fn look_for_ports(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.ports = None;
+        self._looking_for_ports = cx.spawn_in(window, async move |this, cx| {
+            let ports = cx
+                .background_spawn(async { crate::serial::available_ports() })
+                .await;
+            this.update(cx, |this, cx| {
+                this.ports = Some(ports);
+                cx.notify();
+            })
+            .ok();
+        });
+        cx.notify();
+    }
+
+    fn set_device(&mut self, device: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.device
+            .update(cx, |input, cx| input.set_value(device, window, cx));
+    }
+
+    fn set_baud(&mut self, baud: u32, window: &mut Window, cx: &mut Context<Self>) {
+        self.baud.update(cx, |input, cx| {
+            input.set_value(baud.to_string(), window, cx)
+        });
+    }
+
+    /// The device and line the form describes, or what is wrong with them.
+    fn committed_serial(&self, cx: &App) -> Result<(String, SerialSettings), SharedString> {
+        let device = self.device.read(cx).value().trim().to_string();
+        if device.is_empty() {
+            return Err(HostDraftError::Device.message());
+        }
+        let baud = self
+            .baud
+            .read(cx)
+            .value()
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|baud| *baud > 0)
+            .ok_or_else(|| HostDraftError::Baud.message())?;
+        let row = |select: &Entity<SelectState<Vec<SharedString>>>| {
+            select.read(cx).selected_index(cx).map(|ix| ix.row)
+        };
+        let default = SerialSettings::default();
+        Ok((
+            device,
+            SerialSettings {
+                baud,
+                data_bits: row(&self.data_bits)
+                    .and_then(|ix| DataBits::ALL.get(ix).copied())
+                    .unwrap_or(default.data_bits),
+                parity: row(&self.parity)
+                    .and_then(|ix| Parity::ALL.get(ix).copied())
+                    .unwrap_or(default.parity),
+                stop_bits: row(&self.stop_bits)
+                    .and_then(|ix| StopBits::ALL.get(ix).copied())
+                    .unwrap_or(default.stop_bits),
+                flow: row(&self.flow)
+                    .and_then(|ix| FlowControl::ALL.get(ix).copied())
+                    .unwrap_or(default.flow),
+            },
+        ))
+    }
+
+    /// The draft of a serial host, or what is wrong with the form.
+    fn serial_draft(&self, group: Option<GroupId>, cx: &App) -> Result<HostDraft, SharedString> {
+        let (device, settings) = self.committed_serial(cx)?;
+        let name = self.name.read(cx).value().trim().to_string();
+        let name = if name.is_empty() {
+            device.clone()
+        } else {
+            name
+        };
+        let notes = self.notes.read(cx).value().trim().to_string();
+        Ok(HostDraft::serial(name, device, settings, group).with_notes(notes))
+    }
+
+    /// The group the form has selected; `None` is the root of the tree.
+    fn selected_group(&self, cx: &App) -> Option<GroupId> {
+        self.group
+            .read(cx)
+            .selected_index(cx)
+            .and_then(|ix| self.group_ids.get(ix.row).copied())
+            .unwrap_or(None)
     }
 
     fn set_source(&mut self, source: AuthSource, cx: &mut Context<Self>) {
@@ -588,6 +818,10 @@ impl HostForm {
         if self.testing_connection {
             return;
         }
+        if self.protocol == ProtocolChoice::Serial {
+            self.test_serial(window, cx);
+            return;
+        }
         let request = match self.login_test(cx) {
             Ok(request) => request,
             Err(reason) => {
@@ -660,6 +894,42 @@ impl HostForm {
         .detach();
     }
 
+    /// 「测试连接」 for a serial host: open the port with the form's line and
+    /// close it again, off the UI thread, and say whether it opened.
+    fn test_serial(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let line = match self.committed_serial(cx) {
+            Ok((device, settings)) => SerialLine { device, settings },
+            Err(reason) => {
+                window.push_notification(connection_test_notification(Err(reason.into())), cx);
+                return;
+            }
+        };
+        self.testing_connection = true;
+        cx.notify();
+        let tester = self.tester.clone();
+        cx.spawn_in(window, async move |this, cx| {
+            let result = cx
+                .background_spawn({
+                    let line = line.clone();
+                    async move { tester.test_serial(&line) }
+                })
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                this.testing_connection = false;
+                let notification = match result {
+                    Ok(()) => {
+                        Notification::success(t!("host.test.serial_opened", device = line.device))
+                    }
+                    Err(reason) => connection_test_notification(Err(reason)),
+                };
+                window.push_notification(notification, cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// How the form says the host logs in, or what is missing.
     fn committed_login(&self, cx: &App) -> Result<CommittedLogin, SharedString> {
         match self.source.auth() {
@@ -676,6 +946,26 @@ impl HostForm {
 
     /// Validate and write to the store. Returns whether the dialog may close.
     pub fn commit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if self.protocol == ProtocolChoice::Serial {
+            let draft = match self.serial_draft(self.selected_group(cx), cx) {
+                Ok(draft) => draft,
+                Err(error) => {
+                    window.push_notification(form_error_notification(error), cx);
+                    return false;
+                }
+            };
+            let editing = self.editing;
+            self.store.update(cx, |store, cx| match editing {
+                Some(id) => {
+                    store.update(id, draft, cx);
+                }
+                None => {
+                    store.insert(draft, cx);
+                }
+            });
+            self.clear_secrets(window, cx);
+            return true;
+        }
         let name = self.name.read(cx).value().trim().to_string();
         let checked = self.endpoint(cx).and_then(|endpoint| {
             Ok((
@@ -694,12 +984,7 @@ impl HostForm {
 
         let name = if name.is_empty() { host.clone() } else { name };
 
-        let group = self
-            .group
-            .read(cx)
-            .selected_index(cx)
-            .and_then(|ix| self.group_ids.get(ix.row).copied())
-            .unwrap_or(None);
+        let group = self.selected_group(cx);
         // The password never rides along in the draft, which derives
         // `Debug`. It goes to the keychain separately, under the endpoint the
         // draft names; any other way of logging in leaves that entry alone.
@@ -754,12 +1039,16 @@ impl HostForm {
                 store.save_secret(secret, change, cx);
             }
         });
-        // The dialog is about to close and take the form with it; drop the
-        // plaintext now rather than waiting for the entity.
+        self.clear_secrets(window, cx);
+        true
+    }
+
+    /// The dialog is about to close and take the form with it; drop the
+    /// plaintext now rather than waiting for the entity.
+    fn clear_secrets(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         for fields in [&self.fields, &self.proxy_secret] {
             fields.update(cx, |fields, cx| fields.clear(window, cx));
         }
-        true
     }
 
     /// Validate and connect without saving: the host goes into the store's
@@ -771,6 +1060,20 @@ impl HostForm {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<HostId> {
+        if self.protocol == ProtocolChoice::Serial {
+            let draft = match self.serial_draft(None, cx) {
+                Ok(draft) => draft,
+                Err(error) => {
+                    window.push_notification(form_error_notification(error), cx);
+                    return None;
+                }
+            };
+            self.clear_secrets(window, cx);
+            return Some(
+                self.store
+                    .update(cx, |store, cx| store.insert_temporary(draft, None, cx)),
+            );
+        }
         let checked = self
             .endpoint(cx)
             .and_then(|endpoint| Ok((endpoint, self.committed_login(cx)?)));
@@ -868,6 +1171,152 @@ impl HostForm {
 }
 
 impl HostForm {
+    /// 「协议」: a new host's choice, which an edit shows but cannot change.
+    fn protocol_field(&self, cx: &mut Context<Self>) -> Field {
+        let protocol = self.protocol;
+        let fixed = self.editing.is_some();
+        Field::new()
+            .label(t!("host.dialog.protocol"))
+            .col_span(4)
+            .child(
+                SegmentedControl::new("host-protocol")
+                    .selected_index(
+                        ProtocolChoice::ALL
+                            .iter()
+                            .position(|each| *each == protocol),
+                    )
+                    .on_change(cx.listener(|this, ix: &usize, window, cx| {
+                        if let Some(protocol) = ProtocolChoice::ALL.get(*ix) {
+                            this.set_protocol(*protocol, window, cx);
+                        }
+                    }))
+                    .segments(ProtocolChoice::ALL.map(|each| {
+                        Segment::new(each.label()).when(fixed && each != protocol, |segment| {
+                            segment
+                                .disabled(true)
+                                .tooltip(t!("host.dialog.protocol_fixed"))
+                        })
+                    })),
+            )
+    }
+
+    /// A serial host's fields: the device and its rate on one row, how
+    /// each character is framed on the next, four across.
+    fn serial_fields(&self, form: Form, cx: &mut Context<Self>) -> Form {
+        let this = cx.entity().downgrade();
+        let ports = self.ports.clone();
+        let device = self.device.read(cx).value().trim().to_string();
+        let ports_menu = Button::new("host-serial-ports")
+            .ghost()
+            .xsmall()
+            .icon(IconName::ChevronDown)
+            .tooltip(t!("host.dialog.serial_ports"))
+            .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+                let menu = match &ports {
+                    None => menu.item(
+                        PopupMenuItem::new(t!("host.dialog.looking_for_ports")).disabled(true),
+                    ),
+                    Some(found) if found.is_empty() => {
+                        menu.item(PopupMenuItem::new(t!("host.dialog.no_ports")).disabled(true))
+                    }
+                    Some(found) => found.iter().fold(menu, |menu, port| {
+                        let (this, chosen) = (this.clone(), port.clone());
+                        menu.item(
+                            PopupMenuItem::new(port.clone())
+                                .checked(*port == device)
+                                .on_click(move |_, window, cx| {
+                                    this.update(cx, |form, cx| {
+                                        form.set_device(chosen.clone(), window, cx)
+                                    })
+                                    .ok();
+                                }),
+                        )
+                    }),
+                };
+                let this = this.clone();
+                menu.separator().item(
+                    PopupMenuItem::new(t!("host.dialog.look_for_ports_again")).on_click(
+                        move |_, window, cx| {
+                            this.update(cx, |form, cx| form.look_for_ports(window, cx))
+                                .ok();
+                        },
+                    ),
+                )
+            });
+        let this = cx.entity().downgrade();
+        let baud = self.baud.read(cx).value().trim().parse::<u32>().ok();
+        let rates_menu = Button::new("host-serial-rates")
+            .ghost()
+            .xsmall()
+            .icon(IconName::ChevronDown)
+            .tooltip(t!("host.dialog.baud_rates"))
+            .dropdown_menu_with_anchor(Anchor::TopRight, move |menu, _, _| {
+                COMMON_BAUD_RATES.iter().fold(menu, |menu, rate| {
+                    let (this, rate) = (this.clone(), *rate);
+                    menu.item(
+                        PopupMenuItem::new(rate.to_string())
+                            .checked(baud == Some(rate))
+                            .on_click(move |_, window, cx| {
+                                this.update(cx, |form, cx| form.set_baud(rate, window, cx))
+                                    .ok();
+                            }),
+                    )
+                })
+            });
+        // The device and its rate in a row of three: a quarter of the form
+        // leaves no room for 115200 beside the rate's menu.
+        let line = Form::new()
+            .columns(3)
+            .child(
+                Field::new()
+                    .label(t!("host.dialog.serial_device"))
+                    .required(true)
+                    .col_span(2)
+                    .child(
+                        Input::new(&self.device)
+                            .id("host-serial-device")
+                            .small()
+                            .suffix(ports_menu),
+                    ),
+            )
+            .child(
+                Field::new()
+                    .label(t!("host.dialog.baud_rate"))
+                    .required(true)
+                    .child(
+                        Input::new(&self.baud)
+                            .id("host-serial-baud")
+                            .small()
+                            .suffix(rates_menu),
+                    ),
+            );
+        form.child(Field::new().label_indent(false).col_span(4).child(line))
+            .child(
+                Field::new().label(t!("host.dialog.data_bits")).child(
+                    Select::new(&self.data_bits)
+                        .id("host-serial-data-bits")
+                        .small(),
+                ),
+            )
+            .child(
+                Field::new()
+                    .label(t!("host.dialog.parity"))
+                    .child(Select::new(&self.parity).id("host-serial-parity").small()),
+            )
+            .child(
+                Field::new().label(t!("host.dialog.stop_bits")).child(
+                    Select::new(&self.stop_bits)
+                        .id("host-serial-stop-bits")
+                        .small(),
+                ),
+            )
+            .child(
+                Field::new()
+                    .label(t!("host.dialog.flow_control"))
+                    .child(Select::new(&self.flow).id("host-serial-flow").small()),
+            )
+    }
+
     /// 「连接方式」: the choice, and below it what the choice needs.
     fn route_field(&self, cx: &mut Context<Self>) -> Field {
         let route = self.route;
@@ -1151,6 +1600,7 @@ fn available_jump_hosts(hosts: &[JumpHost], hops: &[Option<HostId>]) -> Vec<Jump
 
 impl Render for HostForm {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let serial = self.protocol == ProtocolChoice::Serial;
         let source = self.source;
         let keychain = self.fields.read(cx).keychain_available();
         let secret_note = if keychain {
@@ -1159,7 +1609,8 @@ impl Render for HostForm {
             t!("host.dialog.no_keychain_note")
         };
         // Four columns so the address and its port share a row, as they are
-        // written (`host:port`); every other field takes a row of its own.
+        // written (`host:port`), and a serial line's framing takes one row;
+        // every other field takes a row of its own.
         let form = Form::new()
             .columns(4)
             .child(
@@ -1168,6 +1619,78 @@ impl Render for HostForm {
                     .col_span(4)
                     .child(Input::new(&self.name).id("host-name").small()),
             )
+            .child(self.protocol_field(cx));
+        let form = if serial {
+            self.serial_fields(form, cx)
+        } else {
+            self.ssh_fields(form, cx)
+        };
+        // What only a saved host has.
+        let form = if self.temporary {
+            form
+        } else {
+            form.child(
+                Field::new()
+                    .label(t!("host.dialog.group"))
+                    .col_span(4)
+                    .child(Select::new(&self.group).small()),
+            )
+            .when(!serial, |form| form.child(self.route_field(cx)))
+            .child(
+                Field::new()
+                    .label(t!("host.dialog.notes"))
+                    .col_span(4)
+                    .child(
+                        div()
+                            .id("host-notes")
+                            .test_support()
+                            .w_full()
+                            .child(Textarea::new(&self.notes).text_sm()),
+                    ),
+            )
+        };
+        v_flex()
+            .gap_3()
+            .w_full()
+            .child(form)
+            .when(self.temporary, |form| {
+                form.child(
+                    div()
+                        .id("temporary-note")
+                        .test_support()
+                        .aria_label(t!("host.dialog.temporary_note"))
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t!("host.dialog.temporary_note")),
+                )
+            })
+            .when(
+                !self.temporary && !serial && source == AuthSource::Password,
+                |form| {
+                    form.child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(secret_note),
+                    )
+                },
+            )
+            .when(self.editing_connected, |form| {
+                form.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(t!("host.dialog.reconnect_note")),
+                )
+            })
+    }
+}
+
+impl HostForm {
+    /// An SSH host's fields: where it is, and how it logs in.
+    fn ssh_fields(&self, form: Form, cx: &mut Context<Self>) -> Form {
+        let source = self.source;
+        let form = form
             .child(
                 Field::new()
                     .label(t!("host.dialog.address"))
@@ -1204,65 +1727,22 @@ impl Render for HostForm {
                         })
                     }),
             );
-        let form = match source.auth() {
+        match source.auth() {
             Some(auth) => self.own_fields(form, auth, cx),
             None => form.child(self.credential_field(cx)),
-        };
-        // What only a saved host has.
-        let form = if self.temporary {
-            form
-        } else {
-            form.child(
-                Field::new()
-                    .label(t!("host.dialog.group"))
-                    .col_span(4)
-                    .child(Select::new(&self.group).small()),
-            )
-            .child(self.route_field(cx))
-            .child(
-                Field::new()
-                    .label(t!("host.dialog.notes"))
-                    .col_span(4)
-                    .child(
-                        div()
-                            .id("host-notes")
-                            .test_support()
-                            .w_full()
-                            .child(Textarea::new(&self.notes).text_sm()),
-                    ),
-            )
-        };
-        v_flex()
-            .gap_3()
-            .w_full()
-            .child(form)
-            .when(self.temporary, |form| {
-                form.child(
-                    div()
-                        .id("temporary-note")
-                        .test_support()
-                        .aria_label(t!("host.dialog.temporary_note"))
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(t!("host.dialog.temporary_note")),
-                )
-            })
-            .when(!self.temporary && source == AuthSource::Password, |form| {
-                form.child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(secret_note),
-                )
-            })
-            .when(self.editing_connected, |form| {
-                form.child(
-                    div()
-                        .text_sm()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(t!("host.dialog.reconnect_note")),
-                )
-            })
+        }
+    }
+}
+
+/// A device the device field gives as an example, the way this system
+/// names its serial ports.
+fn example_device() -> &'static str {
+    if cfg!(windows) {
+        "COM3"
+    } else if cfg!(target_os = "macos") {
+        "/dev/cu.usbserial-1410"
+    } else {
+        "/dev/ttyUSB0"
     }
 }
 

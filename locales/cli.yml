@@ -105,6 +105,12 @@ cli.field.auth:
 cli.field.route:
   zh-CN: 连接方式
   en: Connection
+cli.field.serial:
+  zh-CN: 串口
+  en: Serial port
+cli.field.flow_control:
+  zh-CN: 流控
+  en: Flow control
 cli.field.os:
   zh-CN: 系统
   en: System
@@ -141,6 +147,9 @@ cli.auth.credential:
 cli.auth.no_password:
   zh-CN: 无密码
   en: No password
+cli.flow.none:
+  zh-CN: 无
+  en: None
 cli.route.direct:
   zh-CN: 直接连接
   en: Direct
@@ -254,6 +263,9 @@ cli.server.change_timed_out:
 cli.server.not_absolute:
   zh-CN: 本地路径必须是绝对路径：%{path}
   en: "The local path must be absolute: %{path}"
+cli.server.not_ssh:
+  zh-CN: "%{name} 是串口主机，没有 SSH 连接，只能在 ShellRS 的终端里用"
+  en: "%{name} is a serial host. It has no SSH connection and can only be used in a ShellRS terminal."
 # The app's notification when a second ShellRS starts.
 cli.server.another_app:
   zh-CN: 另一个 ShellRS 已在提供外部 CLI
@@ -287,6 +299,24 @@ cli.host.proxy_password_without_user:
 cli.host.jump_temporary:
   zh-CN: 跳板只能是保存的主机：%{id} 是没有保存的连接
   en: "Jump hosts must be saved hosts: %{id} isn't saved."
+cli.host.jump_serial:
+  zh-CN: 跳板只能是 SSH 主机：%{id} 是串口主机
+  en: "Jump hosts must be SSH hosts: %{id} is a serial host."
+cli.host.protocol_fixed:
+  zh-CN: 协议在创建后不能更改
+  en: The protocol can’t be changed after the host is created.
+cli.host.serial_on_ssh:
+  zh-CN: 只有串口主机有 serial
+  en: Only a serial host has serial settings.
+cli.host.ssh_fields_on_serial:
+  zh-CN: 串口主机没有 host、port、user、auth、credential、password 和 route，设备和参数写在 serial 里
+  en: A serial host has no host, port, user, auth, credential, password or route. Give its device and line in serial.
+cli.host.data_bits:
+  zh-CN: data_bits 只能是 5、6、7 或 8
+  en: data_bits must be 5, 6, 7 or 8.
+cli.host.stop_bits:
+  zh-CN: stop_bits 只能是 1 或 2
+  en: stop_bits must be 1 or 2.
 cli.host.jump_self:
   zh-CN: 跳板主机不能是这台主机自己
   en: A host can't be its own jump host.

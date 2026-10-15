@@ -36,9 +36,15 @@ pub struct FakeTerminalFactory {
     /// The SFTP channels opened beside the shell, by the run (1 for the
     /// first connection, 2 after one reconnect…) that opened each.
     pub sftp_opens: Arc<Mutex<Vec<usize>>>,
+    /// How many times the line was broken (发送 Break).
+    pub breaks: Arc<AtomicUsize>,
 }
 
 impl FakeTerminalFactory {
+    pub fn breaks(&self) -> usize {
+        self.breaks.load(Ordering::SeqCst)
+    }
+
     pub fn answering(outputs: &[&str]) -> Self {
         Self {
             exec_outputs: Arc::new(Mutex::new(
@@ -129,6 +135,7 @@ impl TerminalTransportFactory for FakeTerminalFactory {
             exec_outputs: self.exec_outputs.clone(),
             exec_commands: self.exec_commands.clone(),
             sftp_opens: self.sftp_opens.clone(),
+            breaks: self.breaks.clone(),
         })
     }
 }
@@ -141,6 +148,7 @@ pub struct FakeTerminalTransport {
     pub exec_outputs: Arc<Mutex<std::collections::VecDeque<String>>>,
     pub exec_commands: Arc<Mutex<Vec<String>>>,
     pub sftp_opens: Arc<Mutex<Vec<usize>>>,
+    pub breaks: Arc<AtomicUsize>,
 }
 
 impl TerminalTransport for FakeTerminalTransport {
@@ -226,6 +234,9 @@ impl TerminalTransport for FakeTerminalTransport {
                         fingerprint: format!("SHA256:fake-{}", self.run),
                     }));
                 }
+                TerminalTransportCommand::SendBreak => {
+                    self.breaks.fetch_add(1, Ordering::SeqCst);
+                }
                 TerminalTransportCommand::PromptReply { .. } => {}
                 TerminalTransportCommand::Shutdown => break,
             }
@@ -270,10 +281,28 @@ pub fn fake_local_terminals() -> Arc<FixedLocalTerminalTransportProvider> {
     )))
 }
 
+/// Serial hosts' terminals that start, and never print anything.
+pub fn fake_serial_terminals() -> Arc<FixedSerialTerminalTransportProvider> {
+    Arc::new(FixedSerialTerminalTransportProvider::new(Arc::new(
+        FakeTerminalFactory::default(),
+    )))
+}
+
 pub fn open_workspace_with_remote_factory(
     cx: &mut TestAppContext,
     store: HostStore,
     factory: Arc<dyn TerminalTransportFactory>,
+) -> (WindowHandle<Root>, Entity<Workspace>) {
+    open_workspace_with_terminals(cx, store, factory, fake_serial_terminals())
+}
+
+/// With `serial` asked for each serial host's terminal, and `factory`
+/// giving every SSH host's.
+pub fn open_workspace_with_terminals(
+    cx: &mut TestAppContext,
+    store: HostStore,
+    factory: Arc<dyn TerminalTransportFactory>,
+    serial: Arc<FixedSerialTerminalTransportProvider>,
 ) -> (WindowHandle<Root>, Entity<Workspace>) {
     init_app(cx);
     // Dialogs still, as in every fixture: see `open_workspace_with_tester`.
@@ -287,6 +316,7 @@ pub fn open_workspace_with_remote_factory(
                 store,
                 cx.new(|_| settings_store()),
                 remote,
+                serial.clone(),
                 fake_local_terminals(),
                 Arc::new(FakeSftpProvider::default()),
                 Arc::new(FakeLocalDirectory::default()),

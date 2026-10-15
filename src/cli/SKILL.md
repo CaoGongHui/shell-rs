@@ -87,6 +87,7 @@ EOF
 - `group` is a path such as `生产/web`; groups that are not there are made.
 - A host logs in with `"auth": "password"` (its own password), `"credential"` (a saved credential, by its ID; the host takes the credential's user) or `"no_password"` (the SSH agent and the default keys).
 - `route` is `{"type": "direct"}`, `{"type": "jump", "hosts": ["<host-id>", ...]}` or `{"type": "proxy", "kind": "http", "host": "...", "port": 3128}`.
+- A host listed with `"protocol": "serial"` is a serial port of the user's computer, opened in a ShellRS terminal; it has `serial` (`device`, `baud`, `data_bits`, `parity`, `stop_bits`, `flow_control`) instead of `host`, `port`, `user`, `auth` and `route`. Create one with `{"name": "console", "serial": {"device": "/dev/ttyUSB0", "baud": 115200}}`. A host's protocol can't be changed. `exec`, `upload`, `download` and `sync` don't work on serial hosts.
 - A credential is `"kind": "password"`, `"key"` (with `key_path`, a key file on this machine, or `private_key`, the key's text for ShellRS to keep) or `"agent"`.
 - `hosts delete` refuses a host whose tabs are open in ShellRS, with `host_in_use`; `--force` closes them.
 
@@ -154,4 +155,5 @@ Errors are printed to stderr with a code in brackets, such as `[not_enabled]`. E
 - `terminal_busy` (`--terminal`): a full-screen program has the terminal, another `--terminal` command still runs there, the shell did not answer, or it did not start the command (a bastion host's command filter may hold it back). Tell the user the message.
 - `unsupported_shell` (`--terminal`): the terminal runs a shell other than bash, dash or busybox ash. Tell the user.
 - `too_long` (`--terminal`): split the command into shorter ones.
+- `not_ssh`: the host is a serial host, which has no SSH connection. Tell the user.
 - `connect_failed` saying there is no permission to connect to ShellRS: the agent's sandbox blocks local inter-process communication. Ask the user to allow it, or run the command outside the sandbox.

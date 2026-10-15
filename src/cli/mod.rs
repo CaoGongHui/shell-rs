@@ -45,9 +45,9 @@ pub(crate) use manage::{
 };
 pub use protocol::{
     AuthChoice, CliError, CredentialDeleted, CredentialDetails, CredentialFields,
-    CredentialKindChoice, ErrorCode, HostDeleted, HostDetails, HostFields, HostInfo, ProxyChoice,
-    Reply, Request, RouteDetails, RouteFields, Secret, TerminalContext, TransferCounters,
-    TransferSummary,
+    CredentialKindChoice, ErrorCode, FlowControlChoice, HostDeleted, HostDetails, HostFields,
+    HostInfo, ParityChoice, ProtocolChoice, ProxyChoice, Reply, Request, RouteDetails, RouteFields,
+    Secret, SerialDetails, SerialFields, TerminalContext, TransferCounters, TransferSummary,
 };
 pub use server::{ChangeReply, CliBackend, CliServer, CliTarget, CliUse};
 
@@ -79,6 +79,12 @@ Reads one JSON object from stdin. Every field may be left out; `update` changes 
               {\"type\": \"proxy\", \"kind\": \"http\" | \"socks5\", \"host\": ..., \"port\": ...,
                \"user\": ..., \"password\": ...}
   notes       Free text.
+  protocol    \"ssh\" (the default) or \"serial\", set when the host is created.
+  serial      A serial host's port of this computer and line, instead of host, port, user, auth,
+              credential, password and route (implies protocol \"serial\"):
+              {\"device\": \"/dev/ttyUSB0\" | \"COM3\", \"baud\": 115200, \"data_bits\": 5-8,
+               \"parity\": \"none\" | \"odd\" | \"even\", \"stop_bits\": 1 | 2,
+               \"flow_control\": \"none\" | \"rts_cts\" | \"xon_xoff\"}   (device required to create)
 What `shellrs hosts show <ID> --json` prints can be edited and passed back as it is.";
 
 const CREDENTIAL_FIELDS: &str = "\

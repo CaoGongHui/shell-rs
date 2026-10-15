@@ -65,7 +65,7 @@ impl Workspace {
     }
 
     /// An SSH terminal of `host` connected, or an SFTP tab: counted, then
-    /// counted again by how.
+    /// counted again by how. A serial host's terminal is counted alone.
     pub(super) fn count_connection(&self, host: HostId, sftp: bool, cx: &App) {
         if self.analytics.is_none() {
             return;
@@ -75,7 +75,9 @@ impl Workspace {
             return;
         };
         let mut counters = Vec::new();
-        if sftp {
+        if saved.is_serial() {
+            counters.push(Counter::Serial);
+        } else if sftp {
             counters.push(Counter::Sftp);
             if store.is_external(host) {
                 counters.push(Counter::SftpExternal);

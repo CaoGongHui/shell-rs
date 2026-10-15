@@ -13,6 +13,7 @@ mod outline;
 mod private_key;
 mod quick_connect;
 mod secret_fields;
+mod serial_settings;
 mod snippet;
 mod ssh_link;
 mod store;
@@ -26,7 +27,9 @@ pub use host_dialog::{
     open_temporary_connection_dialog,
 };
 pub use host_panel::{HostPanel, host_menu};
-pub use login::{HostLogin, JumpLogin, LoginMethod, LoginRoute, ProxyLogin};
+pub use login::{
+    HostConnection, HostLogin, JumpLogin, LoginMethod, LoginRoute, ProxyLogin, SerialLine,
+};
 pub use model::*;
 pub use outline::{
     HostNode, NodeDrop, first_matching_host, group_options, host_tree_items, matches_query,
@@ -34,6 +37,7 @@ pub use outline::{
 pub use private_key::{GeneratedKey, KeyAlgorithm, PastedKey, PastedKeyError, read_public_key};
 pub use quick_connect::{QuickChoice, QuickHost, open_quick_connect_dialog, quick_hosts};
 pub use secret_fields::SecretFields;
+pub use serial_settings::*;
 pub use snippet::*;
 pub use ssh_link::{LinkKind, SshLink, standard_url};
 pub use store::{HostStore, HostStoreEvent};

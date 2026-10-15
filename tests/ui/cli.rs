@@ -139,7 +139,10 @@ fn a_host_moved_to_another_port_keeps_its_password_until_told_otherwise(cx: &mut
     ) else {
         panic!("not changed");
     };
-    assert_eq!((changed.port, changed.password_saved), (2222, Some(true)));
+    assert_eq!(
+        (changed.port, changed.password_saved),
+        (Some(2222), Some(true))
+    );
     let after = SecretRef::password("postgres", "10.0.2.5", 2222);
     assert_eq!(
         secrets.get(&after).unwrap().as_deref().map(String::as_str),

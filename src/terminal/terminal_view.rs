@@ -406,6 +406,10 @@ impl TerminalView {
         self.engine.read(cx).reply_to_prompt(request_id, reply);
     }
 
+    pub fn send_break(&self, cx: &App) {
+        self.engine.read(cx).send_break();
+    }
+
     /// Forget everything in progress on the screen that is going away: IME
     /// composition, a selection drag, the context menu and the find bar.
     fn reset_interaction(&mut self) {

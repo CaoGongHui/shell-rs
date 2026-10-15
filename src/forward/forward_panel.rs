@@ -246,7 +246,7 @@ impl ForwardPanel {
         let target = self.target.clone();
         let (title, hint, button) = if !store.forwards().is_empty() {
             (t!("forward.panel.no_matches"), None, None)
-        } else if store.hosts().is_empty() {
+        } else if store.ssh_hosts().next().is_none() {
             (
                 t!("forward.panel.no_hosts"),
                 Some(t!("forward.panel.no_hosts_hint")),

@@ -375,12 +375,12 @@ impl Render for HostPanel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Plain snapshots for the row renderer: render callbacks must not
         // read entities.
-        let host_os: Rc<HashMap<HostId, HostOs>> = Rc::new(
+        let host_marks: Rc<HashMap<HostId, (Option<HostOs>, bool)>> = Rc::new(
             self.store
                 .read(cx)
                 .hosts()
                 .iter()
-                .filter_map(|host| host.os.map(|os| (host.id, os)))
+                .map(|host| (host.id, (host.os, host.is_serial())))
                 .collect(),
         );
         let tooltips: Rc<HashMap<HostId, RowTooltip>> = Rc::new(
@@ -462,7 +462,7 @@ impl Render for HostPanel {
                                             entry,
                                             selected,
                                             &group_counts,
-                                            &host_os,
+                                            &host_marks,
                                             &row_interactions,
                                             cx,
                                         )
@@ -563,7 +563,7 @@ fn render_row(
     entry: &TreeEntry,
     selected: bool,
     group_counts: &HashMap<GroupId, usize>,
-    host_os: &HashMap<HostId, HostOs>,
+    host_marks: &HashMap<HostId, (Option<HostOs>, bool)>,
     interactions: &RowInteractions,
     cx: &mut App,
 ) -> ListItem {
@@ -593,8 +593,9 @@ fn render_row(
             HostMark::new(
                 ("host-os", id.0),
                 item.label.clone(),
-                host_os.get(&id).copied(),
+                host_marks.get(&id).and_then(|(os, _)| *os),
             )
+            .serial(host_marks.get(&id).is_some_and(|(_, serial)| *serial))
             .small()
             .without_tooltip()
             .into_any_element(),
@@ -787,8 +788,11 @@ fn valid_drop(
 /// The menu of one host, wherever it is listed: the host tree and the
 /// start page's recent hosts both build it here, so they cannot drift.
 /// Built as it opens, from the host as it is then.
+///
+/// A serial host has no SFTP and no address to copy.
 pub fn host_menu(menu: PopupMenu, host: &Host) -> PopupMenu {
     let id = host.id;
+    let ssh = !host.is_serial();
     // Named after what the address is, as in the tabs' menus.
     let copy_address = if host.address_is_ip() {
         t!("host.menu.copy_ip")
@@ -800,11 +804,13 @@ pub fn host_menu(menu: PopupMenu, host: &Host) -> PopupMenu {
         Icon::new(CatalogIcon::Plug),
         Box::new(ConnectHost(id)),
     )
-    .menu_with_icon(
-        t!("host.menu.open_sftp"),
-        Icon::new(CatalogIcon::FolderTree),
-        Box::new(OpenExplorer(id)),
-    )
+    .when(ssh, |menu| {
+        menu.menu_with_icon(
+            t!("host.menu.open_sftp"),
+            Icon::new(CatalogIcon::FolderTree),
+            Box::new(OpenExplorer(id)),
+        )
+    })
     .separator()
     .menu_with_icon(
         t!("host.menu.edit_host"),
@@ -817,11 +823,13 @@ pub fn host_menu(menu: PopupMenu, host: &Host) -> PopupMenu {
         Box::new(DuplicateHost(id)),
     )
     .separator()
-    .menu_with_icon(
-        copy_address,
-        Icon::new(CatalogIcon::ClipboardCopy),
-        Box::new(CopyHostAddress(id)),
-    )
+    .when(ssh, |menu| {
+        menu.menu_with_icon(
+            copy_address,
+            Icon::new(CatalogIcon::ClipboardCopy),
+            Box::new(CopyHostAddress(id)),
+        )
+    })
     .menu_with_icon(
         t!("host.menu.copy_id"),
         Icon::new(CatalogIcon::ClipboardCopy),

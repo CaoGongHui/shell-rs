@@ -4,7 +4,7 @@ use rand::{Rng as _, distr::Alphanumeric};
 use crate::i18n::t;
 use crate::secrets::SecretRef;
 
-use super::CredentialId;
+use super::{CredentialId, Protocol, SerialSettings};
 
 /// Stable identity of a host. Never reused within a process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -389,8 +389,9 @@ impl ConnectionState {
     }
 }
 
-/// A saved SSH host. `group` is `None` for a host that sits at the root
-/// of the tree rather than inside a folder.
+/// A saved host: an SSH server, or a serial port of this computer. `group`
+/// is `None` for a host that sits at the root of the tree rather than
+/// inside a folder.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct Host {
@@ -398,7 +399,10 @@ pub struct Host {
     /// Set once when the host is created; editing never changes it.
     pub public_id: PublicId,
     pub name: SharedString,
+    /// SSH or serial, for good: see [`Protocol`].
+    pub protocol: Protocol,
     /// The host name or IP address it is reached at: 「地址」 in the form.
+    /// A serial host's device, such as `/dev/cu.usbserial-1410` or `COM3`.
     pub address: SharedString,
     pub port: u16,
     /// The user it logs in as. For a host using a credential this is the
@@ -431,6 +435,7 @@ impl Host {
             id,
             public_id: PublicId::generate(),
             name: draft.name,
+            protocol: draft.protocol,
             address: draft.address,
             port: draft.port,
             user: draft.user,
@@ -445,9 +450,17 @@ impl Host {
         }
     }
 
-    /// `user@address:port`, as shown in the status bar.
+    /// `user@address:port`, as shown in the status bar; a serial host's
+    /// device and line, `/dev/cu.usbserial-1410 · 115200 8N1`.
     pub fn endpoint(&self) -> String {
-        format!("{}@{}:{}", self.user, self.address, self.port)
+        match self.protocol {
+            Protocol::Ssh => format!("{}@{}:{}", self.user, self.address, self.port),
+            Protocol::Serial(settings) => format!("{} · {}", self.address, settings.summary()),
+        }
+    }
+
+    pub fn is_serial(&self) -> bool {
+        self.protocol.is_serial()
     }
 
     /// Whether the address is a literal IP address rather than a name, so a
@@ -467,6 +480,7 @@ impl Host {
     pub fn draft(&self) -> HostDraft {
         HostDraft {
             name: self.name.clone(),
+            protocol: self.protocol,
             address: self.address.clone(),
             port: self.port,
             user: self.user.clone(),
@@ -529,6 +543,7 @@ impl HostGroup {
 #[non_exhaustive]
 pub struct HostDraft {
     pub name: SharedString,
+    pub protocol: Protocol,
     pub address: SharedString,
     pub port: u16,
     pub user: SharedString,
@@ -550,6 +565,7 @@ impl HostDraft {
     ) -> Self {
         Self {
             name: name.into(),
+            protocol: Protocol::Ssh,
             address: address.into(),
             port,
             user: user.into(),
@@ -558,6 +574,19 @@ impl HostDraft {
             route: Route::Direct,
             group,
             notes: SharedString::default(),
+        }
+    }
+
+    /// A serial host on `device`. What only SSH uses keeps its default.
+    pub fn serial(
+        name: impl Into<SharedString>,
+        device: impl Into<SharedString>,
+        settings: SerialSettings,
+        group: Option<GroupId>,
+    ) -> Self {
+        Self {
+            protocol: Protocol::Serial(settings),
+            ..Self::new(name, device, SSH_PORT, "", AuthKind::NoPassword, group)
         }
     }
 
@@ -594,6 +623,9 @@ impl HostDraft {
     pub fn validated(mut self) -> Result<Self, HostDraftError> {
         self.name = self.name.trim().to_string().into();
         self.address = self.address.trim().to_string().into();
+        if let Protocol::Serial(settings) = self.protocol {
+            return self.validated_serial(settings);
+        }
         if self.address.is_empty() {
             return Err(HostDraftError::Address);
         }
@@ -631,7 +663,29 @@ impl HostDraft {
         self.notes = self.notes.trim().to_string().into();
         Ok(self)
     }
+
+    /// [`Self::validated`] for a serial host, which needs a device and a
+    /// rate and keeps none of what only SSH uses.
+    fn validated_serial(self, settings: SerialSettings) -> Result<Self, HostDraftError> {
+        if self.address.is_empty() {
+            return Err(HostDraftError::Device);
+        }
+        if settings.baud == 0 {
+            return Err(HostDraftError::Baud);
+        }
+        let name = if self.name.is_empty() {
+            self.address.clone()
+        } else {
+            self.name.clone()
+        };
+        let notes = self.notes.trim().to_string();
+        Ok(Self::serial(name, self.address, settings, self.group).with_notes(notes))
+    }
 }
+
+/// The port of an SSH host that names none, also what a serial host keeps
+/// in the column it has no use for.
+pub const SSH_PORT: u16 = 22;
 
 /// Why a host draft cannot be saved. `Display` is the text the host form
 /// shows.
@@ -639,6 +693,8 @@ impl HostDraft {
 pub enum HostDraftError {
     Address,
     Port,
+    Device,
+    Baud,
     NoJumpHosts,
     DeletedJumpHost,
     ProxyAddress,
@@ -650,6 +706,8 @@ impl HostDraftError {
         match self {
             HostDraftError::Address => t!("host.draft.address"),
             HostDraftError::Port => t!("host.draft.port"),
+            HostDraftError::Device => t!("host.draft.device"),
+            HostDraftError::Baud => t!("host.draft.baud"),
             HostDraftError::NoJumpHosts => t!("host.draft.no_jump_hosts"),
             HostDraftError::DeletedJumpHost => t!("host.draft.deleted_jump_host"),
             HostDraftError::ProxyAddress => t!("host.draft.proxy_address"),
@@ -701,6 +759,51 @@ mod tests {
             .validated()
             .unwrap_err();
         assert_eq!(error, HostDraftError::Port);
+    }
+
+    #[test]
+    fn a_serial_host_needs_a_device_and_a_rate_and_keeps_nothing_of_ssh() {
+        let settings = SerialSettings::default();
+        let draft = HostDraft::serial(" ", " /dev/ttyUSB0 ", settings, Some(GroupId(2)))
+            .with_notes(" 机柜 3 ")
+            .validated()
+            .unwrap();
+        assert_eq!(draft.name.as_ref(), "/dev/ttyUSB0");
+        assert_eq!(draft.address.as_ref(), "/dev/ttyUSB0");
+        assert_eq!(draft.protocol, Protocol::Serial(settings));
+        assert_eq!(draft.user.as_ref(), "");
+        assert_eq!(draft.route, Route::Direct);
+        assert_eq!(draft.group, Some(GroupId(2)));
+        assert_eq!(draft.notes.as_ref(), "机柜 3");
+
+        let error = HostDraft::serial("console", " ", settings, None)
+            .validated()
+            .unwrap_err();
+        assert_eq!(error, HostDraftError::Device);
+        let silent = SerialSettings {
+            baud: 0,
+            ..settings
+        };
+        let error = HostDraft::serial("console", "COM3", silent, None)
+            .validated()
+            .unwrap_err();
+        assert_eq!(error, HostDraftError::Baud);
+    }
+
+    #[test]
+    fn a_serial_host_shows_its_device_and_line_where_ssh_shows_its_endpoint() {
+        let ssh = Host::new(
+            HostId(1),
+            HostDraft::new("web", "10.0.0.1", 22, "root", AuthKind::Password, None),
+        );
+        assert_eq!(ssh.endpoint(), "root@10.0.0.1:22");
+        let serial = Host::new(
+            HostId(2),
+            HostDraft::serial("console", "COM3", SerialSettings::default(), None),
+        );
+        assert_eq!(serial.endpoint(), "COM3 · 115200 8N1");
+        assert!(serial.is_serial());
+        assert!(!ssh.is_serial());
     }
 
     #[test]

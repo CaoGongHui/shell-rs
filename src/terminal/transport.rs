@@ -8,7 +8,7 @@ use tokio::sync::oneshot;
 use super::{LocalShell, TerminalSize};
 use crate::connection::Latency;
 use crate::connection::{ConnectionPrompt, ConnectionPromptReply};
-use crate::host::{HostLogin, HostOs};
+use crate::host::{HostConnection, HostLogin, HostOs, SerialLine};
 
 /// Commands accepted by every terminal byte-stream transport.
 pub enum TerminalTransportCommand {
@@ -24,6 +24,10 @@ pub enum TerminalTransportCommand {
     /// Open an SFTP channel beside the shell, for the right sidebar's
     /// 文件. Dropped like `Exec` by a transport without a connection.
     OpenSftp(SftpChannelRequest),
+    /// Hold the line in the break condition for a moment, as a serial
+    /// console's 发送 Break does. Only a serial transport has a line to
+    /// break; the others drop it.
+    SendBreak,
     Shutdown,
 }
 
@@ -112,6 +116,7 @@ impl std::fmt::Debug for TerminalTransportCommand {
                 .field(&request.command.len())
                 .finish(),
             Self::OpenSftp(_) => formatter.write_str("OpenSftp"),
+            Self::SendBreak => formatter.write_str("SendBreak"),
             Self::Shutdown => formatter.write_str("Shutdown"),
         }
     }
@@ -161,6 +166,32 @@ pub trait RemoteTerminalTransportProvider: Send + Sync + 'static {
 
 pub type SharedRemoteTerminalTransportProvider = Arc<dyn RemoteTerminalTransportProvider>;
 
+/// Creates the factory of a serial host's terminal from the line the store
+/// has for it, asked when it opens and when it reconnects. The workspace owns
+/// this boundary too, and UI tests inject a fake.
+pub trait SerialTerminalTransportProvider: Send + Sync + 'static {
+    fn factory_for(&self, line: &SerialLine) -> SharedTerminalTransportFactory;
+}
+
+pub type SharedSerialTerminalTransportProvider = Arc<dyn SerialTerminalTransportProvider>;
+
+/// Where a host's terminal gets its bytes: an SSH connection, or a serial
+/// port of this computer.
+#[derive(Clone)]
+pub struct HostTerminalTransports {
+    pub ssh: SharedRemoteTerminalTransportProvider,
+    pub serial: SharedSerialTerminalTransportProvider,
+}
+
+impl HostTerminalTransports {
+    pub fn factory_for(&self, connection: &HostConnection) -> SharedTerminalTransportFactory {
+        match connection {
+            HostConnection::Ssh(login) => self.ssh.factory_for(login),
+            HostConnection::Serial(line) => self.serial.factory_for(line),
+        }
+    }
+}
+
 /// Creates the factory of a local terminal for the shell the settings name,
 /// asked when it opens and when it restarts, so a changed setting reaches
 /// the next one. Like the remote provider, the workspace owns this boundary
@@ -201,6 +232,40 @@ impl LocalTerminalTransportProvider for FixedLocalTerminalTransportProvider {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .push(shell.clone());
+        self.factory.clone()
+    }
+}
+
+/// For tests: every serial terminal gets the same factory, and the lines
+/// asked for are kept.
+pub struct FixedSerialTerminalTransportProvider {
+    factory: SharedTerminalTransportFactory,
+    lines: Mutex<Vec<SerialLine>>,
+}
+
+impl FixedSerialTerminalTransportProvider {
+    pub fn new(factory: SharedTerminalTransportFactory) -> Self {
+        Self {
+            factory,
+            lines: Default::default(),
+        }
+    }
+
+    /// The line of each serial terminal started, in order.
+    pub fn lines(&self) -> Vec<SerialLine> {
+        self.lines
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+}
+
+impl SerialTerminalTransportProvider for FixedSerialTerminalTransportProvider {
+    fn factory_for(&self, line: &SerialLine) -> SharedTerminalTransportFactory {
+        self.lines
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(line.clone());
         self.factory.clone()
     }
 }

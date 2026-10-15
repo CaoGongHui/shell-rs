@@ -33,9 +33,9 @@ use crate::app::{
     MoveHostNode, NewChildGroup, NewGroup, NewHost, NewHostInGroup, NewLocalTerminal,
     NewTemporaryConnection, OpenExplorer, OpenSettings, PasteTerminal, QuickConnect,
     ReconnectTerminal, RefreshCliIntegration, RemoveAgentSkill, RemoveCliCommand, RenameExplorer,
-    RenameGroup, RenameTerminal, RestartLocalTerminal, SelectAllTerminal, SetFileSizeFormat,
-    ToggleHiddenFiles, ToggleHostPanel, ToggleTheme, ToolKind, ZoomIn, ZoomOut, ZoomReset,
-    ZoomTerminalIn, ZoomTerminalOut, ZoomTerminalReset,
+    RenameGroup, RenameTerminal, RestartLocalTerminal, SelectAllTerminal, SendBreak,
+    SetFileSizeFormat, ToggleHiddenFiles, ToggleHostPanel, ToggleTheme, ToolKind, ZoomIn, ZoomOut,
+    ZoomReset, ZoomTerminalIn, ZoomTerminalOut, ZoomTerminalReset,
 };
 use crate::cli::{CliIntegration, CliServer, IntegrationPaths, SshCliBackend};
 use crate::connection::{
@@ -67,11 +67,11 @@ use crate::sftp::{
 };
 use crate::shared::{commit_footer, confirm_danger, open_rename_tab_dialog};
 use crate::terminal::{
-    DEFAULT_FONT_SIZE, LocalPtyTransportProvider, LocalShell, LocalTerminalId, LocalTerminalPanel,
-    LocalTerminalPanelEvent, RemoteTerminalId, SearchDirection,
-    SharedLocalTerminalTransportProvider, SharedRemoteTerminalTransportProvider,
-    SharedTerminalTransportFactory, TerminalLifecycle, TerminalPanel, TerminalPanelEvent,
-    TerminalView,
+    DEFAULT_FONT_SIZE, HostTerminalTransports, LocalPtyTransportProvider, LocalShell,
+    LocalTerminalId, LocalTerminalPanel, LocalTerminalPanelEvent, RemoteTerminalId,
+    SearchDirection, SharedLocalTerminalTransportProvider, SharedRemoteTerminalTransportProvider,
+    SharedSerialTerminalTransportProvider, SharedTerminalTransportFactory, TerminalLifecycle,
+    TerminalPanel, TerminalPanelEvent, TerminalView,
 };
 use crate::update::{UpdateServices, Updater, UpdaterEvent};
 
@@ -185,7 +185,7 @@ pub struct Workspace {
     /// one that only records.
     pub(super) analytics: Option<super::analytics::Reporting>,
     local_terminal_provider: SharedLocalTerminalTransportProvider,
-    remote_terminal_provider: SharedRemoteTerminalTransportProvider,
+    host_terminals: HostTerminalTransports,
     sftp_provider: SharedSftpTransportProvider,
     pub(super) local_directory_provider: SharedLocalDirectoryProvider,
     /// Backs the host dialog's 「测试连接」.
@@ -250,6 +250,7 @@ impl Workspace {
             store,
             settings,
             remote,
+            Arc::new(crate::serial::SerialTransportProvider),
             Arc::new(LocalPtyTransportProvider),
             sftp.clone(),
             Arc::new(SystemLocalDirectoryProvider),
@@ -311,6 +312,7 @@ impl Workspace {
         store: Entity<HostStore>,
         settings: Entity<SettingsStore>,
         remote_terminal_provider: SharedRemoteTerminalTransportProvider,
+        serial_terminal_provider: SharedSerialTerminalTransportProvider,
         local_terminal_provider: SharedLocalTerminalTransportProvider,
         sftp_provider: SharedSftpTransportProvider,
         local_directory_provider: SharedLocalDirectoryProvider,
@@ -320,6 +322,10 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> Self {
         let focus_handle = cx.focus_handle();
+        let host_terminals = HostTerminalTransports {
+            ssh: remote_terminal_provider,
+            serial: serial_terminal_provider,
+        };
         let recent = cx.new(|cx| RecentHosts::new(store.clone(), focus_handle.clone(), cx));
         let (dock_area, skin) = WorkspaceDockSkin::dock_area(
             DOCK_ID,
@@ -487,14 +493,8 @@ impl Workspace {
         for id in connected {
             let terminal_id = RemoteTerminalId(next_remote_terminal_id);
             next_remote_terminal_id += 1;
-            let (panel, subscription) = new_terminal_panel(
-                &store,
-                remote_terminal_provider.clone(),
-                terminal_id,
-                id,
-                window,
-                cx,
-            );
+            let (panel, subscription) =
+                new_terminal_panel(&store, host_terminals.clone(), terminal_id, id, window, cx);
             center = center.panel_view(panel_handle(panel.clone()), cx);
             subscriptions.push(subscription);
             let focus = panel.read(cx).focus_handle(cx);
@@ -561,7 +561,7 @@ impl Workspace {
             updater,
             analytics: None,
             local_terminal_provider,
-            remote_terminal_provider,
+            host_terminals,
             sftp_provider,
             local_directory_provider,
             connection_tester,
@@ -1193,7 +1193,7 @@ impl Workspace {
         self.next_remote_terminal_id += 1;
         let (panel, subscription) = new_terminal_panel(
             &self.store,
-            self.remote_terminal_provider.clone(),
+            self.host_terminals.clone(),
             terminal_id,
             host_id,
             window,
@@ -1229,7 +1229,13 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.store.read(cx).host(host_id).is_none() {
+        // A serial host has no SFTP; nothing offers it one.
+        if self
+            .store
+            .read(cx)
+            .host(host_id)
+            .is_none_or(|host| host.is_serial())
+        {
             return;
         }
         // Every request opens a tab of its own, as connecting does for
@@ -1997,6 +2003,12 @@ impl Workspace {
         }
     }
 
+    fn on_send_break(&mut self, action: &SendBreak, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(terminal) = self.terminals.get(&action.0) {
+            terminal.read(cx).send_break(cx);
+        }
+    }
+
     fn on_disconnect_terminal(
         &mut self,
         action: &DisconnectTerminal,
@@ -2437,22 +2449,14 @@ impl Workspace {
 
 fn new_terminal_panel(
     store: &Entity<HostStore>,
-    remote_provider: SharedRemoteTerminalTransportProvider,
+    transports: HostTerminalTransports,
     terminal_id: RemoteTerminalId,
     host_id: HostId,
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> (Entity<TerminalPanel>, Subscription) {
-    let panel = cx.new(|cx| {
-        TerminalPanel::new(
-            terminal_id,
-            host_id,
-            store.clone(),
-            remote_provider,
-            window,
-            cx,
-        )
-    });
+    let panel = cx
+        .new(|cx| TerminalPanel::new(terminal_id, host_id, store.clone(), transports, window, cx));
     let subscription = cx.subscribe_in(
         &panel,
         window,
@@ -2483,6 +2487,15 @@ fn new_terminal_panel(
             }
             TerminalPanelEvent::Connected(terminal_id, host_id) => {
                 this.count_connection(*host_id, false, cx);
+                // A serial line has no 文件 beside it.
+                if this
+                    .store
+                    .read(cx)
+                    .host(*host_id)
+                    .is_some_and(|host| host.is_serial())
+                {
+                    return;
+                }
                 // A new connection, maybe to another machine: its folder is
                 // what it reports from now on, and it is checked afresh,
                 // first, so the check runs before 文件's channel opens.
@@ -2785,6 +2798,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_disconnect_host))
             .on_action(cx.listener(Self::on_reconnect_terminal))
             .on_action(cx.listener(Self::on_disconnect_terminal))
+            .on_action(cx.listener(Self::on_send_break))
             .on_action(cx.listener(Self::on_open_explorer))
             .on_action(cx.listener(Self::on_explorer_action))
             .on_action(cx.listener(Self::on_explorer_shortcut))

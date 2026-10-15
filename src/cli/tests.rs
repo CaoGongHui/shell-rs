@@ -14,8 +14,8 @@ use super::client::{self, Console};
 use super::link::OpenLink;
 use super::manage::CliChange;
 use super::protocol::{
-    AuthChoice, CliError, CredentialDetails, ErrorCode, HostDetails, HostFields, HostInfo, Reply,
-    Request, RouteDetails, Secret, TransferCounters, TransferSummary,
+    AuthChoice, CliError, CredentialDetails, ErrorCode, HostDetails, HostFields, HostInfo,
+    ProtocolChoice, Reply, Request, RouteDetails, Secret, TransferCounters, TransferSummary,
 };
 use super::server::{CliBackend, CliServer, CliTarget, CliUse};
 use super::{Cli, Command, CredentialsCommand, HostsCommand};
@@ -23,7 +23,7 @@ use super::{ConsoleText, ExecJson, exec_request, normalize_command};
 use crate::app::cli_endpoint;
 use crate::host::{
     AuthKind, CredentialDraft, CredentialKind, GroupDraft, Host, HostDraft, HostId, HostStore,
-    SshLink,
+    SerialSettings, SshLink,
 };
 use crate::secrets::SecretRef;
 use crate::ssh::ExecStream;
@@ -133,6 +133,49 @@ fn store() -> HostStore {
     store.insert_unnotified(draft("web-01", "10.0.1.12", production));
     store.insert_unnotified(draft("db-01", "10.0.2.5", database));
     store
+}
+
+#[test]
+fn a_serial_host_is_listed_but_runs_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = cli_endpoint(dir.path());
+    let server = CliServer::start(socket.clone(), Arc::new(FakeBackend::default())).unwrap();
+    let mut store = store();
+    let console = store.insert_unnotified(HostDraft::serial(
+        "console",
+        "COM3",
+        SerialSettings::default(),
+        None,
+    ));
+    server.set_hosts(&store);
+    server.set_enabled(true);
+    let id = store.host(console).unwrap().public_id.to_string();
+
+    let (code, stdout, _) = run(
+        &socket,
+        Request::List {
+            query: Some("console".into()),
+        },
+        false,
+    );
+    assert_eq!(code, 0);
+    assert!(stdout.contains("COM3 · 115200 8N1"), "{stdout}");
+
+    for request in [
+        Request::Exec {
+            host: id.clone(),
+            command: "true".into(),
+        },
+        Request::ExecInTerminal {
+            host: id.clone(),
+            command: "true".into(),
+        },
+    ] {
+        let (code, _, stderr) = run(&socket, request, false);
+        assert_eq!(code, 255);
+        let stderr = String::from_utf8(stderr).unwrap();
+        assert!(stderr.contains("[not_ssh] console 是串口主机"), "{stderr}");
+    }
 }
 
 struct Fixture {
@@ -817,13 +860,15 @@ fn saved_host(name: &str) -> HostDetails {
         id: "Jwg5rHvXCxw89paM".into(),
         name: name.into(),
         group: None,
-        host: "10.0.0.9".into(),
-        port: 22,
-        user: "root".into(),
-        auth: AuthChoice::Password,
+        protocol: ProtocolChoice::Ssh,
+        host: Some("10.0.0.9".into()),
+        port: Some(22),
+        user: Some("root".into()),
+        auth: Some(AuthChoice::Password),
         credential: None,
         password_saved: Some(true),
-        route: RouteDetails::Direct,
+        route: Some(RouteDetails::Direct),
+        serial: None,
         notes: String::new(),
         os: None,
         temporary: false,
@@ -983,13 +1028,16 @@ fn showing_a_host_or_a_credential_says_what_is_saved_and_never_what() {
     let web = show(&web_host);
     assert_eq!(
         (web.auth, web.password_saved),
-        (AuthChoice::Password, Some(true))
+        (Some(AuthChoice::Password), Some(true))
     );
     assert_eq!(web.group.as_deref(), Some("生产"));
     let db = show(store.host(db).unwrap());
-    assert_eq!(db.auth, AuthChoice::Credential);
+    assert_eq!(db.auth, Some(AuthChoice::Credential));
     assert_eq!(db.credential.as_deref(), Some(keychain_id.as_str()));
-    assert_eq!((db.user.as_str(), db.password_saved), ("deploy", None));
+    assert_eq!(
+        (db.user.as_deref(), db.password_saved),
+        (Some("deploy"), None)
+    );
 
     let (_, table, _) = run(
         &fixture.socket,

@@ -14,9 +14,10 @@ use super::database::now_seconds;
 use super::private_key::{is_kept_in, write_key_file};
 use super::{
     AuthKind, BookmarkSide, ConnectionState, Credential, CredentialDraft, CredentialId,
-    CredentialKind, ForwardDraft, ForwardId, ForwardRule, GroupDraft, GroupId, Host, HostDatabase,
-    HostDraft, HostGroup, HostId, HostLogin, HostNode, HostOs, JumpLogin, LoginRoute, NodeDrop,
-    ProxyLogin, PublicId, Route, Snippet, SnippetCategory, SnippetScope, SshLink, StoredData,
+    CredentialKind, ForwardDraft, ForwardId, ForwardRule, GroupDraft, GroupId, Host,
+    HostConnection, HostDatabase, HostDraft, HostGroup, HostId, HostLogin, HostNode, HostOs,
+    JumpLogin, LoginRoute, NodeDrop, Protocol, ProxyLogin, PublicId, Route, SerialLine, Snippet,
+    SnippetCategory, SnippetScope, SshLink, StoredData,
 };
 
 mod snippets;
@@ -406,6 +407,11 @@ impl HostStore {
         &self.hosts
     }
 
+    /// The saved SSH hosts: what a forward or a jump can go through.
+    pub fn ssh_hosts(&self) -> impl Iterator<Item = &Host> {
+        self.hosts.iter().filter(|host| !host.is_serial())
+    }
+
     /// A saved host, or a temporary one.
     pub fn host(&self, id: HostId) -> Option<&Host> {
         self.saved_host(id)
@@ -415,6 +421,11 @@ impl HostStore {
     /// A saved host only: what the database's foreign keys may point at.
     pub(crate) fn saved_host(&self, id: HostId) -> Option<&Host> {
         self.hosts.iter().find(|host| host.id == id)
+    }
+
+    /// A saved SSH host: what a jump host or a forward may go through.
+    pub fn saved_ssh_host(&self, id: HostId) -> Option<&Host> {
+        self.saved_host(id).filter(|host| !host.is_serial())
     }
 
     fn host_mut(&mut self, id: HostId) -> Option<&mut Host> {
@@ -629,7 +640,7 @@ impl HostStore {
     /// host using it as a jump host.
     pub fn update(&mut self, id: HostId, draft: HostDraft, cx: &mut Context<Self>) -> bool {
         let logins = self.logins();
-        let previous = self.login(id);
+        let previous = self.ssh_login(id);
         let updated = self.update_unnotified(id, draft);
         if updated {
             if let Some(host) = self.host(id) {
@@ -647,7 +658,15 @@ impl HostStore {
         updated
     }
 
+    /// The protocol is the host's for good: a draft of the other one is
+    /// refused.
     pub fn update_unnotified(&mut self, id: HostId, draft: HostDraft) -> bool {
+        if self
+            .saved_host(id)
+            .is_some_and(|host| host.is_serial() != draft.protocol.is_serial())
+        {
+            return false;
+        }
         let mut draft = normalized(&self.credentials, draft);
         draft.route = self.normalized_route(draft.route, Some(id));
         let new_order = self.last_host_order(draft.group, Some(id));
@@ -677,7 +696,7 @@ impl HostStore {
     /// their jump hosts, empty, and are not reconnected: deleting a host does
     /// not drop a working connection behind it.
     pub fn remove(&mut self, id: HostId, cx: &mut Context<Self>) -> bool {
-        let login = self.login(id);
+        let login = self.ssh_login(id);
         let removed = self.remove_unnotified(id);
         if removed {
             self.persist(Change::DeleteHost, cx, |db| db.remove_host(id));
@@ -957,7 +976,7 @@ impl HostStore {
     }
 
     pub fn insert_forward_unnotified(&mut self, draft: ForwardDraft) -> Option<ForwardId> {
-        self.saved_host(draft.host)?;
+        self.saved_ssh_host(draft.host)?;
         let sort_order = self
             .forwards
             .iter()
@@ -997,7 +1016,7 @@ impl HostStore {
     }
 
     pub fn update_forward_unnotified(&mut self, id: ForwardId, draft: ForwardDraft) -> bool {
-        if self.saved_host(draft.host).is_none() {
+        if self.saved_ssh_host(draft.host).is_none() {
             return false;
         }
         let Some(rule) = self.forwards.iter_mut().find(|rule| rule.id == id) else {
@@ -1046,6 +1065,29 @@ impl HostStore {
     /// looked up. What the terminal, SFTP, forward and CLI workers are given.
     pub fn login(&self, id: HostId) -> Option<HostLogin> {
         self.host(id).map(|host| self.login_of(host))
+    }
+
+    /// How a host's terminal connects: its login for an SSH host, its
+    /// device and line for a serial one.
+    pub fn connection(&self, id: HostId) -> Option<HostConnection> {
+        self.host(id).map(|host| self.connection_of(host))
+    }
+
+    pub fn connection_of(&self, host: &Host) -> HostConnection {
+        match host.protocol {
+            Protocol::Ssh => HostConnection::Ssh(self.login_of(host)),
+            Protocol::Serial(settings) => HostConnection::Serial(SerialLine {
+                device: host.address.to_string(),
+                settings,
+            }),
+        }
+    }
+
+    /// The login of an SSH host; a serial host has none.
+    fn ssh_login(&self, id: HostId) -> Option<HostLogin> {
+        self.host(id)
+            .filter(|host| !host.is_serial())
+            .map(|host| self.login_of(host))
     }
 
     pub fn login_of(&self, host: &Host) -> HostLogin {
@@ -1099,21 +1141,21 @@ impl HostStore {
             .count()
     }
 
-    /// Every host's login, temporary ones included, to tell afterwards
+    /// Every host's connection, temporary ones included, to tell afterwards
     /// whose changed.
-    fn logins(&self) -> Vec<(HostId, HostLogin)> {
+    fn logins(&self) -> Vec<(HostId, HostConnection)> {
         self.hosts
             .iter()
             .chain(&self.temporary)
-            .map(|host| (host.id, self.login_of(host)))
+            .map(|host| (host.id, self.connection_of(host)))
             .collect()
     }
 
-    /// Tell the workspace about every host that logs in differently than
+    /// Tell the workspace about every host that connects differently than
     /// it did in `before`, so its connections reconnect.
-    fn emit_changed_logins(&self, before: Vec<(HostId, HostLogin)>, cx: &mut Context<Self>) {
+    fn emit_changed_logins(&self, before: Vec<(HostId, HostConnection)>, cx: &mut Context<Self>) {
         for (id, login) in before {
-            if self.login(id).is_some_and(|now| now != login) {
+            if self.connection(id).is_some_and(|now| now != login) {
                 cx.emit(HostStoreEvent::ConnectionSettingsChanged(id));
             }
         }
@@ -1191,7 +1233,9 @@ impl HostStore {
             self.forget_key_file(path, cx);
         }
         for (host, before) in &logins {
-            if self.host(*host).is_some_and(|s| s.credential == Some(id)) {
+            if let HostConnection::Ssh(before) = before
+                && self.host(*host).is_some_and(|s| s.credential == Some(id))
+            {
                 self.forget_passwords_of(before, cx);
             }
         }
@@ -1627,7 +1671,7 @@ impl HostStore {
     /// proxies' included.
     fn passwords_of(&self, ids: &[HostId]) -> Vec<SecretRef> {
         let mut passwords: Vec<SecretRef> = Vec::new();
-        for login in ids.iter().filter_map(|id| self.login(*id)) {
+        for login in ids.iter().filter_map(|id| self.ssh_login(*id)) {
             for secret in [Some(login.password), login.route.proxy_password()]
                 .into_iter()
                 .flatten()
@@ -1664,10 +1708,13 @@ impl HostStore {
     /// through a proxy with it. Entries are shared, so one may only be
     /// cleaned up once the last host using it is gone.
     fn password_in_use(&self, secret: &SecretRef) -> bool {
-        self.hosts.iter().any(|host| {
-            let login = self.login_of(host);
-            login.password == *secret || login.route.proxy_password().as_ref() == Some(secret)
-        })
+        self.hosts
+            .iter()
+            .filter(|host| !host.is_serial())
+            .any(|host| {
+                let login = self.login_of(host);
+                login.password == *secret || login.route.proxy_password().as_ref() == Some(secret)
+            })
     }
 
     /// Write a change through to the database, when there is one. A failed
@@ -1774,7 +1821,7 @@ impl HostStore {
                 let hops: Vec<_> = hops
                     .into_iter()
                     .filter(|hop| hop.is_none() || *hop != own)
-                    .map(|hop| hop.filter(|id| self.saved_host(*id).is_some()))
+                    .map(|hop| hop.filter(|id| self.saved_ssh_host(*id).is_some()))
                     .collect();
                 if hops.is_empty() {
                     Route::Direct
@@ -1791,6 +1838,13 @@ impl HostStore {
 /// the credential's user and keeps nothing of its own login; one naming a
 /// credential that is not there logs in on its own.
 fn normalized(credentials: &[Credential], mut draft: HostDraft) -> HostDraft {
+    if draft.protocol.is_serial() {
+        // Nothing of an SSH login: no credential to count it as a user of,
+        // no jump hosts to keep alive.
+        draft.credential = None;
+        draft.route = Route::Direct;
+        return draft;
+    }
     let credential = draft
         .credential
         .and_then(|id| credentials.iter().find(|credential| credential.id == id));
@@ -1844,6 +1898,48 @@ mod tests {
         store.remove_group_unnotified(group);
         assert!(store.bookmarks(web, BookmarkSide::Remote).is_empty());
         assert!(store.bookmarks(web, BookmarkSide::Local).is_empty());
+    }
+
+    #[test]
+    fn a_serial_host_is_no_way_through_and_keeps_its_protocol() {
+        let mut store = HostStore::empty();
+        let web = store.insert_unnotified(draft("web", None));
+        let console = store.insert_unnotified(HostDraft::serial(
+            "console",
+            "COM3",
+            super::super::SerialSettings::default(),
+            None,
+        ));
+        assert_eq!(
+            store.ssh_hosts().map(|host| host.id).collect::<Vec<_>>(),
+            [web]
+        );
+        assert_eq!(
+            store.insert_forward_unnotified(forward_draft(console, 8080)),
+            None
+        );
+        assert!(
+            store
+                .insert_forward_unnotified(forward_draft(web, 8080))
+                .is_some()
+        );
+        // A serial host is no jump host: the hop reads as a deleted one.
+        let through = store.insert_unnotified(
+            draft("behind", None).with_route(Route::Jump(vec![Some(console), Some(web)])),
+        );
+        assert_eq!(
+            store.host(through).unwrap().route,
+            Route::Jump(vec![None, Some(web)])
+        );
+        // Nor does it ever become an SSH host, or the other way round.
+        assert!(!store.update_unnotified(console, draft("console", None)));
+        assert!(!store.update_unnotified(
+            web,
+            HostDraft::serial("web", "COM4", super::super::SerialSettings::default(), None)
+        ));
+        assert!(store.host(console).unwrap().is_serial());
+        // It has no password to keep, nor to look for.
+        assert!(store.passwords_of(&[console]).is_empty());
     }
 
     fn forward_draft(host: HostId, port: u16) -> ForwardDraft {

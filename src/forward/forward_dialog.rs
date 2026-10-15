@@ -77,7 +77,8 @@ impl ForwardForm {
             let draft = editing
                 .and_then(|id| read.forward(id))
                 .map(|rule| rule.draft());
-            let hosts = read.hosts();
+            // A forward goes through an SSH connection.
+            let hosts: Vec<_> = read.ssh_hosts().collect();
             (
                 draft,
                 hosts.iter().map(|host| host.id).collect::<Vec<_>>(),

@@ -359,6 +359,20 @@ async fn a_host_behind_a_proxy_keeps_the_proxys_password_in_the_keychain(cx: &mu
         window.input("127.0.0.1", cx);
         window.click("host-proxy-port", cx);
         window.input("7890", cx);
+        // The proxy's login is below the window's fold.
+        let position = window.find("host-proxy-port").bounds().center();
+        window.dispatch_event(
+            gpui_kit::ScrollWheelEvent {
+                position,
+                delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-300.))),
+                modifiers: gpui_kit::Modifiers::default(),
+                touch_phase: gpui_kit::TouchPhase::Moved,
+            }
+            .to_platform_input(),
+            cx,
+        );
+    });
+    in_frame(cx, handle, |window, cx| {
         window.click("host-proxy-password", cx);
         window.input("hunter2", cx);
         window.click("commit", cx);

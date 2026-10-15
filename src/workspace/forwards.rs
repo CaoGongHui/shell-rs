@@ -71,7 +71,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let store = self.store.read(cx);
-        if store.hosts().is_empty() {
+        if store.ssh_hosts().next().is_none() {
             window.push_notification(
                 Notification::warning(t!("workspace.forward.needs_host")),
                 cx,

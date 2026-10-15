@@ -15,10 +15,11 @@ use rusqlite::{Connection, params};
 use crate::i18n::t;
 
 use super::{
-    AuthKind, BookmarkSide, Credential, CredentialDraft, CredentialId, CredentialKind,
-    ForwardDraft, ForwardEndpoint, ForwardId, ForwardKind, ForwardRule, GroupDraft, GroupId, Host,
-    HostDraft, HostGroup, HostId, HostOs, ProxyKind, ProxySettings, PublicId, Route, Snippet,
-    SnippetCategory, SnippetCategoryId, SnippetDraft, SnippetId, SnippetScope,
+    AuthKind, BookmarkSide, Credential, CredentialDraft, CredentialId, CredentialKind, DataBits,
+    FlowControl, ForwardDraft, ForwardEndpoint, ForwardId, ForwardKind, ForwardRule, GroupDraft,
+    GroupId, Host, HostDraft, HostGroup, HostId, HostOs, Parity, Protocol, ProxyKind,
+    ProxySettings, PublicId, Route, SerialSettings, Snippet, SnippetCategory, SnippetCategoryId,
+    SnippetDraft, SnippetId, SnippetScope, StopBits,
 };
 
 /// SQLite's only integer type is `i64`, so the `u64` ids cross the boundary
@@ -37,8 +38,8 @@ fn from_sql(id: i64) -> u64 {
 ///
 /// 13 is the schema as it was rebuilt before the first release. Versions up
 /// to 12 were development builds, and their files are refused. 14 adds the
-/// command snippets.
-const SCHEMA_VERSION: i64 = 14;
+/// command snippets, 15 the serial hosts.
+const SCHEMA_VERSION: i64 = 15;
 
 /// The whole schema, as a new database gets it.
 ///
@@ -63,6 +64,10 @@ const SCHEMA_VERSION: i64 = 14;
 ///     next open (see `fill_missing_public_ids`); the ones there are unique.
 ///   - `os` and `last_connected_at` are written by connections, not by the
 ///     host form.
+///   - `protocol` is `ssh` or `serial`. A serial host's device is its
+///     `address` and its line is in the five `serial_*` columns, set exactly
+///     for a serial host; the login and route columns keep what a new SSH
+///     host would have, unused.
 /// - **host_jumps** lists a host's jump hosts in order. A deleted jump
 ///   host leaves its row behind with no `jump_id`, so the host fails to
 ///   connect rather than skip the hop.
@@ -117,6 +122,17 @@ CREATE TABLE hosts (
     notes             TEXT NOT NULL DEFAULT '',
     os                TEXT,
     last_connected_at INTEGER,
+    protocol          TEXT NOT NULL DEFAULT 'ssh' CHECK (protocol IN ('ssh', 'serial')),
+    serial_baud       INTEGER CHECK (serial_baud > 0)
+        CHECK ((protocol = 'serial') = (serial_baud IS NOT NULL)),
+    serial_data_bits  INTEGER CHECK (serial_data_bits BETWEEN 5 AND 8)
+        CHECK ((protocol = 'serial') = (serial_data_bits IS NOT NULL)),
+    serial_parity     TEXT CHECK (serial_parity IN ('none', 'odd', 'even'))
+        CHECK ((protocol = 'serial') = (serial_parity IS NOT NULL)),
+    serial_stop_bits  INTEGER CHECK (serial_stop_bits IN (1, 2))
+        CHECK ((protocol = 'serial') = (serial_stop_bits IS NOT NULL)),
+    serial_flow       TEXT CHECK (serial_flow IN ('none', 'rts-cts', 'xon-xoff'))
+        CHECK ((protocol = 'serial') = (serial_flow IS NOT NULL)),
     CHECK ((auth = 'credential') = (credential_id IS NOT NULL)),
     CHECK ((auth = 'credential') = (username IS NULL)),
     CHECK ((route = 'proxy') = (proxy_kind IS NOT NULL)),
@@ -192,7 +208,8 @@ enum Step {
 ///
 /// A step is history: it says what that version's change was, and stays as
 /// written when `SCHEMA` changes again.
-const STEPS: [(i64, Step); 1] = [(
+const STEPS: [(i64, Step); 2] = [
+    (
     13,
     // The command snippets.
     Step::Sql(
@@ -217,7 +234,28 @@ CREATE INDEX snippets_scope_host_id ON snippets(scope_host_id);
 PRAGMA user_version = 14;
 COMMIT;",
     ),
-)];
+    ),
+    (
+        14,
+        // The serial hosts.
+        Step::Sql(
+            "BEGIN;
+ALTER TABLE hosts ADD COLUMN protocol          TEXT NOT NULL DEFAULT 'ssh' CHECK (protocol IN ('ssh', 'serial'));
+ALTER TABLE hosts ADD COLUMN serial_baud       INTEGER CHECK (serial_baud > 0)
+        CHECK ((protocol = 'serial') = (serial_baud IS NOT NULL));
+ALTER TABLE hosts ADD COLUMN serial_data_bits  INTEGER CHECK (serial_data_bits BETWEEN 5 AND 8)
+        CHECK ((protocol = 'serial') = (serial_data_bits IS NOT NULL));
+ALTER TABLE hosts ADD COLUMN serial_parity     TEXT CHECK (serial_parity IN ('none', 'odd', 'even'))
+        CHECK ((protocol = 'serial') = (serial_parity IS NOT NULL));
+ALTER TABLE hosts ADD COLUMN serial_stop_bits  INTEGER CHECK (serial_stop_bits IN (1, 2))
+        CHECK ((protocol = 'serial') = (serial_stop_bits IS NOT NULL));
+ALTER TABLE hosts ADD COLUMN serial_flow       TEXT CHECK (serial_flow IN ('none', 'rts-cts', 'xon-xoff'))
+        CHECK ((protocol = 'serial') = (serial_flow IS NOT NULL));
+PRAGMA user_version = 15;
+COMMIT;",
+        ),
+    ),
+];
 
 /// Everything one launch reads back from disk.
 pub struct StoredData {
@@ -290,7 +328,8 @@ impl HostDatabase {
             .prepare(
                 "SELECT id, public_id, group_id, sort_order, name, address, port, auth, username, \
                  credential_id, route, proxy_kind, proxy_host, proxy_port, proxy_username, \
-                 notes, os FROM hosts ORDER BY id",
+                 notes, os, protocol, serial_baud, serial_data_bits, serial_parity, \
+                 serial_stop_bits, serial_flow FROM hosts ORDER BY id",
             )?
             .query_map([], |row| {
                 let id: i64 = row.get(0)?;
@@ -309,6 +348,14 @@ impl HostDatabase {
                 let proxy_user: Option<String> = row.get(14)?;
                 let notes: String = row.get(15)?;
                 let os: Option<String> = row.get(16)?;
+                let protocol: String = row.get(17)?;
+                let serial = SerialColumns {
+                    baud: row.get(18)?,
+                    data_bits: row.get(19)?,
+                    parity: row.get(20)?,
+                    stop_bits: row.get(21)?,
+                    flow: row.get(22)?,
+                };
                 let mut host = Host::new(
                     HostId(from_sql(id)),
                     HostDraft::new(
@@ -340,6 +387,9 @@ impl HostDatabase {
                     _ => Route::Direct,
                 };
                 host.os = os.as_deref().and_then(HostOs::from_stored);
+                if protocol == "serial" {
+                    host.protocol = Protocol::Serial(serial.settings());
+                }
                 Ok(host)
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -579,8 +629,10 @@ impl HostDatabase {
         transaction.execute(
             "INSERT INTO hosts (id, public_id, group_id, sort_order, name, address, port, auth, \
              username, credential_id, route, proxy_kind, proxy_host, proxy_port, \
-             proxy_username, notes, os) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+             proxy_username, notes, os, protocol, serial_baud, serial_data_bits, \
+             serial_parity, serial_stop_bits, serial_flow) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, \
+             ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
             params![
                 to_sql(host.id.0),
                 host.public_id.as_str(),
@@ -599,6 +651,12 @@ impl HostDatabase {
                 row.proxy_username,
                 host.notes.as_ref(),
                 host.os.map(HostOs::as_str),
+                host.protocol.as_str(),
+                row.serial.baud,
+                row.serial.data_bits,
+                row.serial.parity,
+                row.serial.stop_bits,
+                row.serial.flow,
             ],
         )?;
         write_jumps(&transaction, host)?;
@@ -608,7 +666,7 @@ impl HostDatabase {
     /// Rewrite the fields the host form edits, jump hosts included.
     /// `last_connected_at` and `os` are left alone: they are written by
     /// `touch_connected` and `set_host_os`, and neither is part of the
-    /// host form. `public_id` never changes.
+    /// host form. `public_id` and `protocol` never change.
     pub fn update_host(&self, host: &Host) -> rusqlite::Result<()> {
         let transaction = self.connection.unchecked_transaction()?;
         let row = HostRow::of(host);
@@ -616,7 +674,8 @@ impl HostDatabase {
             "UPDATE hosts SET group_id = ?2, sort_order = ?3, name = ?4, address = ?5, \
              port = ?6, auth = ?7, username = ?8, credential_id = ?9, route = ?10, \
              proxy_kind = ?11, proxy_host = ?12, proxy_port = ?13, proxy_username = ?14, \
-             notes = ?15 WHERE id = ?1",
+             notes = ?15, serial_baud = ?16, serial_data_bits = ?17, serial_parity = ?18, \
+             serial_stop_bits = ?19, serial_flow = ?20 WHERE id = ?1",
             params![
                 to_sql(host.id.0),
                 host.group.map(|group| to_sql(group.0)),
@@ -633,6 +692,11 @@ impl HostDatabase {
                 row.proxy_port,
                 row.proxy_username,
                 host.notes.as_ref(),
+                row.serial.baud,
+                row.serial.data_bits,
+                row.serial.parity,
+                row.serial.stop_bits,
+                row.serial.flow,
             ],
         )?;
         write_jumps(&transaction, host)?;
@@ -913,8 +977,9 @@ impl HostDatabase {
 }
 
 /// The columns of a host's row that are spelled differently from the
-/// model: its login and its route.
+/// model: its login, its route and its serial line.
 struct HostRow<'a> {
+    serial: SerialColumns,
     auth: &'static str,
     username: Option<&'a str>,
     credential: Option<i64>,
@@ -932,6 +997,7 @@ impl<'a> HostRow<'a> {
             _ => None,
         };
         Self {
+            serial: SerialColumns::of(host.protocol),
             auth: match host.credential {
                 Some(_) => "credential",
                 None => host.auth.as_str(),
@@ -952,6 +1018,56 @@ impl<'a> HostRow<'a> {
             proxy_host: proxy.map(|proxy| proxy.host.as_ref()),
             proxy_port: proxy.map(|proxy| proxy.port),
             proxy_username: proxy.and_then(|proxy| proxy.user.as_deref()),
+        }
+    }
+}
+
+/// The five `serial_*` columns, all set for a serial host and none for an
+/// SSH one.
+struct SerialColumns {
+    baud: Option<u32>,
+    data_bits: Option<i64>,
+    parity: Option<String>,
+    stop_bits: Option<i64>,
+    flow: Option<String>,
+}
+
+impl SerialColumns {
+    fn of(protocol: Protocol) -> Self {
+        let settings = protocol.serial();
+        Self {
+            baud: settings.map(|line| line.baud),
+            data_bits: settings.map(|line| line.data_bits.value().into()),
+            parity: settings.map(|line| line.parity.as_str().to_owned()),
+            stop_bits: settings.map(|line| line.stop_bits.value().into()),
+            flow: settings.map(|line| line.flow.as_str().to_owned()),
+        }
+    }
+
+    /// The line these columns describe. The table's CHECKs keep them whole
+    /// and valid; anything a hand edit got past them reads as the default.
+    fn settings(&self) -> SerialSettings {
+        let default = SerialSettings::default();
+        SerialSettings {
+            baud: self.baud.unwrap_or(default.baud),
+            data_bits: self
+                .data_bits
+                .and_then(DataBits::from_value)
+                .unwrap_or(default.data_bits),
+            parity: self
+                .parity
+                .as_deref()
+                .and_then(Parity::from_stored)
+                .unwrap_or(default.parity),
+            stop_bits: self
+                .stop_bits
+                .and_then(StopBits::from_value)
+                .unwrap_or(default.stop_bits),
+            flow: self
+                .flow
+                .as_deref()
+                .and_then(FlowControl::from_stored)
+                .unwrap_or(default.flow),
         }
     }
 }
@@ -1323,6 +1439,184 @@ CREATE INDEX forwards_host_id ON forwards(host_id);";
         let data = db.load().unwrap();
         assert_eq!(data.hosts.len(), 1);
         assert!(data.snippets.is_empty());
+    }
+
+    /// The schema of version 14, as files of that version have it.
+    const SCHEMA_14: &str = "\
+CREATE TABLE groups (
+    id         INTEGER PRIMARY KEY,
+    parent_id  INTEGER REFERENCES groups(id) ON DELETE CASCADE,
+    name       TEXT NOT NULL CHECK (name <> ''),
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    expanded   INTEGER NOT NULL DEFAULT 1 CHECK (expanded IN (0, 1))
+) STRICT;
+CREATE INDEX groups_parent_id ON groups(parent_id);
+CREATE TABLE credentials (
+    id          INTEGER PRIMARY KEY,
+    keychain_id TEXT NOT NULL UNIQUE,
+    name        TEXT NOT NULL CHECK (name <> ''),
+    kind        TEXT NOT NULL CHECK (kind IN ('password', 'key', 'agent')),
+    username    TEXT NOT NULL,
+    key_path    TEXT,
+    sort_order  INTEGER NOT NULL DEFAULT 0,
+    CHECK ((kind = 'key') = (key_path IS NOT NULL))
+) STRICT;
+CREATE TABLE hosts (
+    id                INTEGER PRIMARY KEY,
+    public_id         TEXT UNIQUE,
+    group_id          INTEGER REFERENCES groups(id) ON DELETE CASCADE,
+    sort_order        INTEGER NOT NULL DEFAULT 0,
+    name              TEXT NOT NULL CHECK (name <> ''),
+    address           TEXT NOT NULL CHECK (address <> ''),
+    port              INTEGER NOT NULL CHECK (port BETWEEN 1 AND 65535),
+    auth              TEXT NOT NULL CHECK (auth IN ('password', 'no-password', 'credential')),
+    username          TEXT,
+    credential_id     INTEGER REFERENCES credentials(id),
+    route             TEXT NOT NULL DEFAULT 'direct' CHECK (route IN ('direct', 'jump', 'proxy')),
+    proxy_kind        TEXT CHECK (proxy_kind IN ('http', 'socks5')),
+    proxy_host        TEXT,
+    proxy_port        INTEGER CHECK (proxy_port BETWEEN 1 AND 65535),
+    proxy_username    TEXT,
+    notes             TEXT NOT NULL DEFAULT '',
+    os                TEXT,
+    last_connected_at INTEGER,
+    CHECK ((auth = 'credential') = (credential_id IS NOT NULL)),
+    CHECK ((auth = 'credential') = (username IS NULL)),
+    CHECK ((route = 'proxy') = (proxy_kind IS NOT NULL)),
+    CHECK ((proxy_kind IS NULL) = (proxy_host IS NULL)
+        AND (proxy_kind IS NULL) = (proxy_port IS NULL)),
+    CHECK (proxy_kind IS NOT NULL OR proxy_username IS NULL)
+) STRICT;
+CREATE INDEX hosts_group_id ON hosts(group_id);
+CREATE INDEX hosts_credential_id ON hosts(credential_id);
+CREATE TABLE host_jumps (
+    host_id  INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL CHECK (position >= 0),
+    jump_id  INTEGER REFERENCES hosts(id) ON DELETE SET NULL,
+    PRIMARY KEY (host_id, position),
+    CHECK (jump_id <> host_id)
+) STRICT, WITHOUT ROWID;
+CREATE INDEX host_jumps_jump_id ON host_jumps(jump_id);
+CREATE TABLE bookmarks (
+    host_id    INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    side       TEXT NOT NULL CHECK (side IN ('local', 'remote')),
+    path       TEXT NOT NULL,
+    sort_order INTEGER NOT NULL,
+    PRIMARY KEY (host_id, side, path)
+) STRICT, WITHOUT ROWID;
+CREATE TABLE forwards (
+    id          INTEGER PRIMARY KEY,
+    host_id     INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL DEFAULT '',
+    kind        TEXT NOT NULL CHECK (kind IN ('local', 'remote', 'dynamic')),
+    bind_host   TEXT NOT NULL,
+    bind_port   INTEGER NOT NULL CHECK (bind_port BETWEEN 1 AND 65535),
+    target_host TEXT,
+    target_port INTEGER,
+    auto_start  INTEGER NOT NULL DEFAULT 0 CHECK (auto_start IN (0, 1)),
+    sort_order  INTEGER NOT NULL DEFAULT 0,
+    CHECK ((kind = 'dynamic' AND target_host IS NULL AND target_port IS NULL)
+        OR (kind <> 'dynamic' AND target_host IS NOT NULL
+            AND target_port BETWEEN 1 AND 65535))
+) STRICT;
+CREATE INDEX forwards_host_id ON forwards(host_id);
+CREATE TABLE snippet_categories (
+    id   INTEGER PRIMARY KEY,
+    name TEXT NOT NULL CHECK (name <> '')
+) STRICT;
+CREATE TABLE snippets (
+    id             INTEGER PRIMARY KEY,
+    category_id    INTEGER REFERENCES snippet_categories(id) ON DELETE CASCADE,
+    name           TEXT NOT NULL CHECK (name <> ''),
+    command        TEXT NOT NULL CHECK (command <> ''),
+    scope_group_id INTEGER REFERENCES groups(id) ON DELETE CASCADE,
+    scope_host_id  INTEGER REFERENCES hosts(id) ON DELETE CASCADE,
+    run_on_click   INTEGER NOT NULL DEFAULT 0 CHECK (run_on_click IN (0, 1)),
+    CHECK (scope_group_id IS NULL OR scope_host_id IS NULL)
+) STRICT;
+CREATE INDEX snippets_category_id ON snippets(category_id);
+CREATE INDEX snippets_scope_group_id ON snippets(scope_group_id);
+CREATE INDEX snippets_scope_host_id ON snippets(scope_host_id);";
+
+    #[test]
+    fn a_version_14_file_gets_the_serial_columns_and_keeps_its_hosts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shellrs.db");
+        {
+            let old = Connection::open(&path).unwrap();
+            old.execute_batch(&format!(
+                "BEGIN;\n{SCHEMA_14}\nPRAGMA user_version = 14;\nCOMMIT;"
+            ))
+            .unwrap();
+            old.execute(
+                "INSERT INTO hosts (id, name, address, port, auth, username) \
+                 VALUES (1, 'web', '10.0.0.1', 22, 'password', 'root')",
+                [],
+            )
+            .unwrap();
+        }
+
+        let db = HostDatabase::open(&path).unwrap();
+        let version: i64 = db
+            .connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        assert!(dir.path().join("shellrs.db.v14.bak").exists());
+        let fresh = HostDatabase::in_memory().unwrap();
+        assert_eq!(schema_of(&db.connection), schema_of(&fresh.connection));
+        let data = db.load().unwrap();
+        assert_eq!(data.hosts.len(), 1);
+        assert_eq!(data.hosts[0].protocol, Protocol::Ssh);
+    }
+
+    #[test]
+    fn a_serial_host_keeps_its_line_and_an_ssh_host_has_none() {
+        let db = HostDatabase::in_memory().unwrap();
+        let settings = SerialSettings {
+            baud: 9600,
+            data_bits: DataBits::Seven,
+            parity: Parity::Even,
+            stop_bits: StopBits::Two,
+            flow: FlowControl::RtsCts,
+        };
+        let mut serial = Host::new(
+            HostId(1),
+            HostDraft::serial("console", "/dev/ttyUSB0", settings, None),
+        );
+        db.insert_host(&serial).unwrap();
+        let ssh = Host::new(
+            HostId(2),
+            HostDraft::new("web", "10.0.0.1", 22, "root", AuthKind::Password, None),
+        );
+        db.insert_host(&ssh).unwrap();
+
+        let data = db.load().unwrap();
+        assert_eq!(data.hosts[0].protocol, Protocol::Serial(settings));
+        assert_eq!(data.hosts[0].address.as_ref(), "/dev/ttyUSB0");
+        assert_eq!(data.hosts[1].protocol, Protocol::Ssh);
+
+        let faster = SerialSettings {
+            baud: 115200,
+            flow: FlowControl::None,
+            ..settings
+        };
+        serial.protocol = Protocol::Serial(faster);
+        db.update_host(&serial).unwrap();
+        assert_eq!(
+            db.load().unwrap().hosts[0].protocol,
+            Protocol::Serial(faster)
+        );
+
+        // A line on an SSH host, or a serial host without one, is refused.
+        let error = db
+            .connection
+            .execute("UPDATE hosts SET serial_baud = 9600 WHERE id = 2", []);
+        assert!(error.is_err());
+        let error = db
+            .connection
+            .execute("UPDATE hosts SET serial_flow = NULL WHERE id = 1", []);
+        assert!(error.is_err());
     }
 
     fn snippet(id: u64, name: &str, category: Option<u64>, scope: SnippetScope) -> Snippet {

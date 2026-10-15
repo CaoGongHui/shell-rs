@@ -111,6 +111,29 @@ async fn the_features_used_are_counted(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+async fn a_serial_terminal_is_counted_alone(cx: &mut TestAppContext) {
+    let mut store = HostStore::empty();
+    let host = store.insert_unnotified(HostDraft::serial(
+        "console",
+        "COM3",
+        shellrs::host::SerialSettings::default(),
+        None,
+    ));
+    let (handle, workspace) = open_workspace_with_store(cx, store);
+    let signals = report(cx, handle, &workspace);
+    in_frame(cx, handle, |window, cx| {
+        window.dispatch_action(Box::new(ConnectHost(host)), cx)
+    });
+    let mut received = Vec::new();
+    cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
+        received.extend(signals.try_iter());
+        counted(&received).contains(&Counter::Serial)
+    })
+    .await;
+    assert_eq!(counted(&received), [Counter::Serial]);
+}
+
+#[gpui_kit::test]
 fn switches_turned_in_the_settings_are_counted(cx: &mut TestAppContext) {
     let (handle, workspace) = open_workspace(cx);
     let signals = report(cx, handle, &workspace);

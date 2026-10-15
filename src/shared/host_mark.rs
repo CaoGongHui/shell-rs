@@ -4,12 +4,14 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
+use crate::app::CatalogIcon;
 use crate::host::HostOs;
 use crate::i18n::t;
 
 /// The mark that stands for a host: the operating system found on its host,
 /// drawn on a badge in that project's own colour, or the first character of
-/// the host name until a probe succeeds.
+/// the host name until a probe succeeds. A serial host, which nothing
+/// probes, has a cable.
 ///
 /// Shared so the host tree and the start page show one identity for the
 /// same host. The badge borrows `Avatar`'s treatment, a circle at the theme's
@@ -19,6 +21,7 @@ pub struct HostMark {
     id: ElementId,
     name: SharedString,
     os: Option<HostOs>,
+    serial: bool,
     size: Size,
     tooltip: bool,
 }
@@ -33,9 +36,16 @@ impl HostMark {
             id: id.into(),
             name: name.into(),
             os,
+            serial: false,
             size: Size::Medium,
             tooltip: true,
         }
+    }
+
+    /// The mark of a serial host, whatever `os` says.
+    pub fn serial(mut self, serial: bool) -> Self {
+        self.serial = serial;
+        self
     }
 
     /// No tooltip of its own, for a row that shows one for the whole row, as
@@ -56,7 +66,22 @@ impl Sizable for HostMark {
 impl RenderOnce for HostMark {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let compact = matches!(self.size, Size::XSmall | Size::Small);
-        let (background, ink, glyph, description) = match self.os {
+        let os = self.os.filter(|_| !self.serial);
+        let (background, ink, glyph, description) = match os {
+            None if self.serial => {
+                let glyph = Icon::new(CatalogIcon::Cable);
+                (
+                    cx.theme().muted,
+                    cx.theme().muted_foreground,
+                    if compact {
+                        glyph.size_3()
+                    } else {
+                        glyph.size_5()
+                    }
+                    .into_any_element(),
+                    t!("shared.host_mark.serial"),
+                )
+            }
             Some(os) => {
                 let (background, ink) = match (os.brand_color(), os.brand_foreground()) {
                     (Some(background), Some(ink)) => (background.into(), ink.into()),

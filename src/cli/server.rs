@@ -677,7 +677,7 @@ fn respond(
             Ok(Reply::Hosts { hosts })
         }
         Request::Exec { host, command } => {
-            let target = find(shared, &host)?;
+            let target = find_ssh(shared, &host)?;
             let code = shared
                 .backend
                 .exec(&target, &command, &mut |stream, bytes| {
@@ -690,7 +690,7 @@ fn respond(
             Ok(Reply::Exit { code })
         }
         Request::ExecInTerminal { host, command } => {
-            let target = find(shared, &host)?;
+            let target = find_ssh(shared, &host)?;
             run_in_terminal(shared, writer, &target.info.id, command)
         }
         Request::Upload {
@@ -698,7 +698,7 @@ fn respond(
             source,
             destination,
         } => {
-            let target = find(shared, &host)?;
+            let target = find_ssh(shared, &host)?;
             if !source.is_absolute() {
                 return Err(not_absolute(&source));
             }
@@ -714,7 +714,7 @@ fn respond(
             source,
             destination,
         } => {
-            let target = find(shared, &host)?;
+            let target = find_ssh(shared, &host)?;
             if !destination.is_absolute() {
                 return Err(not_absolute(&destination));
             }
@@ -731,7 +731,7 @@ fn respond(
             destination,
             delete,
         } => {
-            let target = find(shared, &host)?;
+            let target = find_ssh(shared, &host)?;
             if !source.is_absolute() {
                 return Err(not_absolute(&source));
             }
@@ -940,6 +940,18 @@ fn run_error(failure: RunFailure, host: &str) -> CliError {
             CliError::new(ErrorCode::ConnectFailed, t!("cli.terminal.disconnected"))
         }
     }
+}
+
+/// [`find`] for a request that runs over SSH, which a serial host has not.
+fn find_ssh(shared: &Shared, id: &str) -> Result<CliTarget, CliError> {
+    let target = find(shared, id)?;
+    if target.host.is_serial() {
+        return Err(CliError::new(
+            ErrorCode::NotSsh,
+            t!("cli.server.not_ssh", name = target.host.name),
+        ));
+    }
+    Ok(target)
 }
 
 fn find(shared: &Shared, id: &str) -> Result<CliTarget, CliError> {

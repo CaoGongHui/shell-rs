@@ -6,15 +6,17 @@
 use std::path::Path;
 
 use crate::host::{
-    AuthKind, Credential, CredentialDraft, CredentialId, CredentialKind, GroupId, Host, HostDraft,
-    HostId, HostStore, PastedKey, ProxyKind, ProxySettings, Route,
+    AuthKind, Credential, CredentialDraft, CredentialId, CredentialKind, DataBits, FlowControl,
+    GroupId, Host, HostDraft, HostId, HostStore, Parity, PastedKey, Protocol, ProxyKind,
+    ProxySettings, Route, SSH_PORT, SerialSettings, StopBits,
 };
 use crate::i18n::t;
 use crate::secrets::SecretRef;
 
 use super::protocol::{
     AuthChoice, CliError, CredentialDetails, CredentialFields, CredentialKindChoice, ErrorCode,
-    HostDetails, HostFields, HostInfo, ProxyChoice, RouteDetails, RouteFields, Secret,
+    FlowControlChoice, HostDetails, HostFields, HostInfo, ParityChoice, ProtocolChoice,
+    ProxyChoice, RouteDetails, RouteFields, Secret, SerialDetails, SerialFields,
 };
 
 /// A change a CLI request asks for, made on the UI thread one at a time.
@@ -61,11 +63,20 @@ pub fn host_info(host: &Host, store: &HostStore) -> HostInfo {
         id: host.public_id.to_string(),
         name: host.name.to_string(),
         group: group_path(host.group, store),
+        protocol: protocol_choice(host.protocol),
         user: host.user.to_string(),
         host: host.address.to_string(),
         port: host.port,
+        line: host.protocol.serial().map(|line| line.summary()),
         os: host.os.map(|os| os.as_str().to_string()),
         temporary: store.is_temporary(host.id),
+    }
+}
+
+fn protocol_choice(protocol: Protocol) -> ProtocolChoice {
+    match protocol {
+        Protocol::Ssh => ProtocolChoice::Ssh,
+        Protocol::Serial(_) => ProtocolChoice::Serial,
     }
 }
 
@@ -78,6 +89,25 @@ fn group_path(group: Option<GroupId>, store: &HostStore) -> Option<String> {
 /// `host` as it is in `store`, without saying which passwords are saved:
 /// that takes the keychain, which [`host_secrets`] names.
 pub fn host_details(host: &Host, store: &HostStore) -> HostDetails {
+    if let Protocol::Serial(line) = host.protocol {
+        return HostDetails {
+            id: host.public_id.to_string(),
+            name: host.name.to_string(),
+            group: group_path(host.group, store),
+            protocol: ProtocolChoice::Serial,
+            host: None,
+            port: None,
+            user: None,
+            auth: None,
+            credential: None,
+            password_saved: None,
+            route: None,
+            serial: Some(serial_details(host.address.as_ref(), line)),
+            notes: host.notes.to_string(),
+            os: None,
+            temporary: store.is_temporary(host.id),
+        };
+    }
     let credential = host
         .credential
         .and_then(|id| store.credential(id))
@@ -113,23 +143,47 @@ pub fn host_details(host: &Host, store: &HostStore) -> HostDetails {
         id: host.public_id.to_string(),
         name: host.name.to_string(),
         group: group_path(host.group, store),
-        host: host.address.to_string(),
-        port: host.port,
-        user: host.user.to_string(),
-        auth,
+        protocol: ProtocolChoice::Ssh,
+        host: Some(host.address.to_string()),
+        port: Some(host.port),
+        user: Some(host.user.to_string()),
+        auth: Some(auth),
         credential,
         password_saved: None,
-        route,
+        route: Some(route),
+        serial: None,
         notes: host.notes.to_string(),
         os: host.os.map(|os| os.as_str().to_string()),
         temporary: store.is_temporary(host.id),
     }
 }
 
+fn serial_details(device: &str, line: SerialSettings) -> SerialDetails {
+    SerialDetails {
+        device: device.to_string(),
+        baud: line.baud,
+        data_bits: line.data_bits.value(),
+        parity: match line.parity {
+            Parity::None => ParityChoice::None,
+            Parity::Odd => ParityChoice::Odd,
+            Parity::Even => ParityChoice::Even,
+        },
+        stop_bits: line.stop_bits.value(),
+        flow_control: match line.flow {
+            FlowControl::None => FlowControlChoice::None,
+            FlowControl::RtsCts => FlowControlChoice::RtsCts,
+            FlowControl::XonXoff => FlowControlChoice::XonXoff,
+        },
+    }
+}
+
 /// The entries behind a host's `password_saved` fields: its own password
 /// when it logs in with one (a temporary host's is in memory), and its
-/// proxy's when the proxy has a user.
+/// proxy's when the proxy has a user. A serial host has neither.
 pub fn host_secrets(host: &Host, store: &HostStore) -> HostSecrets {
+    if host.is_serial() {
+        return HostSecrets::default();
+    }
     let login = store.login_of(host);
     HostSecrets {
         password: (host.credential.is_none() && host.auth == AuthKind::Password)
@@ -145,7 +199,7 @@ pub fn with_saved_passwords(
     saved: impl Fn(&SecretRef) -> bool,
 ) -> HostDetails {
     details.password_saved = secrets.password.as_ref().map(&saved);
-    if let RouteDetails::Proxy { password_saved, .. } = &mut details.route {
+    if let Some(RouteDetails::Proxy { password_saved, .. }) = &mut details.route {
         *password_saved = secrets.proxy.as_ref().map(&saved);
     }
     details
@@ -332,9 +386,24 @@ pub fn plan_host(
     store: &HostStore,
 ) -> Result<HostPlan, CliError> {
     let current = existing.and_then(|id| store.saved_host(id));
+    let protocol = match (current, fields.protocol) {
+        (Some(host), Some(asked)) if asked != protocol_choice(host.protocol) => {
+            return Err(bad(t!("cli.host.protocol_fixed")));
+        }
+        (Some(host), _) => protocol_choice(host.protocol),
+        (None, Some(asked)) => asked,
+        (None, None) if fields.serial.is_some() => ProtocolChoice::Serial,
+        (None, None) => ProtocolChoice::Ssh,
+    };
+    if protocol == ProtocolChoice::Serial {
+        return plan_serial_host(fields, current, store);
+    }
+    if fields.serial.is_some() {
+        return Err(bad(t!("cli.host.serial_on_ssh")));
+    }
     let mut draft = current
         .map(Host::draft)
-        .unwrap_or_else(|| HostDraft::new("", "", 22, "", AuthKind::default(), None));
+        .unwrap_or_else(|| HostDraft::new("", "", SSH_PORT, "", AuthKind::default(), None));
     if let Some(name) = fields.name {
         draft.name = name.into();
     }
@@ -455,6 +524,84 @@ pub fn plan_host(
     })
 }
 
+/// [`plan_host`] for a serial host: its name, device, line, group and
+/// notes, and nothing of an SSH host's.
+fn plan_serial_host(
+    fields: HostFields,
+    current: Option<&Host>,
+    store: &HostStore,
+) -> Result<HostPlan, CliError> {
+    let ssh_only = fields.host.is_some()
+        || fields.port.is_some()
+        || fields.user.is_some()
+        || fields.auth.is_some()
+        || fields.route.is_some()
+        || matches!(fields.credential, Some(Some(_)))
+        || matches!(fields.password, Some(Some(_)));
+    if ssh_only {
+        return Err(bad(t!("cli.host.ssh_fields_on_serial")));
+    }
+    let mut draft = current
+        .map(Host::draft)
+        .unwrap_or_else(|| HostDraft::serial("", "", SerialSettings::default(), None));
+    let mut line = draft.protocol.serial().unwrap_or_default();
+    let SerialFields {
+        device,
+        baud,
+        data_bits,
+        parity,
+        stop_bits,
+        flow_control,
+    } = fields.serial.unwrap_or_default();
+    if let Some(device) = device {
+        draft.address = device.into();
+    }
+    if let Some(baud) = baud {
+        line.baud = baud;
+    }
+    if let Some(bits) = data_bits {
+        line.data_bits =
+            DataBits::from_value(bits.into()).ok_or_else(|| bad(t!("cli.host.data_bits")))?;
+    }
+    if let Some(parity) = parity {
+        line.parity = match parity {
+            ParityChoice::None => Parity::None,
+            ParityChoice::Odd => Parity::Odd,
+            ParityChoice::Even => Parity::Even,
+        };
+    }
+    if let Some(bits) = stop_bits {
+        line.stop_bits =
+            StopBits::from_value(bits.into()).ok_or_else(|| bad(t!("cli.host.stop_bits")))?;
+    }
+    if let Some(flow) = flow_control {
+        line.flow = match flow {
+            FlowControlChoice::None => FlowControl::None,
+            FlowControlChoice::RtsCts => FlowControl::RtsCts,
+            FlowControlChoice::XonXoff => FlowControl::XonXoff,
+        };
+    }
+    draft.protocol = Protocol::Serial(line);
+    if let Some(name) = fields.name {
+        draft.name = name.into();
+    }
+    if let Some(notes) = fields.notes {
+        draft.notes = notes.into();
+    }
+    let group = match fields.group {
+        None => GroupPlan::Existing(draft.group),
+        Some(None) => GroupPlan::Existing(None),
+        Some(Some(path)) => resolve_group(store, &path)?,
+    };
+    let draft = draft.validated().map_err(|error| bad(error.message()))?;
+    Ok(HostPlan {
+        draft,
+        group,
+        password: None,
+        proxy_password: None,
+    })
+}
+
 /// The jump hosts the CLI names, as the store keeps them, or why they will
 /// not do. Only saved hosts, never the host itself, each once: the host
 /// form offers no other. The store would quietly turn the rest into
@@ -472,6 +619,9 @@ fn jump_hosts(
         let hop = find_host(store, id)?;
         if store.is_temporary(hop.id) {
             return Err(bad(t!("cli.host.jump_temporary", id = id)));
+        }
+        if hop.is_serial() {
+            return Err(bad(t!("cli.host.jump_serial", id = id)));
         }
         if Some(hop.id) == own {
             return Err(bad(t!("cli.host.jump_self")));
@@ -686,8 +836,9 @@ pub fn credential_fields(mut value: serde_json::Value) -> Result<CredentialField
 #[cfg(test)]
 mod tests {
     use crate::host::{
-        AuthKind, CredentialDraft, CredentialKind, GeneratedKey, GroupDraft, HostDraft, HostId,
-        HostStore, KeyAlgorithm, ProxyKind, ProxySettings, Route,
+        AuthKind, CredentialDraft, CredentialKind, DataBits, FlowControl, GeneratedKey, GroupDraft,
+        HostDraft, HostId, HostStore, KeyAlgorithm, Parity, Protocol, ProxyKind, ProxySettings,
+        Route, SerialSettings,
     };
     use crate::secrets::SecretRef;
 
@@ -1012,6 +1163,97 @@ mod tests {
         assert_eq!(
             plan.password.unwrap().1,
             SecretChange::Set(Secret::new("hunter2"))
+        );
+    }
+
+    #[test]
+    fn a_serial_host_takes_its_device_and_line_and_nothing_of_ssh() {
+        let (mut store, web, _) = store();
+        let plan = plan_host(
+            fields(serde_json::json!({
+                "name": "console",
+                "serial": { "device": "/dev/ttyUSB0", "baud": 9600, "flow_control": "rts_cts" }
+            })),
+            None,
+            &store,
+        )
+        .unwrap();
+        let line = SerialSettings {
+            baud: 9600,
+            flow: FlowControl::RtsCts,
+            ..SerialSettings::default()
+        };
+        assert_eq!(plan.draft.protocol, Protocol::Serial(line));
+        assert_eq!(plan.draft.address.as_ref(), "/dev/ttyUSB0");
+        assert_eq!((plan.password, plan.proxy_password), (None, None));
+        let console = store.insert_unnotified(plan.draft);
+
+        // What show prints has nothing of SSH, and goes back in.
+        let shown =
+            serde_json::to_value(host_details(store.host(console).unwrap(), &store)).unwrap();
+        for key in ["host", "port", "user", "auth", "route"] {
+            assert!(shown.get(key).is_none(), "{key}");
+        }
+        assert_eq!(shown["protocol"], "serial");
+        let plan = plan_host(host_fields(shown).unwrap(), Some(console), &store).unwrap();
+        assert_eq!(plan.draft, store.host(console).unwrap().draft());
+
+        // An update changes what it names.
+        let plan = plan_host(
+            fields(serde_json::json!({ "serial": { "data_bits": 7, "parity": "even" } })),
+            Some(console),
+            &store,
+        )
+        .unwrap();
+        let changed = plan.draft.protocol.serial().unwrap();
+        assert_eq!(
+            (changed.baud, changed.data_bits, changed.parity),
+            (9600, DataBits::Seven, Parity::Even)
+        );
+
+        let plan =
+            |json: serde_json::Value, host: Option<HostId>| plan_host(fields(json), host, &store);
+        assert_eq!(
+            refused(plan(
+                serde_json::json!({ "serial": { "device": "COM3" }, "host": "10.0.0.1" }),
+                None
+            )),
+            bad(
+                "串口主机没有 host、port、user、auth、credential、password 和 route，设备和参数写在 serial 里"
+            )
+        );
+        assert_eq!(
+            refused(plan(
+                serde_json::json!({ "protocol": "ssh" }),
+                Some(console)
+            )),
+            bad("协议在创建后不能更改")
+        );
+        assert_eq!(
+            refused(plan(
+                serde_json::json!({ "serial": { "baud": 9600 } }),
+                Some(web)
+            )),
+            bad("只有串口主机有 serial")
+        );
+        assert_eq!(
+            refused(plan(serde_json::json!({ "protocol": "serial" }), None)),
+            bad("请输入串口设备")
+        );
+        assert_eq!(
+            refused(plan(
+                serde_json::json!({ "serial": { "device": "COM3", "stop_bits": 3 } }),
+                None
+            )),
+            bad("stop_bits 只能是 1 或 2")
+        );
+        let id = store.host(console).unwrap().public_id.to_string();
+        assert_eq!(
+            refused(plan(
+                serde_json::json!({ "route": { "type": "jump", "hosts": [id] } }),
+                Some(web)
+            )),
+            bad(&format!("跳板只能是 SSH 主机：{id} 是串口主机"))
         );
     }
 

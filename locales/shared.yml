@@ -6,6 +6,9 @@ shared.tab.unsaved:
 shared.host_mark.unknown_os:
   zh-CN: 未探测到系统
   en: System not detected
+shared.host_mark.serial:
+  zh-CN: 串口
+  en: Serial port
 shared.duration.days.one:
   en: "%{count} day %{clock}"
 shared.duration.days.other:

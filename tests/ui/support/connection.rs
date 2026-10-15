@@ -25,6 +25,7 @@ pub fn open_workspace_with_tester(
                 store,
                 cx.new(|_| settings_store()),
                 remote,
+                fake_serial_terminals(),
                 fake_local_terminals(),
                 Arc::new(FakeSftpProvider::default()),
                 Arc::new(FakeLocalDirectory::default()),
@@ -53,6 +54,8 @@ pub struct FakeConnectionTester {
     /// form gave.
     pub routes: Mutex<Vec<(LoginRoute, Option<String>)>>,
     pub trust_answers: Mutex<Vec<bool>>,
+    /// The serial lines opened, answered with `result` too.
+    pub serial_lines: Mutex<Vec<SerialLine>>,
 }
 
 impl Default for FakeConnectionTester {
@@ -63,6 +66,7 @@ impl Default for FakeConnectionTester {
             requests: Mutex::default(),
             routes: Mutex::default(),
             trust_answers: Mutex::default(),
+            serial_lines: Mutex::default(),
         }
     }
 }
@@ -98,6 +102,13 @@ impl FakeConnectionTester {
 
     pub fn trust_answers(&self) -> Vec<bool> {
         self.trust_answers
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+
+    pub fn serial_lines(&self) -> Vec<SerialLine> {
+        self.serial_lines
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone()
@@ -140,6 +151,14 @@ impl ConnectionTester for FakeConnectionTester {
                 return Err("未信任该主机的密钥".to_string());
             }
         }
+        self.result.clone()
+    }
+
+    fn test_serial(&self, line: &SerialLine) -> Result<(), String> {
+        self.serial_lines
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .push(line.clone());
         self.result.clone()
     }
 }

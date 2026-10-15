@@ -37,6 +37,33 @@ host.draft.proxy_address:
 host.draft.proxy_port:
   zh-CN: 代理端口必须是 1 到 65535 之间的数字
   en: The proxy port must be a number from 1 to 65535
+host.draft.device:
+  zh-CN: 请输入串口设备
+  en: Enter a serial port
+host.draft.baud:
+  zh-CN: 波特率必须是正整数
+  en: The baud rate must be a whole number above 0
+
+host.protocol.ssh:
+  zh-CN: SSH
+  en: SSH
+host.protocol.serial:
+  zh-CN: 串口
+  en: Serial
+
+host.parity.none:
+  zh-CN: 无
+  en: None
+host.parity.odd:
+  zh-CN: 奇校验
+  en: Odd
+host.parity.even:
+  zh-CN: 偶校验
+  en: Even
+
+host.flow.none:
+  zh-CN: 无
+  en: None
 
 host.credential_kind.password:
   zh-CN: 密码
@@ -129,6 +156,51 @@ host.dialog.name_placeholder:
 host.dialog.temporary_name_placeholder:
   zh-CN: 可选，默认用地址
   en: Optional; the address if left empty
+host.dialog.name_placeholder_serial:
+  zh-CN: 可选，默认用串口设备
+  en: Optional; the serial port if left empty
+host.dialog.protocol:
+  zh-CN: 协议
+  en: Protocol
+host.dialog.protocol_fixed:
+  zh-CN: 协议在创建后不能更改
+  en: The protocol can’t be changed after the host is created
+host.dialog.serial_device:
+  zh-CN: 串口设备
+  en: Serial port
+host.dialog.serial_device_placeholder:
+  zh-CN: "例如 %{example}"
+  en: "e.g. %{example}"
+host.dialog.serial_ports:
+  zh-CN: 本机的串口
+  en: Serial ports on this computer
+host.dialog.looking_for_ports:
+  zh-CN: 正在查找串口…
+  en: Looking for serial ports…
+host.dialog.no_ports:
+  zh-CN: 未找到串口设备
+  en: No serial ports found
+host.dialog.look_for_ports_again:
+  zh-CN: 重新检测
+  en: Look again
+host.dialog.baud_rate:
+  zh-CN: 波特率
+  en: Baud rate
+host.dialog.baud_rates:
+  zh-CN: 常用波特率
+  en: Common baud rates
+host.dialog.data_bits:
+  zh-CN: 数据位
+  en: Data bits
+host.dialog.parity:
+  zh-CN: 校验位
+  en: Parity
+host.dialog.stop_bits:
+  zh-CN: 停止位
+  en: Stop bits
+host.dialog.flow_control:
+  zh-CN: 流控
+  en: Flow control
 host.dialog.address:
   zh-CN: 地址
   en: Address
@@ -269,6 +341,9 @@ host.dialog.test_aborted:
 host.test.connected:
   zh-CN: 连接成功
   en: Connection succeeded
+host.test.serial_opened:
+  zh-CN: "串口 %{device} 成功打开"
+  en: "Opened the serial port %{device}"
 host.test.failed:
   zh-CN: 连接失败
   en: Couldn’t connect

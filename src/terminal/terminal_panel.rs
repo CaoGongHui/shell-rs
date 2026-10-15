@@ -6,11 +6,12 @@ use gpui_kit::component::{
     dock::{BasePanel, Panel, PanelEvent, TabGroup},
     menu::PopupMenu,
 };
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::app::{
     CatalogIcon, CenterTab, CloseTerminal, ConnectHost, CopyHostAddress, CopyHostId,
-    DisconnectTerminal, EditHost, OpenExplorer, ReconnectTerminal, RenameTerminal,
+    DisconnectTerminal, EditHost, OpenExplorer, ReconnectTerminal, RenameTerminal, SendBreak,
 };
 use crate::connection::{ConnectionPrompt, ConnectionPromptReply};
 use crate::host::{ConnectionState, HostId, HostOs, HostStore};
@@ -18,8 +19,8 @@ use crate::i18n::t;
 use crate::shared::{ClosableTabTitle, HostMark, LatencyLabel, RenamableTab, close_tab_items};
 
 use super::{
-    RemoteTerminalId, ReportedDirectory, SharedRemoteTerminalTransportProvider, TerminalEvent,
-    TerminalLifecycle, TerminalMenuItems, TerminalNotice, TerminalStatus, TerminalView,
+    HostTerminalTransports, RemoteTerminalId, ReportedDirectory, TerminalEvent, TerminalLifecycle,
+    TerminalMenuItems, TerminalNotice, TerminalStatus, TerminalView,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,14 +37,18 @@ pub enum TerminalPanelEvent {
     DirectoryChanged(RemoteTerminalId, ReportedDirectory),
 }
 
-/// A remote-host Dock panel backed by the shared terminal engine. The
-/// transport is created from the latest saved host on every connection.
+/// A remote-host Dock panel backed by the shared terminal engine: an SSH
+/// host's, or a serial host's. The transport is created from the latest
+/// saved host on every connection.
 pub struct TerminalPanel {
     id: RemoteTerminalId,
     host_id: HostId,
     store: Entity<HostStore>,
     terminal: Entity<TerminalView>,
-    remote_provider: SharedRemoteTerminalTransportProvider,
+    transports: HostTerminalTransports,
+    /// A serial host's: no SFTP, no address to copy, a line to break. A
+    /// host's protocol never changes.
+    serial: bool,
     tab_group: Option<WeakEntity<TabGroup>>,
     /// A title the user gave this tab, to tell apart several connections to
     /// the same host. Lives as long as the tab, like the rest of the layout.
@@ -56,29 +61,30 @@ impl TerminalPanel {
         id: RemoteTerminalId,
         host_id: HostId,
         store: Entity<HostStore>,
-        remote_provider: SharedRemoteTerminalTransportProvider,
+        transports: HostTerminalTransports,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let (host, login) = {
+        let (host, connection) = {
             let store = store.read(cx);
             let host = store
                 .host(host_id)
                 .cloned()
                 .expect("terminal hosts must exist in the store");
-            let login = store.login_of(&host);
-            (host, login)
+            let connection = store.connection_of(&host);
+            (host, connection)
         };
+        let serial = host.is_serial();
         let terminal = cx.new(|cx| {
             let name = host.name.clone();
             let mut terminal = TerminalView::new(
                 ("terminal", id.0),
                 move |_| t!("terminal.remote.label", host = name),
-                remote_provider.factory_for(&login),
+                transports.factory_for(&connection),
                 window,
                 cx,
             );
-            terminal.set_menu_items(remote_menu_items(id, host_id, store.clone()));
+            terminal.set_menu_items(remote_menu_items(id, host_id, serial, store.clone()));
             terminal.set_reconnect_action(ReconnectTerminal(id), cx);
             terminal
         });
@@ -122,7 +128,8 @@ impl TerminalPanel {
             host_id,
             store,
             terminal,
-            remote_provider,
+            transports,
+            serial,
             tab_group: None,
             custom_title: None,
             _subscriptions: subscriptions,
@@ -149,6 +156,8 @@ impl TerminalPanel {
             host_is_ip: store
                 .host(self.host_id)
                 .is_some_and(|host| host.address_is_ip()),
+            serial: self.serial,
+            running: self.lifecycle(cx) == TerminalLifecycle::Running,
             editable: !store.is_temporary(self.host_id),
             group: self.tab_group.clone(),
             panel: cx.entity_id(),
@@ -169,10 +178,10 @@ impl TerminalPanel {
     }
 
     pub fn reconnect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(login) = self.store.read(cx).login(self.host_id) else {
+        let Some(connection) = self.store.read(cx).connection(self.host_id) else {
             return;
         };
-        let factory = self.remote_provider.factory_for(&login);
+        let factory = self.transports.factory_for(&connection);
         self.terminal.update(cx, |terminal, cx| {
             terminal.restart_with_factory(factory, cx)
         });
@@ -184,6 +193,13 @@ impl TerminalPanel {
         self.terminal.update(cx, |terminal, cx| {
             terminal.stop(&t!("terminal.notice.disconnected"), cx)
         });
+    }
+
+    /// 发送 Break, for a serial host's terminal.
+    pub fn send_break(&self, cx: &App) {
+        if self.serial {
+            self.terminal.read(cx).send_break(cx);
+        }
     }
 
     pub fn cancel_connection(&mut self, cx: &mut Context<Self>) {
@@ -253,7 +269,9 @@ impl Panel for TerminalPanel {
             .read(cx)
             .host(self.host_id)
             .and_then(|host| host.os);
-        let mark = HostMark::new(("terminal-tab-os", id.0), self.default_title(cx), os).small();
+        let mark = HostMark::new(("terminal-tab-os", id.0), self.default_title(cx), os)
+            .serial(self.serial)
+            .small();
         let tab_menu = self.tab_menu(cx);
         let state = match self.lifecycle(cx) {
             TerminalLifecycle::Starting => ConnectionState::Connecting,
@@ -283,21 +301,22 @@ impl Panel for TerminalPanel {
         let host_id = self.host_id;
         let terminal_id = self.id;
         let reconnect_dispatch = self.focus_handle(cx);
-        Some(vec![
+        let sftp = (!self.serial).then(|| {
             Button::new(("sftp", terminal_id.0))
                 .icon(Icon::new(CatalogIcon::FolderTree))
                 .label("SFTP")
                 .tooltip(t!("terminal.remote.sftp_tooltip"))
                 .on_click(move |_, window, cx| {
                     window.dispatch_action(Box::new(OpenExplorer(host_id)), cx)
-                }),
-            Button::new(("reconnect", terminal_id.0))
-                .icon(Icon::new(CatalogIcon::RefreshCw))
-                .tooltip(t!("terminal.remote.reconnect"))
-                .on_click(move |_, window, cx| {
-                    reconnect_dispatch.dispatch_action(&ReconnectTerminal(terminal_id), window, cx)
-                }),
-        ])
+                })
+        });
+        let reconnect = Button::new(("reconnect", terminal_id.0))
+            .icon(Icon::new(CatalogIcon::RefreshCw))
+            .tooltip(t!("terminal.remote.reconnect"))
+            .on_click(move |_, window, cx| {
+                reconnect_dispatch.dispatch_action(&ReconnectTerminal(terminal_id), window, cx)
+            });
+        Some(sftp.into_iter().chain([reconnect]).collect())
     }
 
     fn dropdown_menu(
@@ -316,9 +335,11 @@ impl Panel for TerminalPanel {
 
 /// What a remote terminal adds to its context menu: copying the host's
 /// address and ID below 复制, and the connection's commands at the bottom.
+/// A serial host has no address to copy and no SFTP to open.
 fn remote_menu_items(
     id: RemoteTerminalId,
     host_id: HostId,
+    serial: bool,
     store: Entity<HostStore>,
 ) -> TerminalMenuItems {
     let copy = Rc::new(move |menu: PopupMenu, cx: &App| {
@@ -332,11 +353,13 @@ fn remote_menu_items(
         } else {
             t!("terminal.remote.copy_host_name")
         };
-        menu.menu_with_icon(
-            copy_host,
-            Icon::new(CatalogIcon::ClipboardCopy),
-            Box::new(CopyHostAddress(host_id)),
-        )
+        menu.when(!serial, |menu| {
+            menu.menu_with_icon(
+                copy_host,
+                Icon::new(CatalogIcon::ClipboardCopy),
+                Box::new(CopyHostAddress(host_id)),
+            )
+        })
         .menu_with_icon(
             t!("terminal.remote.copy_id"),
             Icon::new(CatalogIcon::ClipboardCopy),
@@ -348,11 +371,13 @@ fn remote_menu_items(
             lifecycle,
             TerminalLifecycle::Starting | TerminalLifecycle::Running
         );
-        menu.menu_with_icon(
-            t!("terminal.remote.open_sftp"),
-            Icon::new(CatalogIcon::FolderTree),
-            Box::new(OpenExplorer(host_id)),
-        )
+        menu.when(!serial, |menu| {
+            menu.menu_with_icon(
+                t!("terminal.remote.open_sftp"),
+                Icon::new(CatalogIcon::FolderTree),
+                Box::new(OpenExplorer(host_id)),
+            )
+        })
         .menu_with_icon(
             t!("terminal.remote.reconnect"),
             Icon::new(CatalogIcon::RefreshCw),
@@ -376,6 +401,11 @@ struct TabMenu {
     id: RemoteTerminalId,
     host_id: HostId,
     host_is_ip: bool,
+    /// A serial host's tab: 发送 Break where an SSH host's has SFTP and its
+    /// address.
+    serial: bool,
+    /// Whether the terminal is connected, which a break needs.
+    running: bool,
     /// A saved host; a temporary one has nothing to edit.
     editable: bool,
     group: Option<WeakEntity<TabGroup>>,
@@ -421,8 +451,16 @@ impl TabMenu {
                 t!("terminal.remote.connect_in_new_tab"),
                 Icon::new(CatalogIcon::Plug),
                 Box::new(ConnectHost(host_id)),
+            );
+        menu = if self.serial {
+            menu.menu_with_icon_and_disabled(
+                t!("terminal.remote.send_break"),
+                Icon::new(CatalogIcon::Zap),
+                Box::new(SendBreak(id)),
+                !self.running,
             )
-            .menu_with_icon(
+        } else {
+            menu.menu_with_icon(
                 t!("terminal.remote.open_sftp"),
                 Icon::new(CatalogIcon::FolderTree),
                 Box::new(OpenExplorer(host_id)),
@@ -432,11 +470,12 @@ impl TabMenu {
                 Icon::new(IconName::Copy),
                 Box::new(CopyHostAddress(host_id)),
             )
-            .menu_with_icon(
-                t!("terminal.remote.reconnect"),
-                Icon::new(CatalogIcon::RefreshCw),
-                Box::new(ReconnectTerminal(id)),
-            );
+        };
+        menu = menu.menu_with_icon(
+            t!("terminal.remote.reconnect"),
+            Icon::new(CatalogIcon::RefreshCw),
+            Box::new(ReconnectTerminal(id)),
+        );
         if self.editable {
             menu = menu.menu_with_icon(
                 t!("terminal.remote.edit_host"),

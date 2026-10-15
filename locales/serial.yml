@@ -1,0 +1,32 @@
+_version: 2
+
+# Opening the device of a serial host's terminal
+serial.open.not_found:
+  zh-CN: "找不到串口设备 %{device}"
+  en: "Couldn’t find the serial port %{device}"
+serial.open.busy:
+  zh-CN: "串口 %{device} 已被占用：另一个标签或程序正在用它"
+  en: "The serial port %{device} is in use by another tab or program"
+serial.open.denied:
+  zh-CN: "没有权限打开串口 %{device}"
+  en: "You don’t have permission to open the serial port %{device}"
+serial.open.denied_linux:
+  zh-CN: "没有权限打开串口 %{device}：把当前用户加入 dialout 组，重新登录后再试"
+  en: "You don’t have permission to open the serial port %{device}. Add your user to the dialout group, then log in again."
+serial.open.failed:
+  zh-CN: "无法打开串口 %{device}：%{error}"
+  en: "Couldn’t open the serial port %{device}: %{error}"
+
+# While it runs
+serial.reader_thread:
+  zh-CN: 无法启动串口读取线程
+  en: Couldn’t start reading the serial port
+serial.lost:
+  zh-CN: "串口 %{device} 已断开"
+  en: "The serial port %{device} is gone"
+serial.lost_error:
+  zh-CN: "串口 %{device} 已断开：%{error}"
+  en: "The serial port %{device} is gone: %{error}"
+serial.write_error:
+  zh-CN: "无法写入串口 %{device}：%{error}"
+  en: "Couldn’t write to the serial port %{device}: %{error}"

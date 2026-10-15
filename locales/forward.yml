@@ -155,11 +155,11 @@ forward.panel.no_matches:
   zh-CN: 没有匹配的端口转发
   en: No matching port forwards
 forward.panel.no_hosts:
-  zh-CN: 还没有主机
-  en: No hosts yet
+  zh-CN: 还没有 SSH 主机
+  en: No SSH hosts yet
 forward.panel.no_hosts_hint:
-  zh-CN: 端口转发经由一台主机的 SSH 连接，先新建主机。
-  en: A port forward goes through a host’s SSH connection. Create a host first.
+  zh-CN: 端口转发经由一台主机的 SSH 连接，先新建一台 SSH 主机。
+  en: A port forward goes through a host’s SSH connection. Create an SSH host first.
 forward.panel.new_host:
   zh-CN: 新建主机…
   en: New host…

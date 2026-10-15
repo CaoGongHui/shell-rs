@@ -265,7 +265,8 @@ impl SshTerminalTransport {
                     Some(TerminalTransportCommand::OpenSftp(request)) => {
                         side_queue.push_back(Box::pin(open_sftp(&handle, fingerprint.clone(), request)));
                     }
-                    Some(TerminalTransportCommand::PromptReply { .. }) => {}
+                    Some(TerminalTransportCommand::PromptReply { .. })
+                    | Some(TerminalTransportCommand::SendBreak) => {}
                 },
                 () = async { side.as_mut().expect("guarded").await }, if side.is_some() => {
                     side = None;

@@ -241,9 +241,16 @@ pub struct HostInfo {
     pub name: String,
     /// The full group path, such as `生产/数据库`; `None` at the root.
     pub group: Option<String>,
+    /// Missing from an older app's answer, which had SSH hosts only.
+    #[serde(default)]
+    pub protocol: ProtocolChoice,
     pub user: String,
+    /// A serial host's device.
     pub host: String,
     pub port: u16,
+    /// A serial host's line, `115200 8N1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<String>,
     /// The detected operating system, as stored (`ubuntu`, `macos`, …).
     pub os: Option<String>,
     /// Connected to without being saved (a 临时连接, or an 外部连接 a bastion
@@ -255,8 +262,12 @@ pub struct HostInfo {
 }
 
 impl HostInfo {
+    /// `user@host:port`; a serial host's device and line.
     pub fn address(&self) -> String {
-        format!("{}@{}:{}", self.user, self.host, self.port)
+        match (self.protocol, &self.line) {
+            (ProtocolChoice::Serial, Some(line)) => format!("{} · {line}", self.host),
+            _ => format!("{}@{}:{}", self.user, self.host, self.port),
+        }
     }
 }
 
@@ -327,6 +338,9 @@ pub enum ErrorCode {
     UnsupportedShell,
     /// `exec --terminal`: the command line is longer than the shell takes.
     TooLong,
+    /// `exec`, a transfer or `sync` named a serial host, which has no SSH
+    /// connection to run them on.
+    NotSsh,
 }
 
 impl ErrorCode {
@@ -349,6 +363,7 @@ impl ErrorCode {
             ErrorCode::TerminalBusy => "terminal_busy",
             ErrorCode::UnsupportedShell => "unsupported_shell",
             ErrorCode::TooLong => "too_long",
+            ErrorCode::NotSsh => "not_ssh",
         }
     }
 }
@@ -413,6 +428,64 @@ where
     Option::<T>::deserialize(deserializer).map(Some)
 }
 
+/// What a host is, as the CLI spells it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProtocolChoice {
+    #[default]
+    Ssh,
+    Serial,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParityChoice {
+    #[default]
+    None,
+    Odd,
+    Even,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FlowControlChoice {
+    #[default]
+    None,
+    RtsCts,
+    XonXoff,
+}
+
+/// A serial host's device and line, as `hosts show` prints it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SerialDetails {
+    pub device: String,
+    pub baud: u32,
+    pub data_bits: u8,
+    pub parity: ParityChoice,
+    pub stop_bits: u8,
+    pub flow_control: FlowControlChoice,
+}
+
+/// A serial host's device and line as `hosts create` and `hosts update`
+/// take them: every field may be left out (`update` leaves it as it is,
+/// `create` takes 115200 8N1 without flow control).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SerialFields {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baud: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_bits: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parity: Option<ParityChoice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_bits: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flow_control: Option<FlowControlChoice>,
+}
+
 /// How a host logs in, as the CLI spells it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -441,23 +514,36 @@ pub enum CredentialKindChoice {
 /// A saved host in full, as `hosts show` prints it. `hosts create` and
 /// `hosts update` read the same names back, so what one prints the other
 /// takes. Never a secret: only whether one is saved, and only when shown.
+///
+/// A serial host has no `host`, `port`, `user`, `auth` or `route`, which
+/// are left out; it has `serial` instead.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HostDetails {
     pub id: String,
     pub name: String,
     /// The full group path, such as `生产/数据库`; `None` at the root.
     pub group: Option<String>,
-    pub host: String,
-    pub port: u16,
-    pub user: String,
-    pub auth: AuthChoice,
+    /// Missing from an older app's answer, which had SSH hosts only.
+    #[serde(default)]
+    pub protocol: ProtocolChoice,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<AuthChoice>,
     /// The credential's ID, for a host that logs in with one.
     pub credential: Option<String>,
     /// For a host with its own password, whether one is saved. Looked up
     /// only for `hosts show`, and for the host a change returns.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password_saved: Option<bool>,
-    pub route: RouteDetails,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<RouteDetails>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serial: Option<SerialDetails>,
     pub notes: String,
     pub os: Option<String>,
     #[serde(default)]
@@ -491,6 +577,12 @@ pub enum RouteDetails {
 pub struct HostFields {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// A new host's; `serial` without it makes a serial host. An update may
+    /// repeat the host's own but not change it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<ProtocolChoice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serial: Option<SerialFields>,
     #[serde(default, alias = "address", skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -683,6 +775,7 @@ mod tests {
             ErrorCode::TerminalBusy,
             ErrorCode::UnsupportedShell,
             ErrorCode::TooLong,
+            ErrorCode::NotSsh,
         ] {
             assert_eq!(
                 serde_json::to_string(&code).unwrap(),

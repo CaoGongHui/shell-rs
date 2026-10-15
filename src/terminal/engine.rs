@@ -314,6 +314,14 @@ impl TerminalEngine {
         self.runtime.reply_to_prompt(request_id, reply);
     }
 
+    /// Break the line, while it is connected: see
+    /// [`TerminalTransportCommand::SendBreak`].
+    pub fn send_break(&self) {
+        if matches!(self.lifecycle, TerminalLifecycle::Running) {
+            self.runtime.send_break();
+        }
+    }
+
     pub fn shutdown(&mut self, cx: &mut gpui_kit::Context<Self>) {
         self.generation = self.generation.saturating_add(1);
         self.lifecycle = TerminalLifecycle::Closing;
@@ -971,6 +979,10 @@ impl TerminalRuntime {
         let _ = self
             .commands
             .send(TerminalTransportCommand::PromptReply { request_id, reply });
+    }
+
+    fn send_break(&self) {
+        let _ = self.commands.send(TerminalTransportCommand::SendBreak);
     }
 }
 

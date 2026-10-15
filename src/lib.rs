@@ -26,6 +26,7 @@ pub mod monitor;
 pub mod netstat;
 pub mod processes;
 pub mod secrets;
+pub mod serial;
 pub mod services;
 pub mod settings;
 pub mod sftp;
