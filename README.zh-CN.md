@@ -73,7 +73,7 @@ ShellRS 把 Xshell 式的主机管理和多标签终端、WinSCP 式的双栏 SF
 
 - 兼容 Xshell 和 WinSCP 的命令行调用方式：在 JumpServer 等堡垒机的客户端里把 ShellRS 设成 SSH / SFTP 客户端，`ssh://` 链接打开终端，`sftp://` 链接打开 SFTP。
 - 认得 Xshell 的 `-url`、`-newtab` 和 WinSCP 的 `/sessionname=`；ShellRS 已在运行时，链接交给正在运行的那个打开。
-- 打开的是不保存的外部连接：不进主机列表，链接里的密码只留在内存里，标签关掉就没了。每条连接只用一个通道，不允许多开通道的堡垒机也能用。详见[使用手册](docs/manual.md#从堡垒机打开外部连接)。
+- 打开的是不保存的外部连接：不进主机列表，链接里的密码只留在内存里，标签关掉就没了。每条连接只用一个通道，不允许多开通道的堡垒机也能用。详见[使用手册](docs/manual.zh.md#从堡垒机打开外部连接)。
 
 **端口转发**
 
@@ -95,7 +95,7 @@ ShellRS 把 Xshell 式的主机管理和多标签终端、WinSCP 式的双栏 SF
 
 - 秘密只进系统钥匙串；主机信任记录存在 ShellRS 自己的 `known_hosts` 里，不改动 `~/.ssh`。
 - 在线升级：更新清单经 minisign 签名，安装包按 SHA-256 校验；后台下载，重启或退出时安装。分稳定版和 Beta 两个渠道，检查更新只发送版本号、系统和 CPU 架构。
-- 匿名使用统计：经 Aptabase 只发送版本、系统、CPU 架构和各功能的使用次数，不含主机、凭据、命令或任何标识，可在「设置 › 关于」关闭。详见[使用手册](docs/manual.md#隐私)。
+- 匿名使用统计：经 Aptabase 只发送版本、系统、CPU 架构和各功能的使用次数，不含主机、凭据、命令或任何标识，可在「设置 › 关于」关闭。详见[使用手册](docs/manual.zh.md#隐私)。
 
 ## 截图
 
@@ -154,7 +154,7 @@ shellrs download <ID> /var/log/syslog ./logs/      # 下载
 shellrs sync <ID> ./dist /opt/app --delete         # 同步目录，没变的文件跳过
 ```
 
-命令把请求交给正在运行的 ShellRS，由它用保存的配置和钥匙串登录。遇到陌生主机或缺少密码时，命令直接失败、返回稳定的错误码，不会弹框卡住 Agent。详见[使用手册](docs/manual.md#外部-cli)。
+命令把请求交给正在运行的 ShellRS，由它用保存的配置和钥匙串登录。遇到陌生主机或缺少密码时，命令直接失败、返回稳定的错误码，不会弹框卡住 Agent。详见[使用手册](docs/manual.zh.md#外部-cli)。
 
 ## 从源码构建
 
@@ -170,10 +170,10 @@ cargo run
 
 ## 文档
 
-- [使用手册](docs/manual.md)：每个功能的详细说明和快捷键
+- [使用手册](docs/manual.zh.md)：每个功能的详细说明和快捷键
 - [开发与测试](docs/development.md)：构建、测试和数据目录
 - [发布流程](docs/release.md)：打包、签名和在线更新的发布步骤
-- [更新日志](CHANGELOG.md)
+- [更新日志](CHANGELOG.zh.md)
 
 ## 路线图
 

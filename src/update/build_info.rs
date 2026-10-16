@@ -30,8 +30,15 @@ pub const WEBSITE: &str = "https://shellrs.com";
 /// Where a person downloads ShellRS by hand.
 pub const DOWNLOAD_PAGE: &str = "https://shellrs.com/download";
 
-/// What each version changed.
-pub const CHANGELOG_PAGE: &str = "https://shellrs.com/changelog";
+/// What each version changed, for the interface in `locale`: the website's
+/// Chinese page shows the Chinese changelog, the others the English one.
+pub fn changelog_page(locale: &str) -> &'static str {
+    if locale == "zh-CN" {
+        "https://shellrs.com/zh/changelog"
+    } else {
+        "https://shellrs.com/changelog"
+    }
+}
 
 /// The minisign public keys a manifest may be signed with: the key in use,
 /// and a spare kept offline so the first can be replaced. Rotating means

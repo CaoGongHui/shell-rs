@@ -54,7 +54,7 @@ Hosts, groups, credentials and forwarding rules live in a local SQLite database.
 - System monitor: system details, CPU (per core too), memory, network rates and disk use, refreshed every 2 seconds.
 - Network connections, processes and services: search and filter, process details, ending processes, starting, stopping and restarting systemd services, switching them on at boot, and their logs. These three and the monitor are for Linux only.
 - Docker: containers grouped by compose project, with start, stop, restart, details and logs, plus volumes, images and networks. When not root, passwordless sudo is used (for services as well).
-- Kubernetes: select a cluster from the host's kubeconfig, filter resources by namespace, inspect workloads and services, browse related pods, search container logs and copy kubectl commands. Off by default; turn it on in the settings. See the [user manual](docs/manual.en.md#kubernetes).
+- Kubernetes: select a cluster from the host's kubeconfig, filter resources by namespace, inspect workloads and services, browse related pods, search container logs and copy kubectl commands. Off by default; turn it on in the settings. See the [user manual](docs/manual.md#kubernetes).
 - Command history reads `~/.bash_history` on the host, and snippets, shared by every host, can be sorted into categories; click one to type it into the terminal, or run it straight away.
 - tmux: the host's tmux sessions, with the one the terminal is in marked; start one, attach the terminal to one or detach it, rename and end them.
 - Files: a single remote file list beside the terminal, on an SFTP channel of the terminal's own connection, following the terminal's current folder. Browse, edit and preview, drop files in to upload, and download to your Downloads folder.
@@ -73,7 +73,7 @@ Hosts, groups, credentials and forwarding rules live in a local SQLite database.
 
 - Launched the way Xshell and WinSCP are: in the client of a bastion host such as JumpServer, set ShellRS as the SSH or SFTP client. An `ssh://` link opens a terminal, an `sftp://` link an SFTP tab.
 - Understands Xshell's `-url` and `-newtab` and WinSCP's `/sessionname=`. When ShellRS is already running, the link opens there.
-- What opens is an unsaved external connection: it stays out of the host list, keeps the link's password in memory only and goes away with its tabs. Each connection uses a single channel, so bastion hosts that allow no more still work. See the [user manual](docs/manual.en.md#opening-from-a-bastion-host-external-connections).
+- What opens is an unsaved external connection: it stays out of the host list, keeps the link's password in memory only and goes away with its tabs. Each connection uses a single channel, so bastion hosts that allow no more still work. See the [user manual](docs/manual.md#opening-from-a-bastion-host-external-connections).
 
 **Port forwarding**
 
@@ -154,7 +154,7 @@ shellrs download <ID> /var/log/syslog ./logs/      # download
 shellrs sync <ID> ./dist /opt/app --delete         # sync a folder, skipping unchanged files
 ```
 
-The command hands each request to the running ShellRS, which logs in with the saved settings and keychain. An unknown host or a missing password fails right away with a stable error code instead of a prompt that would hang the agent. See the [user manual](docs/manual.en.md#external-cli) for details.
+The command hands each request to the running ShellRS, which logs in with the saved settings and keychain. An unknown host or a missing password fails right away with a stable error code instead of a prompt that would hang the agent. See the [user manual](docs/manual.md#external-cli) for details.
 
 ## Building from source
 
@@ -170,9 +170,9 @@ The first build compiles the whole GPUI stack and takes a while. See [developmen
 
 ## Documentation
 
-Apart from the user manual, the documentation is in Chinese for now:
+Apart from the user manual and the changelog, the documentation is in Chinese for now:
 
-- [User manual](docs/manual.en.md): every feature in detail, with shortcuts
+- [User manual](docs/manual.md): every feature in detail, with shortcuts
 - [Development](docs/development.md): building, testing, the data directory
 - [Releasing](docs/release.md): packaging, signing and publishing updates
 - [Changelog](CHANGELOG.md)

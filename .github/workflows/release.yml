@@ -1,6 +1,6 @@
 # A release: push a tag `v<version>` matching Cargo.toml's version.
 #
-#   verify   the tag, the CHANGELOG section, the update keys
+#   verify   the tag, the CHANGELOG sections (English and Chinese), the update keys
 #   macos    per-architecture apps: signed, notarized, stapled; update zip and DMG
 #   windows  per-user Inno Setup installer (unsigned for now)
 #   linux    AppImage
@@ -56,18 +56,25 @@ jobs:
           case "$version" in *-*) channel=beta ;; *) channel=stable ;; esac
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
+      # The GitHub release takes the English section; the website shows
+      # CHANGELOG.zh.md on its Chinese pages, so that one must have it too.
       - name: Release notes from CHANGELOG.md
         run: |
           version=${{ steps.version.outputs.version }}
-          awk -v heading="## [$version]" '
-            index($0, heading) == 1 { found = 1; next }
-            found && /^## \[/ { exit }
-            found { print }
-          ' CHANGELOG.md | sed -e '/./,$!d' > notes.md
-          if [ ! -s notes.md ]; then
-            echo "::error::CHANGELOG.md has no section ## [$version]"
-            exit 1
-          fi
+          section() {
+            awk -v heading="## [$version]" '
+              index($0, heading) == 1 { found = 1; next }
+              found && /^## \[/ { exit }
+              found { print }
+            ' "$1" | sed -e '/./,$!d'
+          }
+          for changelog in CHANGELOG.md CHANGELOG.zh.md; do
+            if [ -z "$(section "$changelog")" ]; then
+              echo "::error::$changelog has no section ## [$version]"
+              exit 1
+            fi
+          done
+          section CHANGELOG.md > notes.md
           cat notes.md
       - name: The build knows the update keys
         run: |

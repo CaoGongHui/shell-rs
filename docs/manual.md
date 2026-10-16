@@ -1,557 +1,542 @@
-# ShellRS 使用手册
+# ShellRS user manual
 
-[返回 README](../README.zh-CN.md)
+[Back to README](../README.md) · [简体中文](manual.zh.md)
 
-基于 GPUI Kit 的中文 SSH 主机管理工具，提供持久化的主机与分组、可在多台主机间共用的登录凭据、本地终端、SSH 多终端、对标 WinSCP 的 SFTP 双栏浏览器和 SSH 端口转发。
+An SSH host manager built on GPUI Kit, with saved hosts and groups, login credentials that several hosts can share, local terminals, multiple SSH terminals, a WinSCP-style dual-pane SFTP browser and SSH port forwarding.
 
-标题栏「ShellRS」后面的三个图标切换左侧栏显示的内容：主机列表、端口转发列表或凭据列表。侧栏隐藏时点其中一个会把它重新展开。
+The three icons after “ShellRS” in the title bar switch what the left sidebar shows: the host list, the port forwarding list or the credential list. When the sidebar is hidden, clicking one of them shows it again.
 
-ShellRS 同一时间只运行一个：已经开着时再打开一次，会把已有的窗口调到前面，新启动的那个随即退出。两个 ShellRS 各自把主机读进内存再写回同一个数据库，会互相覆盖对方的改动。（用 `SHELLRS_DATA_DIR` 指到不同数据目录的算不同的 ShellRS，可以同时运行。）要并排看两个终端或 SFTP，把标签拖成分栏即可。
+Only one ShellRS runs at a time: opening it again while it’s running brings the existing window to the front, and the newly launched copy quits. Two copies would each load the hosts into memory and write them back to the same database, overwriting each other’s changes. (Copies pointed at different data folders with `SHELLRS_DATA_DIR` count as different and can run side by side.) To see two terminals or SFTP tabs side by side, drag a tab into a split.
 
-在 macOS 上，点窗口左上角的关闭按钮只是把 ShellRS 隐藏到后台：已打开的连接、SFTP 传输、端口转发和外部 CLI 照常运行，点 Dock 图标恢复窗口，原来的标签都在。要真正退出用 ⌘Q，或者右键 Dock 图标选「退出」。Windows 和 Linux 上关闭窗口就是退出。
+On macOS, the close button at the top left of the window only hides ShellRS: open connections, SFTP transfers, port forwards and the external CLI keep running. Click the Dock icon to bring the window back with all its tabs. To actually quit, press ⌘Q or right-click the Dock icon and choose Quit. On Windows and Linux, closing the window quits.
 
-## 主机列表
+## Hosts
 
-左侧栏里保存的每一项是一台主机：地址、端口和认证方式。同一台机器用不同用户登录，就保存成两台主机。名称可以留空，保存时默认使用地址；也可以填写自定义名称。
+Each item saved in the left sidebar is a host: an address, a port and a way to authenticate. To log in to the same machine as different users, save it as two hosts.
 
-名称下面的「协议」选 SSH、Telnet 或串口。编辑主机时也可以换协议：表单里共有的项（名称、地址、分组、连接方式、备注等）沿用，其余是新协议的默认值。SSH 主机被别的主机当作跳板、或有端口转发经由它时，只能是 SSH。下面先说 SSH 主机，Telnet 主机和串口主机见本节末尾。
+“Protocol”, below the name, is SSH, Telnet or Serial. You can change it when editing a host: what the protocols’ forms share (the name, address, group, connection, notes and so on) carries over, and the rest takes the new protocol’s defaults. An SSH host that other hosts use as a jump host, or that port forwards go via, stays SSH. SSH hosts come first below; Telnet and serial hosts are at the end of this section.
 
-主机对话框的「认证方式」有三种：
+The host dialog’s “Authentication” has three options:
 
-- **密码**：填用户名和密码，密码保存在系统钥匙串；密码留空则每次连接时询问。只用密码登录，不会先拿 SSH Agent 或私钥去试。服务器只在键盘交互式认证里收密码时（如 ESXi），保存的密码会自动回答它唯一的隐藏问题；还有验证码等别的问题时照样询问。
-- **使用凭据**：选一条保存好的凭据，用户名和登录方式都来自凭据（见下面「凭据」），对话框里不再填用户名和密码。「测试连接」同样使用凭据保存的密码。要用私钥登录，就建一条密钥凭据。
-- **无密码**：只填用户名。依次尝试服务器免认证、SSH Agent 和 `~/.ssh` 下的默认私钥（`id_ed25519`、`id_ecdsa`、`id_rsa`），和命令行 `ssh` 默认的做法一样。服务器要求密码时连接失败并说明原因，不会询问；服务器在密钥之后再要验证码时照样询问。
+- **Password**: enter a username and password; the password is kept in the system keychain. Leave the password empty to be asked at each connection. Only the password is used: the SSH agent and private keys aren’t tried first. When the server takes passwords only through keyboard-interactive authentication (ESXi, for one), the saved password answers its single hidden question; other questions, such as a verification code, are still asked.
+- **Credential**: choose a saved credential. The username and the way to log in both come from the credential (see “Credentials” below), so the dialog no longer asks for a username or password. “Test connection” also uses the password saved in the credential. To log in with a private key, create a key credential.
+- **No password**: enter only the username. ShellRS tries logging in without authentication, then the SSH agent, then the default private keys in `~/.ssh` (`id_ed25519`, `id_ecdsa`, `id_rsa`), the same as the `ssh` command does by default. If the server asks for a password, the connection fails with the reason instead of asking; if the server asks for a verification code after the key, you’re still asked for it.
 
-无论选哪种，连接时都先问服务器是否允许免认证登录，允许就直接登录。「测试连接」时选了「密码」却没填，就像「无密码」那样试一遍（免认证、SSH Agent、默认私钥），连不上就说明原因。
+Whichever you choose, ShellRS first asks the server whether it allows logging in without authentication, and logs straight in if it does. If “Test connection” runs with “Password” chosen but no password entered, it tries what “No password” would (no authentication, the SSH agent, the default private keys) and explains why if it can’t connect.
 
-主机对话框「分组」下面的「连接方式」决定怎么连到这台主机，终端、SFTP、端口转发、外部 CLI 和「测试连接」都照它走：
+“Connection”, below “Group” in the host dialog, decides how to reach the host. Terminals, SFTP, port forwarding, the external CLI and “Test connection” all follow it:
 
-- **直接连接**：默认，本机直接连主机的地址和端口。
-- **SSH 跳板**：经过别的已保存主机连过去，支持多级。框里一排标签写出整条路（「本机 → 阿里云99 → 禅道 → 当前主机」），下面每台跳板一行，「×」移除，「添加跳板主机」可按名称或地址搜索；要调顺序就移除后重新添加。连接时先登录第 1 台，由它连第 2 台，依此类推，最后一台连到主机。每台跳板都用它自己的地址、端口、认证方式（密码、凭据或无密码）和主机信任记录，首次连接各问一次主机密钥，询问框里写明是哪台跳板主机；跳板主机自己的「连接方式」在这里不生效，要多级就在这里按顺序列出。主机的地址按跳板主机那边的网络来填，例如内网地址。
-- **代理连接**：经由 HTTP 代理（`CONNECT`）或 SOCKS5 代理连接，在下拉框里选。填代理的地址和端口（例如本机的 `127.0.0.1:7890`）；代理需要认证时再填用户名和密码，密码保存在系统钥匙串，经由同一个代理、同一个用户名的主机共用。主机的地址交给代理去解析。代理要求认证却没有密码、或者拒绝了用户名和密码时，连接失败并说明原因，不会询问。
+- **Direct**: the default. This computer connects straight to the host’s address and port.
+- **Jump hosts**: connects through other saved hosts, with as many hops as needed. A row of labels in the box shows the whole route (“This computer → aliyun-99 → zentao → This host”), and below it each jump host has a row: “×” removes it, and “Add jump host” searches by name or address. To change the order, remove jump hosts and add them again. ShellRS logs in to the first jump host, which connects to the second, and so on, until the last one connects to the host. Each jump host uses its own address, port, authentication (password, credential or no password) and known hosts entries; on the first connection you’re asked about each one’s host key, and the prompt says which jump host it is. A jump host’s own “Connection” has no effect here: for several hops, list them all here in order. Enter the host’s address as the jump hosts’ network sees it, such as an internal address.
+- **Proxy**: connects through an HTTP proxy (`CONNECT`) or a SOCKS5 proxy, chosen in the drop-down. Enter the proxy’s address and port (such as `127.0.0.1:7890` on this computer); if the proxy needs authentication, also enter a username and password. The password is kept in the system keychain and shared by hosts that go through the same proxy with the same username. The proxy resolves the host’s address. If the proxy requires authentication but has no password, or rejects the username and password, the connection fails with the reason instead of asking.
 
-已经打开的标签各自记着打开时的主机：编辑主机（改名称、地址、协议等）不影响它们，标题、图标、状态栏和重新连接都照打开时的来，要用新的设置就新开一个标签；删除主机也不关闭它的标签，只是标签菜单里少了「编辑主机…」「打开 SFTP」这类要用到主机本身的项。删除一台被别的主机用作跳板的主机，确认框写明有几台主机在用它；删除后那些主机的跳板列表里留下一行「已删除的主机」，连接时直接报错，不会悄悄改成直连或少跳一级，编辑时移除或换一台即可。已经打开的连接不受影响。
+Each open tab keeps the host as it was when the tab opened: editing the host (its name, address, protocol and so on) leaves it alone, and its title, icon, status bar and reconnecting all go by what it opened with; open a new tab for the new settings. Deleting a host doesn’t close its tabs either; their menus just lose “Edit host…”, “Open SFTP” and the other items that need the host itself. When you delete a host that other hosts use as a jump host, the confirmation says how many hosts use it. Afterwards their jump host lists keep a “Deleted host” row, and connecting fails right away instead of quietly connecting directly or skipping a hop; edit those hosts to remove it or choose another. Open connections aren’t affected.
 
-**尚未实现：跳板和代理叠加使用、拖动调整跳板顺序、HTTPS 代理、在主机列表里标出连接方式。**
+**Not implemented yet: combining jump hosts with a proxy, reordering jump hosts by dragging, HTTPS proxies, and showing the connection type in the host list.**
 
-对话框最后是「备注」，可以写多行（回车换行），记下机器的用途、负责人、到期时间之类，只保存在本地数据库里，不影响连接。
+The last field in the dialog is “Notes”, which can span several lines (Enter starts a new line): what the machine is for, who looks after it, when it expires and so on. Notes are kept only in the local database and don’t affect connecting.
 
-主机前面的图标是连接时探测到的系统徽章，还没探测到系统时是名称的首字。没有品牌色的图标（首字，以及 macOS 和 AlmaLinux 的徽章）按地址取一个固定的颜色，串口主机按串口设备取，同一个地址总是同一种颜色。Telnet 和串口主机没有系统可探测，图标总是名称的首字。
+The icon before a host is the badge of the system found when connecting, or the first letter of its name until one is found. An icon without a brand color (the letter, and the macOS and AlmaLinux badges) gets a color from the address, or a serial host’s port; the same address always gets the same color. Telnet and serial hosts have no system to find, so their icon is always the first letter of the name.
 
-鼠标停在主机上，行的右侧会显示 `用户@地址:端口`，主机有备注时下面接着显示备注（太长的只显示前 6 行）。右键主机可连接、打开 SFTP、编辑、创建副本、复制 IP（地址是域名时叫「复制主机名」）、复制 ID 或删除。「复制 ID」复制的是主机的 16 位随机标识（形如 `Jwg5rHvXCxw89paM`），供其他工具标识这台主机：它在主机创建时生成，改名、改地址都不变，创建的副本得到新的 ID，删掉的 ID 不会再分配。没有打开任何标签时，中间区显示「最近连接」列表，双击或回车连接；右键其中的主机弹出同一个菜单，并选中该主机。
+Hover over a host and `user@address:port` appears at the right of its row, with its notes below if it has any (only the first 6 lines of long ones). A host’s context menu has “Connect”, “Open SFTP”, “Edit host…”, “Duplicate”, “Copy IP” (“Copy hostname” when the address is a domain name), “Copy ID” and “Delete”. “Copy ID” copies the host’s 16-character random identifier (like `Jwg5rHvXCxw89paM`), which other tools use to identify the host: it’s generated when the host is created and stays the same when you rename the host or change its address; a duplicated host gets a new ID, and deleted IDs are never handed out again. When no tabs are open, the center area shows the “Recent” list; double-click a host or press Enter to connect. Right-clicking a host there opens the same menu and selects the host.
 
-列表上方「新建主机…」左边的「快速连接」打开一个搜索框，列出所有保存的主机：最近连接过的在前，其余按名称排，每行写着分组和 `用户@地址:端口`。输入名称、地址、用户名、备注或分组里的字就能筛选，几个词用空格隔开时都要匹配。打开时不高亮任何一台；输入后高亮第一个匹配的，回车就连它；也可以 ↑↓ 移动，或者直接单击一台连接。
+“Find a host”, to the left of “New host…” above that list, opens a search box listing every saved host: recently connected ones first, the rest by name, each row showing its group and `user@address:port`. Type part of a name, address, username, notes or group to filter; with several words separated by spaces, all of them must match. Nothing is highlighted when it opens; once you type, the first match is highlighted and Enter connects to it. You can also move with ↑↓, or click a host to connect to it.
 
-列表上方的搜索框（⌘K，其他平台 Ctrl+K）按名称、地址、用户名筛选主机，也按名称找分组：分组名匹配时列出这个分组和它下面的全部子分组、主机。结果都展开，匹配的主机连同它所在的各级分组一起显示。回车连接第一台匹配的主机（按列表里的顺序；只因分组匹配而列出的主机不算）。Esc 清空搜索。
+The search box above the host list (⌘K, or Ctrl+K on Windows and Linux) filters hosts by name, address and username, and finds groups by name: when a group’s name matches, the group is listed with all its subgroups and hosts. Results are expanded, and matching hosts appear together with every level of group above them. Enter connects to the first matching host (in list order; hosts listed only because their group matched don’t count). Esc clears the search.
 
-拖动分组或主机到同类项目的上侧 / 下侧可调整同级顺序；主机拖到分组会移入该分组，分组拖到另一个分组的中部会成为子分组。拖到列表空白处可移回根层级。分组始终排在同级主机之前，顺序与分组的展开状态会保存到本地数据库。搜索时暂停拖动排序。
+Drag a group or host above or below another item of the same kind to reorder items at the same level; drag a host onto a group to move it into the group, and drag a group onto the middle of another group to make it a subgroup. Drag to an empty part of the list to move an item back to the top level. Groups always come before hosts at the same level, and the order and which groups are expanded are saved in the local database. Reordering by dragging is paused while you search.
 
-**Telnet 主机**用 Telnet 连接，常见的是交换机、路由器、串口服务器（每个端口对应一台设备的 Console）、GNS3 / EVE-NG 里设备的 Console 和嵌入式设备。在主机对话框的「协议」里选「Telnet」：
+**Telnet hosts** are reached over Telnet: switches and routers, console servers (one port for each device’s console), device consoles in GNS3 or EVE-NG, and embedded devices. Choose “Telnet” under “Protocol” in the host dialog:
 
-- **地址和端口**：同 SSH 主机，端口默认 23（新建主机时，端口没改过就随协议在 22 和 23 之间切换）。名称留空时用地址。
-- **Telnet 自动登录**：默认不勾选，连上后自己在终端里输入用户名和密码。勾选后在「认证方式」里选：
-  - **手动输入**：填用户名和密码，都可以留空。密码保存在系统钥匙串；留空时只输入用户名，密码连上后自己输入。设备只问密码时（如只设了 `line vty` 密码的思科设备）把用户名留空。
-  - **使用凭据**：选一条密码凭据，用户名和密码都来自凭据。只列密码凭据：密钥和 SSH Agent 对 Telnet 没有用。
-  - **用户名提示文本 / 密码提示文本**：设备问用户名、密码时显示的文字，留空用常见的（`login:`、`Username:`、`User Name:` 和 `Password:`），填了就只认填的。匹配时忽略大小写和行尾的空格，只看光标所在行的结尾。
-- **自动登录怎么做**：看到用户名提示就输入用户名，看到密码提示就输入密码，各输入一次。先看到密码提示（设备只问密码）就直接输入密码。登录失败、又出现用户名提示时不再重试，交给你自己输入；在它输入之前你按了键，它也不再输入。
-- **连接方式**：同 SSH 主机，可以直接连接、经过 SSH 跳板或代理。经过跳板时由最后一台跳板连到 Telnet 主机的地址和端口，所以地址按跳板那边的网络来填。Telnet 主机不能当跳板，端口转发也不能经由它。
-- **测试连接**：照连接方式走到地址和端口，连上就断开，说明这个端口能连通；不检查自动登录。
-- **连接**：打开一个终端标签，用法同 SSH 的远程终端。按 Telnet 协议告诉设备终端类型（xterm-256color）和窗口大小，窗口变化时也会告诉它；回车发送 CR LF（同 PuTTY 的默认）。设备断开（如输入 `exit`）后按 Enter 在原标签重连；改了地址、自动登录等设置，新开的标签才用新的设置。
-- **菜单**：标签菜单里有「发送 Break」，发送 Telnet 的 Break，串口服务器会把它转成串口线上的 Break。没有「打开 SFTP」，右侧栏只有命令片段，不探测系统、不显示延迟。
-- **注意**：Telnet 不加密，用户名、密码和终端里的内容都是明文，只在可信的网络里用。终端只按 UTF-8 显示。设备不负责回显时（如国际象棋服务器、MUD，或手动输入 SMTP、HTTP、Redis 命令），ShellRS 自己显示你打的字，同 PuTTY 的默认：一行打完按 Enter 才整行发出，发出前可以用退格、Ctrl+U 修改；方向键等照常直接发送。少数自己回显却不说的设备会把字显示两遍。
+- **Address and port**: as for an SSH host; the port is 23 by default (for a new host, the port follows the protocol between 22 and 23 until you change it). The name is the address if left empty.
+- **Log in automatically**: off by default, so you type the username and password in the terminal once connected. Turn it on and choose under “Authentication”:
+  - **Manual**: a username and a password, either of which may be left empty. The password is kept in the system keychain; without one, only the username is typed and you type the password once connected. For a device that asks only for a password (such as a Cisco device with just a `line vty` password), leave the username empty.
+  - **Credential**: a password credential, which gives both the username and the password. Only password credentials are listed: keys and the SSH agent are no use to Telnet.
+  - **Username prompt / Password prompt**: what the device shows when it asks for each. Left empty, the usual ones are recognized (`login:`, `Username:`, `User Name:` and `Password:`); filled in, only that text is. Matching ignores case and spaces at the end of the line, and looks only at the end of the line the cursor is on.
+- **How it logs in**: at the username prompt it types the username, and at the password prompt the password, each once. A device that asks for the password first gets just the password. After a failed login, when the username prompt comes again, it leaves you to it; and if you press a key before it types, it doesn’t type at all.
+- **Connection**: as for an SSH host: direct, through SSH jump hosts, or through a proxy. Through jump hosts, the last one connects to the Telnet host’s address and port, so enter the address as seen from there. A Telnet host can’t be a jump host, and no port forward can go through it.
+- **Test connection**: follows the connection to the address and port and hangs up, telling you the port can be reached; it doesn’t try the automatic login.
+- **Connecting**: opens a terminal tab that works like an SSH host’s remote terminal. It tells the device the terminal type (xterm-256color) and the window size, again whenever the window changes; Enter sends CR LF (PuTTY’s default). After the device disconnects (say you type `exit`), press Enter to reconnect in the same tab; changing the address, the automatic login or another setting applies to tabs opened afterwards.
+- **Menus**: the tab menu has “Send break”, which sends Telnet’s break; a console server turns it into a break on its serial line. There’s no “Open SFTP”, the right sidebar has only Snippets, and there’s no system detection or latency.
+- **Note**: Telnet isn’t encrypted: the username, the password and everything in the terminal travel as plain text, so use it only on networks you trust. The terminal shows UTF-8 only. When the device doesn’t take care of echo (chess servers, MUDs, or SMTP, HTTP and Redis typed at by hand), ShellRS shows what you type itself, as PuTTY does by default: the line goes when you press Enter, and until then Backspace and Ctrl+U edit it; arrow keys and the like still go straight away. The odd device that echoes without saying so shows each character twice.
 
-**串口主机**是本机的一个串口，如 USB 转串口线、开发板的调试口、交换机和路由器的 Console 口。在主机对话框的「协议」里选「串口」：
+**Serial hosts** are serial ports of this computer, such as a USB-to-serial cable, a development board’s debug port, or a switch’s or router’s console port. Choose “Serial” under “Protocol” in the host dialog:
 
-- **串口设备**：可以手填，右端的下拉列出本机找到的串口，最后一项「重新检测」重新查找。macOS 只列 `/dev/cu.*`，Linux 是 `/dev/ttyUSB0` 这样的路径，Windows 是 `COM3` 这样的名字。名称留空时用串口设备。
-- **波特率**：默认 115200，下拉里有常用值，也可以手填。
-- **数据位、校验位、停止位、流控**：数据位 5–8，校验位无 / 奇校验 / 偶校验，停止位 1 / 2，流控无 / RTS/CTS / XON/XOFF；默认 8N1、无流控。不支持 Mark / Space 校验、1.5 位停止位和 DSR/DTR 流控。
-- **测试连接**：按填的参数打开串口再关掉，说明能否打开；打不开时写明原因（找不到设备、已被占用、没有权限）。它只说明本机能打开这个串口，不检查另一端有没有设备在应答。
-- **没有的东西**：串口主机没有地址、端口、认证方式和连接方式。它不能当跳板，端口转发也不能经由它。
-- **连接**：打开一个终端标签，用法同 SSH 的远程终端。断开后（如拔掉 USB 线）按 Enter 在原标签重连；改了波特率等参数，新开的标签才用新的设置。
-- **独占**：同一个串口同时只能被一个程序打开，macOS 和 Linux 上 ShellRS 也独占它。已经打开时再连接会报「已被占用」。Linux 上通常要把当前用户加入 `dialout` 组才能打开串口。
-- **菜单**：串口主机的右键菜单里没有「打开 SFTP」和「复制 IP」。鼠标停在串口主机上显示「设备 · 115200 8N1」。
+- **Serial port**: type it, or pick from the menu at its right end, which lists the serial ports found on this computer; its last item, “Look again”, looks again. macOS lists only `/dev/cu.*`, Linux has paths like `/dev/ttyUSB0`, and Windows has names like `COM3`. The name is the serial port if left empty.
+- **Baud rate**: 115200 by default; the menu has the common rates, and you can type any other.
+- **Data bits, Parity, Stop bits, Flow control**: data bits 5–8, parity None / Odd / Even, stop bits 1 / 2, flow control None / RTS/CTS / XON/XOFF; 8N1 without flow control by default. Mark and space parity, 1.5 stop bits and DSR/DTR flow control aren’t supported.
+- **Test connection**: opens the serial port with the settings you entered and closes it again, saying whether it opened, or why not (not found, in use, no permission). It only tells you this computer can open the port, not whether a device on the other end answers.
+- **What it doesn’t have**: a serial host has no address, port, authentication or connection. It can’t be a jump host, and no port forward can go through it.
+- **Connecting**: opens a terminal tab that works like an SSH host’s remote terminal. After it disconnects (say the USB cable is pulled), press Enter to reconnect in the same tab; changing the baud rate or another setting applies to tabs opened afterwards.
+- **One at a time**: a serial port can be open in only one program at a time, and on macOS and Linux ShellRS holds it to itself. Connecting to it again while it’s open says it’s in use. On Linux, your user usually needs to be in the `dialout` group to open serial ports.
+- **Menus**: a serial host’s context menu has no “Open SFTP” and no “Copy IP”. Hovering over it shows “device · 115200 8N1”.
 
-**尚未实现：堡垒机用 `telnet://` 链接拉起 ShellRS、用 XMODEM / YMODEM 传文件（ZMODEM 可以，见「终端」的「ZMODEM 传文件」）、控制 DTR / RTS 线、macOS 上用 socat 等程序造的虚拟串口（伪终端设不了波特率）。**
+**Not yet available: opening ShellRS from a bastion host’s `telnet://` link, sending files with XMODEM / YMODEM (ZMODEM works: see “ZMODEM transfers” under “Terminal”), controlling the DTR / RTS lines, and on macOS, virtual serial ports made by programs such as socat (a pseudo-terminal takes no baud rate).**
 
-## 临时连接
+## Quick connect
 
-标题栏右上角的「临时连接…」连一台主机而不保存它，适合只登一次的机器。对话框和新建主机一样填地址、端口和认证方式（密码、使用凭据或无密码），没有分组、连接方式和备注，名称可以不填（用地址）；可以先「测试连接」。「协议」选「Telnet」时填地址、端口和自动登录（密码只在内存里）；选「串口」时填串口设备和参数，直接打开一个串口。点「连接」打开一个终端标签：
+“Quick connect…” at the top right of the title bar connects to a host without saving it, for machines you log in to only once. As for a new host, the dialog asks for the address, port and authentication (Password, Credential or No password); there are no Group, Connection or Notes fields, and the name is optional (the address is used instead). You can “Test connection” first. With “Telnet” as the protocol, enter the address, port and automatic login (the password stays in memory); with “Serial”, enter a serial port and its line to open it directly. “Connect” opens a terminal tab:
 
-- **功能齐全**：在新标签页中连接、打开 SFTP、重新连接和右侧栏的全部工具都能用。连接方式是直接连接。
-- **不保存**：不进主机列表、开始页的最近连接和数据库；它的终端和 SFTP 标签都关掉后就没了。标签的菜单里没有「编辑主机…」。
-- **密码只在内存里**：填的密码不进钥匙串，重新连接时照样用它；没填时服务器要密码就弹框问。选「使用凭据」时用凭据保存的密码或私钥。
-- 外部 CLI 的 `shellrs hosts list` 也列出它（JSON 里 `"temporary": true`，表格的分组一栏写「（未保存）」），标签开着时可以用它的 ID。
+- **Fully featured**: “Connect in new tab”, “Open SFTP”, “Reconnect” and all the right sidebar tools work. The connection is direct.
+- **Not saved**: it stays out of the host list, the start page’s Recent list and the database, and is gone once its terminal and SFTP tabs are all closed. Its tab menu has no “Edit host…”.
+- **Password in memory only**: the password you enter doesn’t go into the keychain and is reused when reconnecting; if you left it empty and the server wants a password, you’re asked. With “Credential”, the password or private key saved in the credential is used.
+- The external CLI’s `shellrs hosts list` lists it too (`"temporary": true` in the JSON, “(not saved)” in the table’s group column), and you can use its ID while its tabs are open.
 
-要保存的主机在主机列表标题栏的「+」、右键菜单或 ⌘N（其他平台 Ctrl+N）新建。
+Hosts you want to keep are created with “+” at the top of the host list, the context menu, or ⌘N (Ctrl+N on Windows and Linux).
 
-## 端口转发
+## Port forwarding
 
-点标题栏的端口转发图标，左侧栏换成转发列表。每条转发规则经由一台已保存的主机，启动时为自己建立一条 SSH 连接，不依赖该主机的终端或 SFTP 标签：关掉标签、对主机「断开连接」都不影响它，主机的连接状态也不把它算在内。有转发在运行时，标题栏的端口转发图标旁显示运行数量。
+Click the port forwarding icon in the title bar and the left sidebar switches to the list of forwards. Each forwarding rule goes through a saved host and opens an SSH connection of its own when it starts, independent of that host’s terminal or SFTP tabs: closing the tabs or choosing “Disconnect” on the host doesn’t affect it, and the host’s connection state doesn’t count it. While forwards are running, the number running appears next to the port forwarding icon in the title bar.
 
-三种转发，都按「入口 → 出口 → 目标」理解，连接从入口进、经 SSH 隧道到出口、再由出口去连目标：
+There are three kinds of forward. Think of each as “entrance → exit → destination”: a connection comes in at the entrance, goes through the SSH tunnel to the exit, and the exit connects to the destination:
 
-| 类型 | 入口（监听） | 出口 | 用途 |
+| Type | Entrance (listens) | Exit | Use |
 | --- | --- | --- | --- |
-| 本地转发（`ssh -L`） | 本机 | 服务器 | 在本机访问服务器那边的服务，例如用本机的客户端连只对服务器开放的数据库 |
-| 远程转发（`ssh -R`） | 服务器 | 本机 | 让服务器那边访问本机的服务，例如把本机开发中的站点给对方看、接收 Webhook |
-| 动态转发（`ssh -D`） | 本机（SOCKS 代理） | 服务器 | 把服务器当代理，目标由应用自己指定，例如让浏览器经由服务器上网 |
+| Local (`ssh -L`) | This computer | Server | Reach a service on the server’s side from this computer, such as connecting a local client to a database that only the server can reach |
+| Remote (`ssh -R`) | Server | This computer | Let the server’s side reach a service on this computer, such as showing someone a site you’re developing locally, or receiving webhooks |
+| Dynamic (`ssh -D`) | This computer (SOCKS proxy) | Server | Use the server as a proxy, with the destination chosen by the app, such as browsing the web through the server |
 
-- **新建和编辑**：列表标题栏的「+」打开对话框。上方一行三张卡片选类型，中间的示意图随表单实时填入地址、标出入口在哪台机器上，下面一句话说明这条规则的效果（如「在本机连接 127.0.0.1:8080，就等于从 SSH 服务器连接 db.internal:3306。」）。示意图和这句话里的「SSH 服务器」就是「经由主机」选的那一台，图里按它扮演的角色称呼，不写主机的名称。示意图上有一个圆点沿连接方向缓缓移动：先过 SSH 隧道，再到目标，停一下，周而复始；切换类型时从新的入口重新出发。名称可以不填，列表里显示转发摘要（`8080 → db.internal:3306`、`9000 ← localhost:3000`、`SOCKS 1080`）。
-- **启动和停止**：每行末尾的按钮，或双击该行、选中后回车；右键菜单里还有编辑和删除。「创建」只保存规则，不会自动启动。勾选「启动 ShellRS 时自动开启」的规则随应用启动。
-- **状态**：行尾显示正在连接、运行中（及当前连接数）、正在重连或已停止的原因。某个连接转发不了（例如服务器连不上目标）只在该行提示，转发本身继续运行。
-- **登录**：使用主机的配置、钥匙串里保存的密码和 ShellRS 自己的主机信任记录。首次连接的主机、需要输入的密码会弹出和终端一样的询问框，并注明是哪条转发在连接；取消询问等于停止这条转发。
-- **断线重连**：连接中断后按 1、3、10 秒自动重连三次，重连期间本机监听端口保留，新进来的连接会被直接关闭。自动重连不弹任何询问：需要重新输入密码、确认主机密钥时停止并写明原因，手动启动即可。三次都失败也会停止，并弹出通知。
-- **修改后**：编辑运行中规则的类型、主机、监听或目标，这条转发会按新设置重新启动；只改名称或自动开启不会。编辑它所经由的主机（地址、认证方式、凭据、跳板等）不影响运行中的转发，下次启动时才用新的设置。
-- **删除主机**：删除主机（或包含它的分组）会连同经由它的转发规则一起删除，运行中的先停止，确认框里写明数量。
-- **动态转发**支持 SOCKS5（无认证，`CONNECT`，IPv4、域名、IPv6）和 SOCKS4 / 4a。域名交给服务器解析。
-- **监听地址**默认 `127.0.0.1`。填其他地址时，本地和动态转发会被同一网络中的其他设备使用；远程转发需要服务器的 `sshd_config` 设置 `GatewayPorts clientspecified` 或 `yes`，其他机器才连得上；默认是 `no`，这时转发照常运行、不报错，但只监听服务器自己的 `127.0.0.1`（和手写 `ssh -R` 一样）。对话框在填了非回环地址时会提示这一点。1024 以下的端口需要管理员（服务器上是 root）权限。不支持端口 0（由系统挑选端口）。
+- **Creating and editing**: “+” at the top of the list opens the dialog. A row of three cards at the top chooses the type; the diagram in the middle fills in the addresses as you type and marks which machine the entrance is on; and a sentence below explains what the rule does (such as “Connecting to 127.0.0.1:8080 on this computer is the same as connecting to db.internal:3306 from the SSH server.”). The “SSH server” in the diagram and the sentence is the host chosen in “Via host”; the diagram calls it by its role, not by the host’s name. A dot moves slowly along the diagram in the direction of the connection: through the SSH tunnel first, then on to the destination, pausing and starting over; switching type sends it off again from the new entrance. The name is optional; without one, the list shows a summary of the forward (`8080 → db.internal:3306`, `9000 ← localhost:3000`, `SOCKS 1080`).
+- **Starting and stopping**: the button at the end of each row, double-click the row, or select it and press Enter; the context menu also has “Edit port forward…” and “Delete”. “Create” only saves the rule and doesn’t start it. Rules with “Start when ShellRS opens” checked start along with the app.
+- **Status**: the end of the row shows “Connecting”, “Running” (with the current number of connections), “Connection lost, reconnecting”, or “Stopped:” with the reason. When a single connection can’t be forwarded (for example, the server can’t reach the destination), only that row says so, and the forward keeps running.
+- **Login**: uses the host’s settings, the password saved in the keychain and ShellRS’s own known hosts file. A host you’re connecting to for the first time, or a password that has to be entered, brings up the same prompt as in a terminal, saying which forward is connecting; cancelling the prompt stops the forward.
+- **Reconnecting after a drop**: when the connection drops, ShellRS reconnects automatically up to three times, after 1, 3 and 10 seconds. While it reconnects, the local listening port stays open, and new incoming connections are closed straight away. Automatic reconnects never prompt: if a password needs entering again or a host key needs confirming, the forward stops with the reason, and you can start it by hand. It also stops after three failed attempts, with a notification.
+- **After changes**: editing a running rule’s type, host, listening address or destination restarts the forward with the new settings; changing only the name or auto start doesn’t. Editing the host it goes through (its address, authentication, credential, jump hosts and so on) leaves a running forward alone: the new settings apply the next time it starts.
+- **Deleting a host**: deleting a host (or a group that contains it) also deletes the forwarding rules that go through it, stopping running ones first; the confirmation says how many.
+- **Dynamic forwarding** supports SOCKS5 (no authentication, `CONNECT`, IPv4, domain names, IPv6) and SOCKS4 / 4a. Domain names are resolved by the server.
+- **The listening address** defaults to `127.0.0.1`. With another address, local and dynamic forwards can be used by other devices on the same network; for a remote forward, other machines can connect only if the server’s `sshd_config` sets `GatewayPorts clientspecified` or `yes`. The default is `no`, in which case the forward still runs without an error but listens only on the server’s own `127.0.0.1` (the same as a hand-written `ssh -R`). The dialog points this out when you enter a non-loopback address. Ports below 1024 need administrator rights (root, on the server). Port 0 (letting the system pick a port) isn’t supported.
 
-**尚未实现：通过外部 CLI 管理转发、规则排序。系统的「减少动态效果」设置目前不会关掉示意图的动画。**
+**Not implemented yet: managing forwards through the external CLI, and ordering rules. The system’s “Reduce motion” setting doesn’t turn off the diagram’s animation yet.**
 
-## 凭据
+## Credentials
 
-点标题栏的凭据（钥匙）图标，左侧栏换成凭据列表。一条凭据是一套可以让多台主机共用的登录信息，包括名称、用户名和登录方式：
+Click the credentials (key) icon in the title bar and the left sidebar switches to the list of credentials. A credential is a set of login details that several hosts can share: a name, a username and a way to log in:
 
-| 类型 | 保存什么 | 登录时 |
+| Type | What it keeps | When logging in |
 | --- | --- | --- |
-| 密码 | 用户名和密码 | 用凭据保存的密码；没存或被拒绝时询问 |
-| 密钥 | 用户名、私钥和口令 | 只用这把私钥；口令按私钥文件保存，用同一个文件的凭据共用 |
-| SSH Agent | 用户名 | 只用 SSH Agent 中的密钥：macOS / Linux 上是 `SSH_AUTH_SOCK` 指向的 Agent，Windows 上是 OpenSSH Authentication Agent 服务 |
+| Password | Username and password | Uses the password saved in the credential; asks if none is saved or it’s rejected |
+| Key | Username, private key and passphrase | Uses only this private key; the passphrase is saved per key file and shared by credentials that use the same file |
+| SSH Agent | Username | Uses only the keys in the SSH agent: on macOS / Linux the agent that `SSH_AUTH_SOCK` points to, on Windows the OpenSSH Authentication Agent service |
 
-- **新建和编辑**：列表标题栏的「+」、空列表里的「新建凭据…」或空白处的右键菜单打开对话框；双击凭据、选中后回车或右键「编辑凭据…」编辑。密码和私钥口令存进系统钥匙串，数据库里只有名称、用户名、类型和私钥路径。
-- **密钥从哪里来**：密钥凭据的「私钥」有三种来源。
-  - **本机文件**：选一个私钥文件，只保存它的路径；文件移动或删除后需要重新选择。
-  - **粘贴**：贴进 OpenSSH、PEM 或 PuTTY 格式的私钥。贴成公钥或认不出的内容时会说明原因。私钥加了口令时才显示口令栏。
-  - **生成新密钥**：选 Ed25519（默认）或 RSA 4096，选中就生成；对话框里显示公钥，旁边可以复制。口令可留空；填了就用它加密私钥，口令存进钥匙串。生成的密钥以凭据名称作为注释。
-  - 粘贴和生成的私钥由 ShellRS 写成数据目录下 `keys/` 里的文件（随机文件名，只有自己的账户能读），凭据引用这个文件，编辑时显示为「本机文件」和它的路径。之后再粘贴或生成会直接覆盖这个文件，已连接的主机不会因此重连；改成别的文件或别的类型、或删除凭据时，这个文件连同它的口令一起删除，对话框会先提示。用户自己的私钥文件 ShellRS 从不改动或删除。
-  - 空列表和空白处的右键菜单里另有「生成密钥…」，打开的是同一个对话框，已经选好「密钥 · 生成新密钥」。密钥凭据的右键菜单有「复制公钥」，用来把公钥加到服务器的 `~/.ssh/authorized_keys`。
-- **主机跟着凭据变**：改凭据的用户名，所有使用它的主机的用户名一起变。已打开的标签不受影响，新开的标签才用新的设置；对话框里写明有几台主机在用。
-- **删除**：右键「删除」。有主机在用时确认框写明数量和它们之后怎么登录：用密码凭据的主机改为「密码」，连接时询问；用密钥或 SSH Agent 凭据的主机改为「无密码」。用户名不变，密码和私钥不会复制过去。已经打开的连接不受影响，凭据的密码随凭据一起从钥匙串删除。
-- **SSH Agent 凭据**连不上 Agent、Agent 里没有密钥或服务器不接受其中任何一把时，会直接说明原因，不会改为询问密码。「无密码」的主机也会尝试同一个 Agent，连不上时静默跳过，接着试默认私钥（Windows 上同样如此）。
+- **Creating and editing**: “+” at the top of the list, “New credential…” in the empty list, or the context menu on empty space opens the dialog; to edit a credential, double-click it, select it and press Enter, or right-click it and choose “Edit credential…”. Passwords and private key passphrases go into the system keychain; the database holds only the name, username, type and private key path.
+- **Where the key comes from**: a key credential’s “Private key” has three sources.
+  - **Local file**: choose a private key file; only its path is saved. If the file moves or is deleted, choose it again.
+  - **Paste**: paste a private key in OpenSSH, PEM or PuTTY format. If you paste a public key or something unrecognizable, ShellRS says why. The passphrase field appears only when the private key is encrypted with one.
+  - **Generate**: choose Ed25519 (the default) or RSA 4096, and the key is generated as soon as you choose. The dialog shows the public key, with a button to copy it. The passphrase can be left empty; if you enter one, it encrypts the private key and goes into the keychain. A generated key has the credential’s name as its comment.
+  - ShellRS writes pasted and generated private keys to files in `keys/` in the data folder (with random file names, readable only by your account), and the credential refers to that file; when you edit the credential, it shows as “Local file” with that path. Pasting or generating again overwrites the file directly, and connected hosts don’t reconnect because of it; switching to another file or another type, or deleting the credential, deletes the file together with its passphrase, and the dialog warns you first. ShellRS never changes or deletes your own private key files.
+  - The empty list and the context menu on empty space also have “Generate key…”, which opens the same dialog with “Key · Generate” already chosen. A key credential’s context menu has “Copy public key”, for adding the public key to `~/.ssh/authorized_keys` on a server.
+- **Hosts follow the credential**: changing a credential’s username changes it for every host that uses the credential. Open tabs stay as they are, and tabs opened afterwards use the new settings; the dialog says how many hosts use it.
+- **Deleting**: right-click and choose “Delete”. If hosts use the credential, the confirmation says how many and how they’ll log in afterwards: hosts using a password credential switch to “Password” and ask when connecting; hosts using a key or SSH Agent credential switch to “No password”. Usernames stay the same; passwords and private keys aren’t copied over. Open connections aren’t affected, and the credential’s password is deleted from the keychain along with it.
+- **An SSH Agent credential** says why right away when it can’t reach the agent, the agent has no keys, or the server accepts none of them; it never falls back to asking for a password. Hosts set to “No password” try the same agent too, skip it silently if it can’t be reached, and go on to the default private keys (on Windows as well).
 
-**尚未实现：在主机对话框里直接新建凭据、凭据排序、自定义 SSH Agent 的套接字、把公钥自动装到主机上、导出 ShellRS 保存的私钥。**
+**Not implemented yet: creating a credential right from the host dialog, ordering credentials, a custom SSH agent socket, installing the public key on a host automatically, and exporting the private keys ShellRS keeps.**
 
-## 设置
+## Settings
 
-侧栏最下方的「设置」按钮（或 ⌘,，其他平台 Ctrl+,）在中间区打开「设置」标签页；已经打开时切换到该标签，不会重复打开。设置页分两栏：左边是分类（外观、终端、SFTP、关键字高亮、键盘快捷键、外部 CLI、应用、关于），上方可搜索，栏宽可拖动；右边是所选分类的设置。设置改动立即生效并保存在数据目录的 `settings.json` 里。
+The “Settings” button at the bottom of the sidebar, or ⌘, (Ctrl+, on Windows and Linux), opens a “Settings” tab in the center area; if it’s already open, it switches to that tab instead of opening another. The settings page has two columns: on the left the categories (Appearance, Terminal, SFTP, Highlighting, Keyboard shortcuts, External CLI, General, About), with a search box at the top and a width you can drag; on the right the settings of the chosen category. Changes take effect at once and are saved in `settings.json` in the data folder.
 
-- **外观 → 常规 → 界面语言**：跟随系统、简体中文、English，默认跟随系统：系统语言是中文时用简体中文，其他语言用英文。改动立即生效，不用重启：窗口里的文字、已打开的标签和搜索框提示一起换成新的语言；已经写进终端的提示和已经弹出的通知保持原样。外部 CLI 的输出也用这里的语言。
-- **外观 → 常规 → 应用外观**：深色、浅色、跟随系统，默认跟随系统；选「跟随系统」时随系统的深浅色切换。标题栏的主题按钮也会改写这一项。
-- **外观 → 常规 → 界面字号**：12–20 像素，默认 16。界面的文字和间距随之缩放，改动立即生效；终端的字号在「终端 → 字体配置」里单独设置。在终端以外按 ⌘= / ⌘-（其他平台 Ctrl）每次调 2 像素，⌘0 回到默认，改的就是这一项。
-- **外观 → 主题**：左栏是浅色主题，右栏是深色主题，各选一套：应用外观为浅色时用左栏选中的那套，深色时用右栏的；跟随系统时随系统一起切换，标题栏的主题按钮切换时也一样。默认只有终端按所选主题配色，界面保持中性的灰色调（深色是不刺眼的炭灰，不是纯黑）；打开上方的「界面跟随主题」，界面也按主题配色：侧栏、标签栏、对话框等用主题的底色和文字色，成功、警告、错误等状态用主题的绿、黄、红。每张卡片用该主题的颜色显示一段示例，选中的右上角有蓝色对勾。默认是 ShellRS Light 和 ShellRS Dark，与界面同色。内置浅色、深色各 10 套：浅色 ShellRS Light、Solarized Light、Tokyo Day、Catppuccin Latte、Flexoki Light、One Half Light、Gruvbox Light、Kanagawa Lotus、Rosé Pine Dawn、Everforest Light；深色 ShellRS Dark、Solarized Dark、Tokyo Night、Catppuccin Mocha、Flexoki Dark、One Half Dark、Gruvbox Dark、Kanagawa Wave、Dracula、Nord。同一主题的浅色版和深色版在两栏的同一行。改动立即作用于所有已打开的终端，字体和关键字高亮的预览也用当前主题；vim 等程序询问终端的背景色时，得到的是当前主题的颜色。**尚未实现：自定义主题、导入配色、按主机指定主题。**
-- **终端 → 字体配置**：字体（只列出本机安装的等宽字体，默认是系统的等宽字体，macOS 上为 Menlo）、字号（10–28 像素，默认 13）、行高（字号的 1.0–2.0 倍，默认 1.54，即原来的 20 像素行高）。改动立即作用于所有已打开的终端；在终端里按 ⌘= / ⌘-（其他平台 Ctrl）也能逐级调字号，⌘0 回到默认。下方的预览按终端的排法显示字母、数字、易混字符、符号、中文、制表符和一行命令。设置文件里的字体在本机没有安装时，使用默认字体。
-- **终端 → 终端交互**：「选中复制」打开后，用鼠标选中文字、松开时就复制到系统剪贴板，不用再按 ⌘C；默认关闭，单击没选中文字时剪贴板不变。「右键行为」决定在终端里按右键做什么：显示菜单（默认）、粘贴（直接粘贴剪贴板，同 ⌘V）、无动作。选后两种时，菜单里的复制、粘贴、全选、查找、清屏仍可用快捷键，打开 SFTP、重新连接在标签的右键菜单里。改动立即作用于所有已打开的终端。
-- **终端 → 侧栏功能**：两排图标，上面一排「显示在右侧栏」，下面一排「不显示」，各按右侧栏的顺序排列，图标下写着名称。点一下图标，或把它拖到另一排，就显示或隐藏这个工具；鼠标停在图标上显示它的用途。除了 GPU/NPU 和 Kubernetes 都默认显示（不是每台主机都有显卡或 kubectl）。这一组右上角的「恢复默认」只恢复这些工具，页面右上角的重置则连同整页一起恢复。改动立即生效：隐藏正在显示的工具时右侧栏收起。全部隐藏后右侧栏连同按钮都不出现，只能回到这里恢复。主机系统用不了的工具照旧不显示。
-- **终端 → 本地终端**：「Shell」是新开或重新启动的本地终端运行的程序，写路径或命令，可以带参数（如 `/bin/zsh -l`、`pwsh.exe -NoLogo`）；路径里有空格就用引号括起来（Windows 只认双引号）。输入框右端的下拉列出本机装了的常用 shell（macOS / Linux 是 zsh、bash、sh、fish、nu、pwsh 里装了的，包括 Homebrew 装的；csh、ksh、dash 等不列，要用就「选择文件…」；Windows 是 PowerShell 7（装了的话）、Windows PowerShell 和 cmd.exe），旁边的「选择文件…」用系统的文件选择框挑一个程序。留空（默认）时自动检测系统默认的 shell：macOS / Linux 是用户的登录 shell，Windows 优先 PowerShell 7，其次系统自带的 Windows PowerShell，都没有才用 cmd.exe。只写一个 shell、不带参数时（如 `/bin/bash`、`zsh`），和默认一样按登录 shell 启动，会读 `~/.zprofile` 等登录配置；带了参数或不是 shell 的程序就照写的启动。已经在运行的本地终端不受影响，重新启动后生效。
-- **SFTP → 传输 → 最大同时传输数量**：默认 3，可选 1–10。一次上传或下载里同时传几个文件，其余的排队等待。每个 SFTP 标签和右侧栏的「文件」各自按这个数传；改了以后，正在进行的传输从下一个文件起照新的数。
-- **SFTP → 文件侧栏 → 自动检测目录配置**：默认打开。打开右侧栏的「文件」时，检测远端 shell 是否已配置目录跟随，未配置时询问是否自动配置（见「右侧栏」的「文件」）；「文件」的「目录跟随」开关也以它为初始值。关掉后不检测、不询问，「文件」默认不跟随，仍可在它的状态栏里临时打开。
-- **SFTP → 文件列表 → 图标风格**：单色（默认）和界面其他地方的图标一样是灰色线条；彩色按文件类型和常见的文件夹名区分，如 shell 脚本、配置文件、压缩包、图片，`.config`、`logs`、`node_modules` 等文件夹，名称不区分大小写；普通文件夹是黄色的，同 WinSCP、Xftp；链接的图标左下角有一个小箭头。下方的预览按所选风格显示几个例子。改动立即作用于所有 SFTP 标签的文件列表和上传、下载的确认框。彩色图标取自 [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme)（MIT 许可），浅色外观下少数图标换成它的浅色版。
-- **关键字高亮**：总开关、预览和规则表，终端里按规则给文字上色、匹配时提醒，见「终端」一节。
-- **键盘快捷键**：主要功能的快捷键，分通用、标签、终端、编辑器四组，每行是功能名和它的按键。点按键进入「按下组合键」，按下新的组合就换上；Esc 或点别处放弃。行尾两个按钮：禁用（之后显示「无」，再点一下恢复默认）、恢复默认；页面上方的「重置」也能逐项恢复。改动立即生效，工具栏提示和右键菜单里显示的按键跟着变。
-  - 组合键要带 ⌘、⌥ 或 ⌃（其他平台 Ctrl 或 Alt），或者是 F1–F12，也可以是 Shift 加 Insert、Delete、Home、End、PageUp、PageDown（如用 Shift+Insert 粘贴）；「切换到标签 1…9」按任意一个带修饰键的数字即可，九个一起换。
-  - 已被同一处的另一个快捷键、或输入框等内置功能占用的组合会被拒绝，并提示被谁占用；想换就先改或禁用那一个。终端、编辑器里的快捷键可以和通用快捷键同键，在终端、编辑器里以前者为准（如 ⌘K 在终端里是清屏）。
-  - 默认（macOS / 其他平台）：新建主机 ⌘N / Ctrl+N，新建分组 ⌘⇧N / Ctrl+Shift+N，打开设置 ⌘, / Ctrl+,，显示或隐藏侧栏 ⌘B / Ctrl+B，显示或隐藏右侧栏 ⌘⌥B / Ctrl+Alt+B，聚焦搜索 ⌘K / Ctrl+K，放大、缩小界面和实际大小 ⌘= ⌘- ⌘0 / Ctrl+= Ctrl+- Ctrl+0，退出 ⌘Q / Ctrl+Q；新建本地终端 ⌘T / Ctrl+T，关闭标签 ⌘W / Ctrl+W，下一个标签 ⌘⇧] / Ctrl+Tab，上一个标签 ⌘⇧[ / Ctrl+Shift+Tab，切换到标签 1…9 ⌘1…⌘9 / Alt+1…9（9 是最后一个）；终端的复制、粘贴、全选、查找、查找下一个、查找上一个、清屏 ⌘C ⌘V ⌘A ⌘F ⌘G ⌘⇧G ⌘K / Ctrl+Shift+C、Ctrl+Shift+V、Ctrl+Shift+A、Ctrl+Shift+F、F3、Shift+F3、Ctrl+Shift+K，放大、缩小字号和默认字号 ⌘= ⌘- ⌘0 / Ctrl+= Ctrl+- Ctrl+0；编辑器保存 ⌘S / Ctrl+S。标签切换在当前标签所在的那组标签里进行，首尾循环。⌘= / ⌘- / ⌘0 在终端里调终端字号（每次 1 像素，范围同「终端 › 字号」的 10–28，写进设置，下次启动保留），在终端外调整个界面的字号（每次 2 像素，范围同「外观 › 界面字号」的 12–20，写进设置，下次启动保留）。
-  - SFTP 文件列表、图片预览的快捷键和 Enter、方向键、Tab、Esc 这些固定键不在这里改。
-- **外部 CLI**：见下一节。
-- **应用 → 窗口**：「记住窗口大小」恢复上次的窗口大小和最大化状态，「记住窗口位置」把窗口放回上次所在的屏幕和位置，默认都打开，下次启动时生效。那块屏幕不在了、或窗口大半在屏幕外时，放在屏幕中间；窗口比屏幕大时缩到能放下。全屏不记，按退出全屏后的大小恢复。窗口的大小和位置随移动随时记在数据目录的 `window.json` 里。
-- **关于**：「应用更新」一组：当前版本和检查更新、更新渠道、自动升级，见「下载与更新」；「隐私」一组的「发送匿名使用统计」，默认打开，见「隐私」；「ShellRS」一组的「官网」用浏览器打开 shellrs.com。
+- **Appearance → Interface → Language**: System, 简体中文 or English. The default is System: Simplified Chinese when the system language is Chinese, English for any other language. Changes apply at once, without a restart: the text in the window, open tabs and search box hints all switch to the new language; prompts already written into terminals and notifications already shown stay as they were. The external CLI’s output uses this language too.
+- **Appearance → Interface → Appearance**: Dark, Light or System, System by default; System switches along with the system’s light and dark mode. The theme button in the title bar also changes this setting.
+- **Appearance → Interface → Interface font size**: 12–20 pixels, 16 by default. The interface’s text and spacing scale with it, and changes apply at once; the terminal’s font size is set separately under “Terminal → Font”. Outside a terminal, ⌘= / ⌘- (Ctrl on Windows and Linux) change it 2 pixels at a time, and ⌘0 goes back to the default.
+- **Appearance → Theme**: the left column has light themes and the right column dark themes; choose one in each. The light appearance uses the one chosen on the left, the dark appearance the one on the right; with System they switch along with the system, and the same happens when you switch with the title bar’s theme button. By default only terminals take the chosen theme’s colors, and the interface stays a neutral gray (the dark one is an easy-on-the-eyes charcoal, not pure black). Turn on “Match interface to theme” at the top and the interface takes the theme’s colors too: the sidebar, tab bar, dialogs and so on use the theme’s background and text colors, and states such as success, warning and error use the theme’s green, yellow and red. Each card shows a sample in that theme’s colors, and the chosen one has a blue check mark at its top right. The defaults are ShellRS Light and ShellRS Dark, which match the interface. There are 10 built-in light themes and 10 dark ones: light ShellRS Light, Solarized Light, Tokyo Day, Catppuccin Latte, Flexoki Light, One Half Light, Gruvbox Light, Kanagawa Lotus, Rosé Pine Dawn, Everforest Light; dark ShellRS Dark, Solarized Dark, Tokyo Night, Catppuccin Mocha, Flexoki Dark, One Half Dark, Gruvbox Dark, Kanagawa Wave, Dracula, Nord. The light and dark versions of the same theme sit on the same row of the two columns. Changes apply at once to every open terminal, and the font and highlighting previews use the current theme too; when vim or another program asks the terminal for its background color, it gets the current theme’s. **Not implemented yet: custom themes, importing color schemes, and per-host themes.**
+- **Terminal → Font**: Font family (lists only the monospaced fonts installed on this computer; the default is the system’s monospaced font, Menlo on macOS), Font size (10–28 pixels, default 13) and Line height (1.0–2.0 times the font size, default 1.54, the same as the earlier 20-pixel line height). Changes apply at once to every open terminal; in a terminal, ⌘= / ⌘- (Ctrl on Windows and Linux) also change the font size step by step, and ⌘0 goes back to the default. The preview below lays out letters, digits, easily confused characters, symbols, Chinese, tab stops and a command line the way the terminal does. If the font in the settings file isn’t installed on this computer, the default font is used.
+- **Terminal → Interaction**: with “Copy on select” on, text you select with the mouse is copied to the clipboard when you let go, without pressing ⌘C; it’s off by default, and a click that selects nothing leaves the clipboard as it was. “Right-click” sets what right-clicking in a terminal does: Show menu (the default), Paste (pastes the clipboard, like ⌘V) or Do nothing. With either of the last two, the menu’s Copy, Paste, Select all, Find and Clear screen are still on their shortcuts, and Open SFTP and Reconnect are in the tab’s context menu. Changes apply at once to every open terminal.
+- **Terminal → Sidebar tools**: two rows of icons, “In the sidebar” above and “Not shown” below, each in the sidebar’s order with the tool’s name under its icon. Click an icon, or drag it to the other row, to show or hide that tool; point at an icon to see what the tool does. All but GPU/NPU and Kubernetes are shown by default (not every host has accelerators or kubectl). “Restore defaults” at the top right of this group restores only these tools, while the page’s reset button at the top right restores the whole page. Changes apply at once: hiding the tool that’s showing collapses the right sidebar. With every tool hidden, the right sidebar and its buttons don’t appear at all, and only this setting brings them back. A tool the host’s system can’t run still doesn’t appear.
+- **SFTP → Transfers → Maximum concurrent transfers**: 3 by default, 1–10. How many files of one upload or download move at once; the rest wait their turn. Each SFTP tab and the right sidebar’s Files go by this number separately; after a change, transfers in progress follow the new number from their next file.
+- **SFTP → Files sidebar → Detect folder reporting**: on by default. When the right sidebar’s Files opens, ShellRS checks whether the host’s shell reports its folder for Files to follow, and offers to set it up if not (see Files under “Right sidebar”). Files’ “Follow” switch starts from this setting too. Turned off, nothing is checked or asked, and Files doesn’t follow unless you switch it on in its status bar.
+- **SFTP → File list → Icon style**: Monochrome (the default) uses gray line icons like the rest of the interface; Color tells file types and common folder names apart, such as shell scripts, configuration files, archives and images, or folders like `.config`, `logs` and `node_modules`, whatever the case of the name. Plain folders are yellow, as in WinSCP and Xftp, and a link’s icon has a small arrow at its bottom left. The preview below shows a few examples in the chosen style. Changes apply at once to the file lists of every SFTP tab and to the upload and download confirmations. The color icons come from [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme) (MIT license); with the light appearance, a few of them use its light versions.
+- **Highlighting**: the main switch, the preview and the rules table, which color text in terminals by rule and alert you on matches; see “Terminal”.
+- **Keyboard shortcuts**: the shortcuts of the main features, in four groups (General, Tabs, Terminal, Editor); each row is a feature and its keys. Click the keys to get “Press a key combination”, then press a new combination to use it; Esc or clicking elsewhere cancels. The two buttons at the end of the row are Disable (the row then shows “None”; click again to restore the default) and Restore default; the “Reset All” button at the top of the page restores them all. Changes take effect at once, and the keys shown in tooltips and context menus follow.
+  - A combination needs ⌘, ⌥ or ⌃ (Ctrl or Alt on Windows and Linux), or must be one of F1–F12; for “Switch to tab 1…9”, press any digit with a modifier, and all nine change together.
+  - A combination already taken by another shortcut in the same place, or by text fields and other built-in features, is refused, and you’re told what uses it; to use it anyway, change or disable that one first. Terminal and editor shortcuts can share keys with general shortcuts, and in the terminal or editor they take precedence (in a terminal, for example, ⌘K clears the screen).
+  - Defaults (macOS / Windows and Linux): New host ⌘N / Ctrl+N, New group ⌘⇧N / Ctrl+Shift+N, Open settings ⌘, / Ctrl+,, Show or hide sidebar ⌘B / Ctrl+B, Show or hide right sidebar ⌘⌥B / Ctrl+Alt+B, Focus search ⌘K / Ctrl+K, Zoom in, Zoom out and Actual size ⌘= ⌘- ⌘0 / Ctrl+= Ctrl+- Ctrl+0, Quit ⌘Q / Ctrl+Q; New local terminal ⌘T / Ctrl+T, Close tab ⌘W / Ctrl+W, Next tab ⌘⇧] / Ctrl+Tab, Previous tab ⌘⇧[ / Ctrl+Shift+Tab, Switch to tab 1…9 ⌘1…⌘9 / Alt+1…9 (9 is the last tab); in the terminal, Copy, Paste, Select all, Find, Find next, Find previous and Clear screen ⌘C ⌘V ⌘A ⌘F ⌘G ⌘⇧G ⌘K / Ctrl+Shift+C, Ctrl+Shift+V, Ctrl+Shift+A, Ctrl+Shift+F, F3, Shift+F3, Ctrl+Shift+K, and Bigger text, Smaller text and Default text size ⌘= ⌘- ⌘0 / Ctrl+= Ctrl+- Ctrl+0; in the editor, Save ⌘S / Ctrl+S. Switching tabs stays within the group of tabs the current tab is in, wrapping around at either end. In a terminal, ⌘= / ⌘- / ⌘0 change the terminal font size (1 pixel at a time, within the same 10–28 range as “Terminal › Font size”; saved in the settings and kept for the next launch); outside a terminal they change the interface font size (2 pixels at a time, within the same 12–20 range as “Appearance › Interface font size”; saved in the settings and kept for the next launch).
+  - Shortcuts in the SFTP file list and the image preview, and fixed keys such as Enter, the arrow keys, Tab and Esc, aren’t changed here.
+- **External CLI**: see the next section.
+- **General → Window**: “Remember window size” restores the last window size and whether it was maximized, and “Remember window position” puts the window back on the screen and in the place it last was. Both are on by default and take effect at the next launch. If that screen is gone, or the window would be mostly off screen, it opens in the middle of the screen; a window larger than the screen shrinks to fit. Full screen isn’t remembered: the window comes back at its size from before full screen. The window’s size and position are recorded in `window.json` in the data folder as it moves.
+- **About**: the “Updates” group, with the current version and checking for updates, the update channel and automatic updates (see “Download and updates”); “Send anonymous usage statistics” in the “Privacy” group, on by default (see “Privacy”); and “Website” in the “ShellRS” group, which opens shellrs.com in your browser.
 
-## 外部 CLI
+## External CLI
 
-`shellrs` 命令让 Codex、Claude Code、OpenCode 等 AI Agent 在 ShellRS 里已保存的主机上执行远程命令、传输和同步文件，也能查看、新建、修改和删除主机与凭据。命令本身不读密码和私钥，也不读数据库：它把请求交给正在运行的 ShellRS，由 ShellRS 用保存的配置和钥匙串去连接。请求走本机的进程间通信：macOS、Linux 上是数据目录下的套接字 `cli.sock`，Windows 上是命名管道 `\\.\pipe\shellrs-cli-<数据目录的散列>`。
+The `shellrs` command lets AI agents such as Codex, Claude Code and OpenCode run remote commands and transfer and sync files on the hosts saved in ShellRS, and also view, create, change and delete hosts and credentials. The command itself reads no passwords or private keys, and no database: it hands the request to the running ShellRS, which connects with the saved settings and the keychain. Requests travel over local interprocess communication: the socket `cli.sock` in the data folder on macOS and Linux, and the named pipe `\\.\pipe\shellrs-cli-<hash of the data folder>` on Windows.
 
-在 设置 → 外部 CLI 中：
+In Settings → External CLI:
 
-- **启用外部 CLI**：默认关闭。关闭时 ShellRS 仍在监听，但拒绝所有请求，命令会提示去这里打开。开启后，本机当前用户下的任何程序都能这样使用已保存的主机，也能修改主机和凭据，还能在已打开的远程终端里输入命令（`exec --terminal`，包括已切到 root 的终端），都没有另外的开关。套接字只对当前用户可读写，连接时还会核对对方的用户身份；Windows 的管道同样只允许当前用户、只接受本机连接，命令在发请求之前还会确认管道属于当前用户（或管理员），防止别人抢注同名管道。
-- **CLI 二进制**：把 `shellrs` 放进 PATH。
-  - macOS：链接到 `/usr/local/bin/shellrs`，目录不可写时弹系统授权框。
-  - Linux：链接到 `~/.local/bin/shellrs`。
-  - macOS、Linux 上「移除」只删除指向 shellrs 的链接，同名的其他文件不会被改动。
-  - Windows：图形程序没有控制台，命令是单独的控制台程序 `shellrs-cli.exe`（与 `shellrs.exe` 放在一起）。「安装」把它复制成 `%LOCALAPPDATA%\ShellRS\bin\shellrs.exe`，并把这个文件夹加入当前用户的 PATH（不需要管理员），重新打开的终端和 Agent 才能找到它。ShellRS 升级后启动时会自动更新这份副本；更新不了时显示「更新」。副本正被使用时也能更新。「移除」删掉副本并把文件夹移出 PATH。
-- **Agent Skills**：把教 Agent 使用 `shellrs` 的 skill 写到通用目录（`~/.agents/skills`）或 Codex、Claude Code、OpenCode、WorkBuddy 各自的 skills 目录；内容和当前版本不同时显示「更新」。「复制 skills」把 skill 全文复制到剪贴板。
+- **Enable external CLI**: off by default. While it’s off, ShellRS still listens but refuses every request, and the command tells you to turn it on here. Once it’s on, any program running as the current user on this computer can use the saved hosts this way, and can also change hosts and credentials (there’s no separate switch). Only the current user can read and write the socket, and ShellRS also checks the identity of the user connecting. On Windows, the pipe likewise admits only the current user and only local connections, and before sending a request the command checks that the pipe belongs to the current user (or an administrator), so nobody else can grab a pipe with the same name.
+- **Command**: puts `shellrs` on the PATH.
+  - macOS: links it to `/usr/local/bin/shellrs`; if that folder isn’t writable, the system asks for authorization.
+  - Linux: links it to `~/.local/bin/shellrs`.
+  - On macOS and Linux, “Remove” deletes only a link that points to shellrs; other files with the same name are left alone.
+  - Windows: a GUI app has no console, so the command is a separate console program, `shellrs-cli.exe` (next to `shellrs.exe`). “Install” copies it to `%LOCALAPPDATA%\ShellRS\bin\shellrs.exe` and adds that folder to the current user’s PATH (no administrator needed); terminals and agents find it once they’re reopened. After ShellRS updates, it refreshes this copy when it starts; when it can’t, “Update” appears. The copy can be updated even while it’s in use. “Remove” deletes the copy and takes the folder off the PATH.
+- **Agent Skills**: writes the skill that teaches agents to use `shellrs` to the standard folder (`~/.agents/skills`) or to the skills folder of Codex, Claude Code, OpenCode or WorkBuddy; when the content differs from the current version, “Update” appears. “Copy skills” copies the whole skill to the clipboard.
 
-命令（`shellrs --help` 查看完整说明）：
+Commands (`shellrs --help` has the full details):
 
 ```sh
-shellrs hosts list [-q <关键词>] [--json]      # 列出主机；输出不是终端时自动用 JSON
-shellrs hosts show <ID> [--json]               # 一台主机的全部配置
-shellrs exec <ID> "<命令>"                     # 或 --stdin 从标准输入读命令
-shellrs exec --json                            # 从标准输入读 {"host", "command"}，输出 JSON
-shellrs exec <ID> --terminal "<命令>"          # 在 ShellRS 已打开的终端里执行，见下文
-shellrs upload <ID> <本地路径> <远程路径>
-shellrs download <ID> <远程路径> <本地路径>
-shellrs sync <ID> <本地目录> <远程目录> [--delete]
+shellrs hosts list [-q <keyword>] [--json]     # list hosts; JSON when the output isn't a terminal
+shellrs hosts show <ID> [--json]               # one host's full settings
+shellrs exec <ID> "<command>"                  # or --stdin to read the command from stdin
+shellrs exec --json                            # read {"host", "command"} from stdin, print JSON
+shellrs upload <ID> <local-path> <remote-path>
+shellrs download <ID> <remote-path> <local-path>
+shellrs sync <ID> <local-folder> <remote-folder> [--delete]
 shellrs hosts create | update <ID> | delete <ID>
 shellrs credentials list | show <ID> | create | update <ID> | delete <ID>
 ```
 
-- `<ID>` 是 16 位的主机 ID，即 `shellrs hosts list` 的 `id`，也就是主机右键「复制 ID」复制的内容。列表里还有标签开着的临时连接和外部连接（`"temporary": true`），见「临时连接」和「从堡垒机打开（外部连接）」。
-- `exec` 每次临时建立连接，执行完即断开。远程命令没有标准输入，退出码就是远程命令的退出码；被信号终止时是 128 加信号编号。
-- `exec --terminal`（`exec --json` 里写 `"terminal": true`）不重新登录，而是把命令打进这台主机在 ShellRS 里已打开的远程终端，给只允许登录一次的堡垒机用（见「从堡垒机打开（外部连接）」）。它先发 Ctrl-C，打断终端里正在运行的程序、清掉输入行里没提交的内容，再输入一行探测和一行命令；这两行和命令的输出都显示在终端里。命令在终端当前的用户、目录和机器上执行（`su`、`sudo -i`、嵌套 `ssh` 之后也是），`--json` 的结果多一项 `context`（`user`、`host`、`cwd`、`shell`、`interp`）写明在哪里。命令的输出经管道，程序看不到终端：没有颜色和分页器，stderr 并进 stdout；命令没有标准输入，要密码的程序会停在终端里等。用哪个终端：右侧栏正对着的终端是这台主机的就用它，否则用这台主机最新的、已连接的终端。
-  - 只支持 Linux 上的 bash、dash 和 busybox ash（否则报 `unsupported_shell`）。编码后的命令行，bash 和 dash 最多 4000 字节，busybox 最多 1000 字节（否则报 `too_long`）。
-  - 以下情况报 `terminal_busy`，命令没有执行：全屏程序（vim、less、top、tmux 等）占着终端；上一条 `--terminal` 命令还没结束；终端正在用 ZMODEM 传文件；5 秒内 shell 没有回应（前台程序不理 Ctrl-C，如 python、mysql）；15 秒内 shell 没有开始执行（可能被堡垒机的命令过滤或复核拦下，这时会再发一次 Ctrl-C）。终端没打开或没连接报 `no_terminal`。
-  - 执行过程中没有时限；命令行工具中途被结束时（如 Agent 超时），终端里的命令收到 Ctrl-C。
-  - 那两行行首有空格，bash 设了 `ignorespace` 时不记进历史，否则会记下。停在不带提示的 `read -s`、或 vi 编辑模式的命令模式时认不出，会报「没有回应」。
-- 上传和下载沿用 SFTP 标签的传输引擎（递归、`.filepart`、断线重连），目标路径按 scp 的规则：目标是已存在的目录就放进去并保留原名，否则目标就是副本自己的路径，其父目录必须存在。已存在的文件直接覆盖；新建的文件保留源文件的可执行权限。`~` 表示登录目录。
-- `sync` 只从本机到主机：把本地目录里的内容同步进远程目录。远程目录不存在就新建（父目录必须存在），是文件就报错，不能是根目录 `/`。大小和修改时间都没变的文件、指向不变的链接跳过，摘要里计为「未变」，所以再同步一次只传改过的；其余文件直接覆盖，新文件保留可执行权限。`--delete` 先删掉远程目录里本地没有的、或类型不同的项（不跟随链接），但不删传输进行中留下的 `.filepart` 和 `.shellrs-….backup`，本地读不了的目录也不清理；删不掉的项计为失败。
-- `hosts` 和 `credentials` 管理保存的主机和凭据。`create`、`update` 从标准输入读一个 JSON 对象（`update` 只改给出的字段），字段见 `shellrs hosts create --help` 和 `shellrs credentials create --help`；`show --json` 的输出可以改了直接交回 `update`。校验和对话框一样，报错用对话框的说法：
-  - 主机：`name`、`host`（地址）、`port`（默认 22）、`user`（默认 root）、`group`（分组路径如 `生产/数据库`，不存在就逐级新建；同一路径有不止一个分组时报错）、`auth`（`password` / `credential` / `no_password`）、`credential`（凭据 ID）、`password`、`route`（直接连接、按 ID 列出的跳板主机，或 HTTP / SOCKS5 代理）、`notes`。跳板只能是保存的 SSH 主机，不能是自己。改了地址、端口或用户而没给密码时，保存的密码跟着搬过去，同对话框。
-  - 串口主机：`protocol` 是 `serial`（默认 `ssh`），用 `serial` 代替 `host`、`port`、`user`、`auth`、`credential`、`password` 和 `route`。`serial` 里有 `device`（新建时必填）、`baud`、`data_bits`、`parity`（`none` / `odd` / `even`）、`stop_bits`、`flow_control`（`none` / `rts_cts` / `xon_xoff`）。只给 `serial` 时就是串口主机。`exec`（含 `--terminal`）、`upload`、`download` 和 `sync` 对串口主机报 `not_ssh`。
-  - Telnet 主机：`protocol` 是 `telnet`，`port` 默认 23，`user` 可以为空；`auth` 是它的自动登录：`password` 输入自己的用户名和密码，`credential` 用一条密码凭据，`no_password` 不自动登录（默认；给了 `user` 或 `password` 而没给 `auth` 时打开自动登录）。`telnet` 里是两个提示文本 `user_prompt`、`password_prompt`（`null` 或空串用常见提示），只给 `telnet` 时就是 Telnet 主机。Telnet 主机不能当跳板；`exec`、`upload`、`download` 和 `sync` 对它同样报 `not_ssh`。
-  - 凭据：`name`、`kind`（`password` / `key` / `agent`）、`user`、`password`、`key_path`（本机私钥文件）或 `private_key`（私钥全文，同对话框的「粘贴」，存进数据目录的 `keys/`）、`passphrase`。凭据的 ID 是 16 位随机串，`credentials list` 里有。
-  - 密码、口令和私钥只写不读：写进系统钥匙串或 `keys/`，任何命令都不输出，`show` 只说有没有保存；ShellRS 保存的私钥连路径也不显示。
-  - `update` 也能改 `protocol`：沿用名称、分组和备注（SSH 与 Telnet 之间还有地址和连接方式，端口不是默认值时也沿用），其余是新协议的默认值，可以在同一个请求里一起给（改成串口时要给 `serial.device`）。SSH 主机被别的主机当作跳板、或有端口转发经由它时，只能是 SSH。
-  - 临时连接和外部连接能 `show`，不能修改或删除。
-  - `hosts delete` 不确认，连同主机的端口转发规则一起删；它在 ShellRS 里打开的标签不关（`--force` 仍然可以写，已不起作用）。经它跳转的主机，那一跳变成「已删除的主机」。`credentials delete` 也不确认，用它的主机改为自己登录（同界面）。
-  - 改动由 ShellRS 一条一条执行：10 秒内没轮到就撤回、不做；开始执行后会等到完成。
-- 失败时在标准错误输出 `shellrs: [错误码] 说明`，退出码 255。错误码有 `not_running`（ShellRS 未运行）、`not_enabled`（未启用外部 CLI）、`host_not_found`、`credential_not_found`、`host_key_unknown`（还没在 ShellRS 里连过这台主机）、`host_key_changed`、`missing_credential`（没有保存密码或口令）、`connect_failed`、`transfer_failed`、`bad_request`、`save_failed`（改动已做，但没能全部写进数据库或钥匙串）、`version_mismatch`（命令和正在运行的 ShellRS 版本不同，或 ShellRS 太旧、不认识这个命令），以及 `exec --terminal` 才有的 `no_terminal`、`terminal_busy`、`unsupported_shell`、`too_long`。CLI 不弹任何询问：陌生主机、缺少密码都直接失败，请先在 ShellRS 里连接一次。传输完成但有项目失败时退出码为 1。
-- `exec --json` 从标准输入读 `{"host": "<ID>", "command": "<命令>"}`，命令结束后输出 `{"exit_code", "stdout", "stderr"}`，出错时输出 `{"error": {"code", "message"}}`，退出码和不加 `--json` 时一样。输出只含 ASCII，中文等字符都转成 `\uXXXX`；不是 UTF-8 的输出换成 U+FFFD。命令不经过本机 shell 的引号处理，控制台的代码页也不会把输出弄乱，适合 Windows PowerShell 和需要分开读标准输出、标准错误的 Agent。
-- 支持 macOS、Linux 和 Windows。Windows 的 PowerShell 里执行命令优先用 `exec --json`（`@{ host = '<ID>'; command = '…' } | ConvertTo-Json -Compress | shellrs exec --json`）；要边执行边看输出时（长时间构建、大量日志），改用 here-string 经 `--stdin` 传入（`@'…'@ | shellrs exec <ID> --stdin`），并和 `list`、`upload`、`download` 一样，先执行 `$OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()`，否则中文会变成问号或乱码。命令文本会去掉开头的 BOM、把 CRLF 换成 LF，远程 shell 不会看到多余的回车符。
+- `<ID>` is the 16-character host ID: the `id` in `shellrs hosts list`, which is also what “Copy ID” on a host’s context menu copies. The list also includes quick connections and external connections whose tabs are open (`"temporary": true`); see “Quick connect” and “Opening from a bastion host (external connections)”.
+- `exec` opens a new connection each time and disconnects when it’s done. The remote command gets no stdin, and the exit code is the remote command’s; if a signal killed it, the exit code is 128 plus the signal number.
+- Uploads and downloads use the SFTP tab’s transfer engine (recursive, `.filepart`, reconnecting after a drop), and destination paths follow scp’s rules: if the destination is an existing folder, the item goes into it under its own name; otherwise the destination is the path of the copy itself, and its parent folder must exist. Existing files are overwritten; new files keep the source’s executable permission. `~` means the login folder.
+- `sync` goes only from this computer to the host: it syncs the contents of the local folder into the remote folder. If the remote folder doesn’t exist, it’s created (its parent must exist); if it’s a file, that’s an error; and it can’t be the root folder `/`. Files whose size and modification time haven’t changed, and links whose target hasn’t changed, are skipped and counted as “unchanged” in the summary, so syncing again sends only what changed; other files are overwritten, and new files keep their executable permission. `--delete` first deletes items in the remote folder that aren’t in the local one, or are of a different type (without following links), but never the `.filepart` and `.shellrs-….backup` files that transfers in progress leave behind, and it doesn’t clean up folders that can’t be read locally; items it can’t delete count as failures.
+- `hosts` and `credentials` manage the saved hosts and credentials. `create` and `update` read a JSON object from stdin (`update` changes only the fields given); the fields are in `shellrs hosts create --help` and `shellrs credentials create --help`. What `show --json` prints can be edited and passed straight back to `update`. The checks are the same as in the dialogs, and errors use the dialogs’ wording:
+  - Hosts: `name`, `host` (the address), `port` (default 22), `user` (default root), `group` (a group path such as `Production/Databases`, created level by level if it doesn’t exist; an error if more than one group has that path), `auth` (`password` / `credential` / `no_password`), `credential` (a credential ID), `password`, `route` (direct, jump hosts listed by ID, or an HTTP / SOCKS5 proxy) and `notes`. Jump hosts must be saved SSH hosts, and not the host itself. If you change the address, port or user without giving a password, the saved password moves along, as in the dialog.
+  - Serial hosts: `protocol` is `serial` (`ssh` by default), with `serial` in place of `host`, `port`, `user`, `auth`, `credential`, `password` and `route`. `serial` has `device` (required to create), `baud`, `data_bits`, `parity` (`none` / `odd` / `even`), `stop_bits` and `flow_control` (`none` / `rts_cts` / `xon_xoff`). Giving `serial` alone makes a serial host. `exec` (`--terminal` too), `upload`, `download` and `sync` fail on a serial host with `not_ssh`.
+  - Telnet hosts: `protocol` is `telnet`, `port` is 23 by default, and `user` may be empty. `auth` is its automatic login: `password` types its own username and password, `credential` uses a password credential, and `no_password` doesn’t log in (the default; giving `user` or `password` without `auth` turns it on). `telnet` has the two prompts, `user_prompt` and `password_prompt` (`null` or empty for the usual ones), and `telnet` alone makes a Telnet host. A Telnet host can’t be a jump host, and `exec`, `upload`, `download` and `sync` fail on it with `not_ssh` too.
+  - Credentials: `name`, `kind` (`password` / `key` / `agent`), `user`, `password`, `key_path` (a private key file on this computer) or `private_key` (the full text of a private key, like “Paste” in the dialog, kept in `keys/` in the data folder), and `passphrase`. A credential’s ID is a 16-character random string, shown by `credentials list`.
+  - Passwords, passphrases and private keys are write-only: they go into the system keychain or `keys/`, no command ever prints them, and `show` only says whether one is saved; for a private key ShellRS keeps, it doesn’t even show the path.
+  - `update` can change `protocol` too: the host keeps its name, group and notes (between SSH and Telnet also its address, its connection, and its port unless that is a default), and the rest takes the new protocol’s defaults, which you can give in the same request (`serial.device` for a serial host). An SSH host that other hosts use as a jump host, or that port forwards go via, stays SSH.
+  - Quick connections and external connections can be shown with `show`, but not changed or deleted.
+  - `hosts delete` doesn’t ask for confirmation and deletes the host’s port forwarding rules along with it; the host’s open tabs in ShellRS stay open (`--force` is still accepted and does nothing). Hosts that jump through it are left with a “Deleted host” hop. `credentials delete` doesn’t ask either; hosts that use the credential switch to logging in on their own (as in the app).
+  - ShellRS makes changes one at a time: a change that hasn’t had its turn within 10 seconds is withdrawn and not made; once it has started, the command waits for it to finish.
+- On failure, the command prints `shellrs: [code] message` to stderr and exits with 255. The error codes are `not_running` (ShellRS isn’t running), `not_enabled` (the external CLI isn’t enabled), `host_not_found`, `credential_not_found`, `host_key_unknown` (you haven’t connected to this host in ShellRS yet), `host_key_changed`, `missing_credential` (no saved password or passphrase), `connect_failed`, `transfer_failed`, `bad_request`, `save_failed` (the change was made but couldn’t all be written to the database or keychain) and `version_mismatch` (the command and the running ShellRS are different versions, or ShellRS is too old to know the command). The CLI never prompts: an unknown host or a missing password fails right away, so connect once in ShellRS first. When a transfer finishes but some items failed, the exit code is 1.
+- `exec --json` reads `{"host": "<ID>", "command": "<command>"}` from stdin and, once the command ends, prints `{"exit_code", "stdout", "stderr"}`, or `{"error": {"code", "message"}}` on an error, with the same exit codes as without `--json`. The output is ASCII only: Chinese and other characters are escaped as `\uXXXX`, and output that isn’t UTF-8 becomes U+FFFD. The command doesn’t go through the local shell’s quoting, and the console code page can’t garble the output, which suits Windows PowerShell and agents that need to read stdout and stderr separately.
+- macOS, Linux and Windows are supported. In Windows PowerShell, prefer `exec --json` for running commands (`@{ host = '<ID>'; command = '…' } | ConvertTo-Json -Compress | shellrs exec --json`). To watch the output while the command runs (long builds, lots of logs), pass the command as a here-string through `--stdin` instead (`@'…'@ | shellrs exec <ID> --stdin`), and, as for `list`, `upload` and `download`, first run `$OutputEncoding = [Console]::OutputEncoding = [Text.UTF8Encoding]::new()`, or Chinese and other non-ASCII text turns into question marks or garbage. Any BOM at the start of the command text is removed and CRLF becomes LF, so the remote shell sees no stray carriage returns.
 
-## 从堡垒机打开（外部连接）
+## Opening from a bastion host (external connections)
 
-JumpServer 等堡垒机的本地客户端可以像调用 Xshell 一样调用 ShellRS 打开终端，也可以像调用 WinSCP 一样调用它打开 SFTP：把 ShellRS 设成 SSH 客户端或 SFTP 客户端，参数照 Xshell 或 WinSCP 的写法填。ShellRS 收到 `ssh://` 链接就打开一个终端标签连过去，收到 `sftp://` 链接就打开一个 SFTP 标签：
+The local client of a bastion host such as JumpServer can launch ShellRS to open a terminal the way it launches Xshell, or to open SFTP the way it launches WinSCP: set ShellRS as the SSH client or the SFTP client, with the arguments written as for Xshell or WinSCP. When ShellRS gets an `ssh://` link, it opens a terminal tab and connects; when it gets an `sftp://` link, it opens an SFTP tab:
 
 ```sh
-ShellRS ssh://用户[:密码]@地址[:端口]
-ShellRS -url ssh://用户[:密码]@地址[:端口] -newtab 标签名
-ShellRS sftp://用户[:密码]@地址[:端口]
-ShellRS /sessionname=标签名 sftp://用户[:密码]@地址[:端口]
+ShellRS ssh://user[:password]@address[:port]
+ShellRS -url ssh://user[:password]@address[:port] -newtab tab-name
+ShellRS sftp://user[:password]@address[:port]
+ShellRS /sessionname=tab-name sftp://user[:password]@address[:port]
 ```
 
-- 认得 Xshell 的 `-url`（链接）、`-newtab`（标签名，没给就用地址）和 `-newwin`（忽略：ShellRS 只有一个窗口），以及 WinSCP 的 `/sessionname=标签名`（也可以写成 `-sessionname=`），不分大小写；`/newinstance`、`/ini=nul` 等别的选项忽略。只支持 `ssh://` 和 `sftp://`，端口默认 22。用户名和密码里的特殊字符可以按 URL 的规则转义（`@` 写成 `%40`）；用户名里本身带 `@` 也行，最后一个 `@` 后面才是地址。`ssh://` 链接同 Xshell，用户名和密码里不转义的 `/`、`?`、`#` 也照收，如 `ssh://账号@域名/目标地址/root/client:密码@堡垒机:端口`；`sftp://` 链接同 WinSCP，第一个 `/` 起是路径，用户名里的 `/` 要写成 `%2F`。`sftp://` 链接里的路径（WinSCP 用它指定打开哪个目录）目前不认，远程一侧照常打开主目录。
-- **标签占满窗口**：打开外部连接时，左侧的主机列表自动收起（同 ⌘B），按 ⌘B（其他平台 Ctrl+B）或双击标签即可展开。
-- **外部连接，不保存**：不进主机列表、开始页的最近连接和数据库；它的终端和 SFTP 标签都关掉后就没了。标签的菜单里没有「编辑主机…」，其余（在新标签页中连接、打开 SFTP、重新连接）和保存的主机一样。
-- **只用一个通道**：很多堡垒机在同一条连接上又开一个通道时会结束整个会话。SFTP 标签本来就只开一个；终端则不探测主机系统（标签上显示名称的首字母），右侧栏只有「命令片段」，历史命令、文件、tmux、Docker、系统服务、进程管理、网络连接、系统监控和 GPU/NPU 都要另开通道，这里不提供。
-- 链接里的密码只留在内存里，不进钥匙串，重新连接时照样用它；没带密码时，服务器要密码就弹框问。第一次连到某台堡垒机要信任它的主机密钥，记在 ShellRS 自己的 `known_hosts` 里，下次不再问。
-- ShellRS 已经在运行时，链接交给正在运行的那个打开，窗口调到前面，不会再起一个 ShellRS。链接有问题（不是 `ssh://` 或 `sftp://`、没有用户名或地址、端口不对）时，ShellRS 弹通知说明原因。
-- 堡垒机要调用的程序：
-  - Windows：安装目录里的 `shellrs.exe`（默认 `%LOCALAPPDATA%\Programs\ShellRS\shellrs.exe`）。不要用 PATH 里的 `shellrs.exe`：那是外部 CLI 的副本。
-  - macOS：`/Applications/ShellRS.app/Contents/MacOS/shellrs`。不要用 `open -a ShellRS --args …`：ShellRS 已在运行时，系统会把参数丢掉。
-  - Linux：AppImage 本身。
-- 外部 CLI 的 `shellrs hosts list` 也列出外部连接（JSON 里 `"temporary": true`，表格的分组一栏写「（未保存）」），标签开着时 Agent 可以用它的 ID 执行命令、传输文件，这期间 ID 不变，可以一直用。标签关掉后 ID 失效；堡垒机再拉起一次（即使是同一台资产）是新的外部连接，ID 也是新的。和保存的主机一样，每条命令都用链接里的用户名和密码重新登录一次；堡垒机给的若是只能用一次的令牌，这次登录会被拒绝，这时改用 `shellrs exec --terminal`，在外部连接已打开的终端里执行命令（见「外部 CLI」）。
-- 命令行参数里的密码在本机的进程列表里看得到，这是堡垒机这样传参本身的问题。
+- ShellRS understands Xshell’s `-url` (the link), `-newtab` (the tab name; the address if it isn’t given) and `-newwin` (ignored: ShellRS has only one window), and WinSCP’s `/sessionname=tab-name` (which can also be written `-sessionname=`), in any letter case; other options such as `/newinstance` and `/ini=nul` are ignored. Only `ssh://` and `sftp://` are supported, and the port defaults to 22. Special characters in the username and password can be escaped by URL rules (`@` as `%40`); a username that itself contains `@` also works, since only what follows the last `@` is the address. The path in an `sftp://` link (which WinSCP uses to choose the folder to open) isn’t read yet; the remote side opens the home folder as usual.
+- **The tab fills the window**: when an external connection opens, the host list on the left collapses automatically (as with ⌘B); press ⌘B (Ctrl+B on Windows and Linux) or double-click the tab to show it again.
+- **External connection, not saved**: it stays out of the host list, the start page’s Recent list and the database, and is gone once its terminal and SFTP tabs are all closed. Its tab menu has no “Edit host…”; everything else (“Connect in new tab”, “Open SFTP”, “Reconnect”) works as for a saved host.
+- **One channel only**: many bastion hosts end the whole session when a second channel opens on the same connection. An SFTP tab opens only one anyway; a terminal doesn’t detect the host’s system (its tab shows the first letter of the name), and the right sidebar has only Snippets: History, Files, tmux, Docker, Services, Processes, Network, Monitor and GPU/NPU all need another channel, so they aren’t offered here.
+- The password in the link stays only in memory, never in the keychain, and is reused when reconnecting; if the link has no password and the server wants one, you’re asked. The first time you connect to a bastion host, you trust its host key, which is recorded in ShellRS’s own `known_hosts` and not asked about again.
+- When ShellRS is already running, the link goes to the running ShellRS, its window comes to the front, and no second ShellRS starts. If the link has a problem (not `ssh://` or `sftp://`, no username or address, a wrong port), ShellRS shows a notification saying why.
+- The program for the bastion host to launch:
+  - Windows: `shellrs.exe` in the installation folder (by default `%LOCALAPPDATA%\Programs\ShellRS\shellrs.exe`). Don’t use the `shellrs.exe` on the PATH: that’s the external CLI’s copy.
+  - macOS: `/Applications/ShellRS.app/Contents/MacOS/shellrs`. Don’t use `open -a ShellRS --args …`: when ShellRS is already running, the system drops the arguments.
+  - Linux: the AppImage itself.
+- The external CLI’s `shellrs hosts list` lists external connections too (`"temporary": true` in the JSON, “(not saved)” in the table’s group column). While the tabs are open, an agent can use the connection’s ID to run commands and transfer files, and the ID stays the same all that time. Once the tabs close, the ID stops working; the next time the bastion host launches ShellRS (even for the same asset), it’s a new external connection with a new ID. As with saved hosts, each command logs in again with the username and password from the link; if the bastion host passed a one-time token, that login is refused.
+- A password in command-line arguments is visible in this computer’s process list; that comes with how the bastion host passes arguments.
 
-## 标签页
+## Tabs
 
-远程终端标签和 SFTP 标签都以主机系统徽章为图标：打开时用主机列表里的那个，终端连上后换成它自己探测到的；别的连接后来探测到的系统只更新主机列表。串口主机的终端标签菜单没有「打开 SFTP」和「复制 IP」，多一项「发送 Break」：让线路保持断开状态约 0.3 秒，Cisco 等设备的密码恢复、Linux 的 SysRq 要用。Telnet 主机的标签菜单也有「发送 Break」（发送 Telnet 的 Break）和「复制 IP」，没有「打开 SFTP」。右键标签可重命名（仅本次运行有效，留空恢复为主机的名称，用于区分同一台主机的多个连接）、在新标签页中连接、打开 SFTP、复制 IP / 主机名、重新连接、编辑主机，以及关闭当前、左侧、右侧、其他或全部标签。SFTP 标签的菜单是「重命名标签…」（留空恢复为「主机的名称 · SFTP」）、打开 SFTP、复制 IP / 主机名、重新连接加关闭命令，标签栏右侧和远程终端一样有「SFTP」和「重新连接」按钮；本地终端标签是「重新启动」加关闭命令。标签栏右侧「…」按钮的菜单与当前标签的右键菜单相同。双击任一标签的标题可隐藏或显示左侧的侧栏（同 ⌘B 和标题栏的按钮）。远程终端运行时和 SFTP 标签已连接时，标签栏右侧显示这条 SSH 连接的往返延迟，每 5 秒更新一次：低于 100 ms 为绿色，100–200 ms 为黄色，高于 200 ms 或超时为红色。SFTP 传输进行中也照常测量，读数会随传输占满带宽而升高。批量关闭时，正在上传的 SFTP 标签仍会先确认。
+Remote terminal tabs and SFTP tabs use the host’s system badge as their icon: the host list’s when the tab opens, and for a terminal what its own connection then finds; a system another connection finds later updates only the host list. A serial host’s terminal tab menu has no “Open SFTP” and no “Copy IP”, and has “Send break” instead: it holds the line in the break condition for about 0.3 seconds, as Cisco password recovery and Linux’s SysRq need. A Telnet host’s tab menu has “Send break” too (sending Telnet’s break) and “Copy IP”, but no “Open SFTP”. A remote terminal tab’s context menu has “Rename tab…” (for this run only; leave the name empty to go back to the host’s name; handy for telling several connections to the same host apart), “Connect in new tab”, “Open SFTP”, “Copy IP” / “Copy hostname”, “Reconnect”, “Edit host…”, and “Close”, “Close to the left”, “Close to the right”, “Close others” and “Close all”. An SFTP tab’s menu has “Rename tab…” (leave the name empty to go back to “host name · SFTP”), “Open SFTP”, “Copy IP” / “Copy hostname”, “Reconnect” and the close commands, and the right of its tab bar has the same “SFTP” and “Reconnect” buttons as a remote terminal’s; a local terminal tab’s menu has “Restart” and the close commands. The “…” button at the right of the tab bar has the same menu as the current tab’s context menu. Double-click any tab’s title to hide or show the left sidebar (like ⌘B and the title bar button). While a remote terminal is running, or an SFTP tab is connected, the right of the tab bar shows the round-trip latency of that SSH connection, updated every 5 seconds: green below 100 ms, yellow at 100–200 ms, red above 200 ms or on a timeout. It’s measured during SFTP transfers too, and the reading rises when a transfer takes up the bandwidth. When closing tabs in bulk, an SFTP tab that’s uploading still asks first.
 
-## 终端
+## Terminal
 
-远程终端和 SFTP 标签按各自的连接显示状态：已连接时图标是彩色的；连接中和断开时图标变成灰色，标签上的名称也变灰。鼠标移到图标上可看到文字说明（如「Ubuntu · 未连接」）。远程终端连接失败、退出、手动断开或取消认证后，显示「按 Enter 重新连接」；聚焦终端后按无修饰键的 Enter，在原标签按打开时的配置重连。按住按键、粘贴、查找或认证输入框不会触发重连。本地终端仍使用重新启动。
+Remote terminal and SFTP tabs show their own connection state: the icon is in color when connected; while connecting and when disconnected, the icon turns gray and so does the tab’s name. Hover over the icon to see the state in words (such as “Ubuntu · Not connected”). After a remote connection fails, exits, is disconnected or has authentication cancelled, press an unmodified Enter with the terminal focused to reconnect that tab with the settings it opened with. Held keys, pasted input, search fields and authentication fields do not trigger reconnection. Local terminals retain their restart action.
 
-右键终端内容区可复制、粘贴、全选、查找、清屏；远程终端在「复制」下面另有「复制 IP」（地址是域名时叫「复制主机名」）和「复制 ID」，菜单最后还有打开 SFTP、重新连接和断开连接。「设置 › 终端 › 终端交互」可以把右键改成直接粘贴或不做任何事，也可以打开「选中复制」。断开连接只断开这一个标签，标签保留，可随时重新连接，同一台主机的其他标签和 SFTP 不受影响。
+The terminal’s context menu has “Copy”, “Paste”, “Select all”, “Find…” and “Clear screen”; a remote terminal’s also has “Copy IP” (“Copy hostname” when the address is a domain name) and “Copy ID” below “Copy”, and “Open SFTP”, “Reconnect” and “Disconnect” at the bottom. “Disconnect” disconnects only this tab: the tab stays and can reconnect at any time, and other tabs and SFTP for the same host aren’t affected. Settings › Terminal › Interaction can make right-click paste or do nothing instead, and can turn on “Copy on select”.
 
-- **主机密钥**：第一次连接某台主机时要确认它的主机密钥（「信任并连接」），记在 ShellRS 自己的 `known_hosts` 里，之后不再问。服务器的密钥和记下的不一致时（重装了系统、换了密钥，也可能是有人冒充），弹框列出记下的和现在的指纹：「更新并连接」删掉这台主机记下的旧密钥、换成现在的再继续连接；「取消」不连接。测试连接、外部 CLI 和端口转发的自动重连遇到这种情况只报错、不询问，在 ShellRS 里连接一次这台主机更新即可。
-- **回滚历史**：每个终端保留最近 10000 行。用滚轮或触控板往上翻看，这时右侧出现滚动条（和应用里其他列表一样，按系统的「显示滚动条」设置），可以拖动，点轨道直接跳到那个位置。vim、less、top 这类全屏程序没有回滚历史，不显示滚动条。
-- **全选**（⌘A，其他平台 Ctrl+Shift+A）：选中回滚历史和屏幕上的全部文字，前后的空行不算，再按 ⌘C（其他平台 Ctrl+Shift+C）复制；打开了「选中复制」时直接复制到剪贴板。vim、less 这类全屏程序运行时只选中当前屏幕。
-- **查找**（⌘F，其他平台 Ctrl+Shift+F）：在终端右上角打开查找条，按字面量搜索屏幕和回滚历史。查询全为小写时不区分大小写，含大写字母时区分。所有匹配高亮显示，当前项颜色更深，查找条显示「当前项/总数」。回车或 ⌘G（F3）跳到下一项（更新的输出），Shift+回车或 ⌘⇧G（Shift+F3）跳到上一项（更早的输出），到头后循环。Esc 关闭。打开时如有选中文字，会作为查询词。
-- **清屏**（⌘K，其他平台 Ctrl+Shift+K；焦点不在终端时 ⌘K 仍是聚焦侧栏的搜索框）：清掉屏幕和回滚历史，只留下光标所在的提示符行，包括已输入但未回车的内容。清屏只在本地进行，不向服务器发送任何内容。vim、top 等全屏程序运行时不可用。
-- **链接**：输出里的 `http://`、`https://` 地址，以及程序明确标出的链接（如 `ls --hyperlink`、gcc 的报错），显示为带下划线的蓝色。按住 ⌘（其他平台 Ctrl）单击，用系统浏览器打开；不按时单击照旧是选择文字。鼠标在链接上停一会儿会显示它真正的地址：程序标出的链接，显示的文字可以和地址不同。地址末尾的句号、逗号和不成对的右括号不算在内；被折成两行的长地址仍是一个链接。其他协议（如 `file://`）不当作链接。
-- **鼠标**：vim（`:set mouse=a`）、htop、tmux（`set -g mouse on`）、mc 这类程序要求鼠标时，单击、拖动和滚轮都交给程序。按住 Shift 拖动仍是选择文字，按住 Shift 滚动仍是翻看回滚历史；右键从不交给程序，按「右键行为」的设置处理。
-- **通知**：程序可以请求通知（OSC 9，或 OSC 777 的 `notify;标题;正文`），终端响铃时也会提醒。ShellRS 不在前台时发系统通知（macOS 第一次会询问是否允许），点通知回到那个终端；ShellRS 在前台但终端在别的标签时，在窗口右上角提示，点一下切过去。程序请求的通知即使终端就在眼前也会提示；响铃只在看不见那个终端时提醒（Tab 补全等也会响铃）。通知标题是标签名，看得出是哪台主机发的。同一终端的程序通知 2 秒内、响铃 10 秒内只提醒一次。设置 › 终端 › 通知可以分别关掉。命令跑完想被提醒，可以在后面加上 `; printf '\e]9;完成\a'` 或 `; tput bel`；Claude Code 等命令行工具需要你处理时也会这样提醒。
-- **关键字高亮**：设置 › 关键字高亮 里的规则把匹配的文字按规则的颜色显示在所有终端里，回滚历史里的也一样。只改显示：服务器的输出不变，复制出的文字也不变；窗口缩放、长行折行后照样匹配，被折成两行的词两段都上色。这个功能默认关闭，打开页面上方的「启用关键字高亮」后才生效，关掉它就一次停用全部规则；「预览」用当前终端的字体和配色显示一段示例输出，规则改动立即反映在预览和已打开的终端里。规则表一行一条，直接在表里改：「启用」、「正则表达式」（区分大小写，开头加 `(?i)` 不区分）、「备注」、颜色（点色块用取色器，或在旁边填 `#rrggbb`）、「通知」，行尾的垃圾桶删除这一条。正则写错时在框下方提示，这条规则暂不生效。规则从上到下应用，重叠处前面的规则优先；按住行首的把手拖动可调整顺序。初始有三条示例：`ERROR` 红色、`WARN` 琥珀色、IPv4 地址蓝色，都已启用、不通知，打开总开关就能看到效果，可以修改或删除。勾选「通知」的规则在看不到那个终端时提醒，和响铃一样：ShellRS 不在前台时发系统通知，终端在别的标签时在窗口右上角提示；标题是「标签名：备注」（没填备注时用正则），正文是匹配的那一行。只检查换了行的新输出，同一终端 10 秒内只提醒一次，反复重画的同一行 5 分钟内只提醒一次。vim、less、top、tmux 这类全屏程序里不高亮，也不提醒。**尚未实现：按主机区分规则、加粗等文字样式、用键盘调整顺序。**
-- **远程复制**：远程程序用 OSC 52 复制的内容（如 tmux 的 `set -g set-clipboard on`、vim 的 OSC 52 插件）直接进本机剪贴板。远程程序读不了本机剪贴板。
-- **ZMODEM 传文件**：在终端里运行 `rz` 或 `sz 文件…`（服务器上要装 lrzsz，如 `apt install lrzsz`、`yum install lrzsz`），ShellRS 自动接上。SSH、Telnet、串口终端都能用，只给一个 shell 的堡垒机上也行；本地终端里 ssh 到别处再运行也行。
-  - `rz`：弹出选择框，选要上传的文件（可多选）。`sz`：弹出选择框，选保存到哪个文件夹，每次都问。在选择框里取消，就终止远端的 rz / sz。
-  - 拖放上传：把文件从访达（资源管理器）拖到远程终端上，ShellRS 替你输入 `rz` 并回车，直接上传这些文件，不再弹框。拖进来的文件夹会被跳过，文件夹请用 SFTP 上传。
-  - 传输时终端里有一行进度（文件名、百分比、大小、速度），每个文件传完留一行结果。按 Ctrl+C 取消，其他按键这时不起作用。
-  - 下载不覆盖已有的文件，同名时存成「名称 (1)」；没收完的文件会删掉。lrzsz 的 `rz` 默认也不覆盖服务器上已有的同名文件，这时显示「已跳过」，要覆盖请用 `rz -y`。
-  - 取消下载后，lrzsz 的 `sz` 还会再发一会儿才停，ShellRS 不显示这些数据，等它停下再显示提示符；再按一次 Ctrl+C 就不再等。
-  - 单个文件最大 4 GB，这是 ZMODEM 协议的上限。在 tmux、screen 里用不了，它们会改动传输的数据。Telnet 上要求服务器按 Telnet 的规矩处理回车（一般都是这样）。
+- **Scrollback**: each terminal keeps the last 10,000 lines. Scroll up with the wheel or trackpad and a scrollbar appears on the right (as in the app’s other lists, following the system’s “Show scroll bars” setting); drag it, or click the track to jump there. Full-screen programs such as vim, less and top have no scrollback and show no scrollbar.
+- **Select all** (⌘A, or Ctrl+Shift+A on Windows and Linux): selects all the text in the scrollback and on the screen, leaving out blank lines before and after it; press ⌘C (Ctrl+Shift+C) to copy it. With “Copy on select” on, it goes straight to the clipboard. While a full-screen program such as vim or less is running, only the screen is selected.
+- **Find** (⌘F, or Ctrl+Shift+F on Windows and Linux): opens the find bar at the top right of the terminal and searches the screen and the scrollback for the literal text. An all-lowercase query ignores case; one with capital letters matches case. All matches are highlighted, the current one darker, and the find bar shows “current/total”. Enter or ⌘G (F3) goes to the next match (newer output), Shift+Enter or ⌘⇧G (Shift+F3) to the previous one (older output), wrapping around at the ends. Esc closes it. If text is selected when it opens, that text becomes the query.
+- **Clear screen** (⌘K, or Ctrl+Shift+K on Windows and Linux; when the terminal doesn’t have focus, ⌘K still focuses the sidebar’s search box): clears the screen and the scrollback, leaving only the prompt line the cursor is on, including anything typed but not yet entered. Clearing happens only locally; nothing is sent to the server. It isn’t available while a full-screen program such as vim or top is running.
+- **Links**: `http://` and `https://` addresses in the output, and links that programs mark explicitly (such as `ls --hyperlink` and gcc’s error messages), are shown in blue and underlined. Hold ⌘ (Ctrl on Windows and Linux) and click to open one in the system browser; a plain click still selects text. Rest the pointer on a link for a moment to see its real address: for a link a program marks, the text shown can differ from the address. A trailing period, comma or unmatched closing parenthesis isn’t part of the address, and a long address wrapped over two lines is still one link. Other schemes (such as `file://`) aren’t treated as links.
+- **Mouse**: when programs such as vim (`:set mouse=a`), htop, tmux (`set -g mouse on`) and mc ask for the mouse, clicks, drags and the scroll wheel all go to the program. Dragging with Shift held still selects text, and scrolling with Shift held still scrolls through the scrollback; right-clicks never go to the program and do what “Right-click” in the settings says.
+- **Notifications**: programs can ask for a notification (OSC 9, or OSC 777’s `notify;title;body`), and a terminal bell alerts you too. When ShellRS isn’t in front, you get a system notification (macOS asks for permission the first time), and clicking it takes you back to that terminal; when ShellRS is in front but the terminal is in another tab, a notice appears at the top right of the window, and clicking it switches there. Notifications that programs ask for appear even when the terminal is right in front of you; the bell alerts you only when you can’t see that terminal (Tab completion and the like ring it too). The notification title is the tab name, so you can tell which host it came from. Each terminal alerts at most once every 2 seconds for program notifications and once every 10 seconds for the bell. Settings › Terminal › Notifications can turn each one off. To be told when a command finishes, append `; printf '\e]9;Done\a'` or `; tput bel` to it; command-line tools such as Claude Code alert you the same way when they need you.
+- **Highlighting**: the rules in Settings › Highlighting show matching text in the rule’s color in every terminal, scrollback included. Only the display changes: the server’s output and copied text stay the same; matching keeps working after the window is resized and long lines wrap, and a word wrapped over two lines is colored in both parts. The feature is off by default and works only once you turn on “Highlight keywords” at the top of the page; turning it off disables all the rules at once. “Preview” shows sample output in the current terminal’s font and colors, and rule changes show up at once in the preview and in open terminals. The rules table has one rule per row, edited right in the table: “On”, “Regular expression” (case-sensitive; start it with `(?i)` to ignore case), “Note”, a color (click the swatch for a color picker, or type `#rrggbb` next to it) and “Notify”; the trash can at the end of the row deletes the rule. A mistake in a regular expression is pointed out below the field, and the rule doesn’t apply until it’s fixed. Rules apply from top to bottom, and where they overlap, the earlier rule wins; drag the handle at the start of a row to reorder. Three sample rules come to start with: `ERROR` in red, `WARN` in amber and IPv4 addresses in blue, all on and not notifying, so turning on the main switch shows the effect right away; you can change or delete them. A rule with “Notify” checked alerts you when you can’t see the terminal, the same way as the bell: a system notification when ShellRS isn’t in front, and a notice at the top right of the window when the terminal is in another tab. The title is “tab name: note” (the regular expression when the note is empty), and the body is the matching line. Only new output is checked, each line once it ends; each terminal alerts at most once every 10 seconds, and the same line redrawn over and over at most once every 5 minutes. Nothing is highlighted or alerted in full-screen programs such as vim, less, top and tmux. **Not implemented yet: per-host rules, text styles such as bold, and reordering with the keyboard.**
+- **Remote copy**: what remote programs copy with OSC 52 (such as tmux with `set -g set-clipboard on`, or vim’s OSC 52 plugins) goes straight to this computer’s clipboard. Remote programs can’t read this computer’s clipboard.
+- **ZMODEM transfers**: run `rz` or `sz file…` in a terminal (the server needs lrzsz, such as `apt install lrzsz` or `yum install lrzsz`) and ShellRS takes it up. It works in SSH, Telnet and serial terminals, on a bastion host that gives you only a shell, and in a local terminal where you ssh on to another machine.
+  - `rz` opens a picker for the files to upload (you can choose several). `sz` opens a picker for the folder to save into, every time. Cancelling the picker stops `rz` or `sz` on the other end.
+  - Drag and drop: drag files from the Finder (File Explorer) onto a remote terminal, and ShellRS types `rz` and Enter for you and uploads them without asking. Folders you drag along are left out; upload folders with SFTP.
+  - During a transfer, a line in the terminal shows the progress (file name, percentage, size, speed), and each file leaves a line when it’s done. Press Ctrl+C to cancel; other keys do nothing meanwhile.
+  - A download never overwrites a file: one with the same name is saved as “name (1)”, and a file not received in full is deleted. lrzsz’s `rz` doesn’t overwrite a file of the same name on the server either and shows “Skipped”; use `rz -y` to overwrite.
+  - After you cancel a download, lrzsz’s `sz` sends on for a moment before it stops; ShellRS doesn’t show that data, and shows the prompt once it has stopped. Press Ctrl+C again to stop waiting.
+  - A file can be at most 4 GB, the limit of the ZMODEM protocol. It doesn’t work inside tmux or screen, which change the data on its way. Over Telnet, the server has to handle carriage returns the way Telnet says (most do).
 
-## 右侧栏
+## Right sidebar
 
-当前标签是远程终端时，窗口最右边有一列工具按钮：命令片段、历史命令、文件、tmux、Docker、Kubernetes、系统服务、进程管理、网络连接、系统监控和 GPU/NPU，其中 Kubernetes 和 GPU/NPU 默认不显示；显示哪些工具在「设置 › 终端 › 侧栏功能」里选。点一个就在右侧打开这个工具，再点一次收起；⌘⌥B（其他平台 Ctrl+Alt+B）显示或隐藏右侧栏。拖动右侧栏的左边缘可以加宽，最窄就是打开时的宽度。右侧栏只跟着远程终端出现，切到 SFTP、本地终端或设置时连同按钮一起隐藏，回到任一远程终端时按原样恢复，内容对应当前这个终端的主机。把标签拖成分屏后，右侧栏不隐藏：它对应最近一次切到或点进去的远程终端，点进另一半的 SFTP 或本地终端时不变，屏幕上一个远程终端都没有时才隐藏；标题里写着它对应哪台主机（如「系统监控 · web-01」），状态栏也跟着点进去的那一半。已知不是 Linux 的主机（macOS、Windows、BSD）不显示系统服务、进程管理、网络连接、系统监控和 GPU/NPU 的图标；历史命令、tmux、Docker 和 Kubernetes 除了 Windows 主机都有（Mac 上装了 tmux、Docker Desktop 也能用）。Telnet 和串口终端只有命令片段：其余工具要在终端旁边另执行命令，Telnet 和串口做不到。
+When the current tab is a remote terminal, a column of tool buttons runs down the right edge of the window: Snippets, History, Files, tmux, Docker, Kubernetes, Services, Processes, Network, Monitor and GPU/NPU, of which Kubernetes and GPU/NPU aren’t shown by default; choose which tools it shows in Settings › Terminal › Sidebar tools. Click one to open that tool on the right, and click it again to collapse it; ⌘⌥B (Ctrl+Alt+B on Windows and Linux) shows or hides the right sidebar. Drag the right sidebar’s left edge to widen it; it can’t get narrower than it was when it opened. The right sidebar appears only with remote terminals: switching to SFTP, a local terminal or Settings hides it together with its buttons, and going back to any remote terminal brings it back as it was, now for the host of the current terminal. With tabs dragged into a split, the right sidebar stays: it works on the remote terminal you switched to or clicked into last, stays put when you click into SFTP or a local terminal in the other half, and hides only when no remote terminal is on screen. Its title names the host it works on (such as “Monitor · web-01”), and the status bar follows the half you clicked into too. Hosts known not to run Linux (macOS, Windows, BSD) don’t show the Services, Processes, Network, Monitor and GPU/NPU icons; History, tmux, Docker and Kubernetes are there for every host except Windows ones (on a Mac, they work too with tmux or Docker Desktop installed). Telnet and serial terminals have only Snippets: the other tools run commands beside the terminal, which Telnet and a serial line can’t.
 
-**命令片段**保存常用的命令，所有主机共用。点顶部的加号新建片段：名称、分类和命令，命令可以有多行。片段按分类分组显示，没有分类的放在最后的「未分类」下；点分类标题折叠或展开，右键分类标题可以在这个分类里新建片段、重命名或删除分类（分类里的片段会一起删除，确认时写明个数）；顶部的文件夹按钮新建分类。可以按名称或命令搜索，输入几个词时列出同时包含这些词的片段。
+**Snippets** keeps the commands you use often, shared by every host. Click the plus at the top to create a snippet: a name, a category and a command, which can span several lines. Snippets are grouped by category, with the ones without a category last, under “Uncategorized”; click a category heading to collapse or expand it, and right-click it to create a snippet in that category, rename the category or delete it (its snippets are deleted with it, and the confirmation says how many). The folder button at the top creates a category. You can search by name or command; with several words, snippets that contain all of them are listed.
 
-点一个片段就在终端里执行它的命令（片段默认「点击时自动执行」）。鼠标移到片段上时，右边会显示点它会怎样：闪电表示点击就执行，▶ 表示点击只输入。在片段对话框里取消勾选「点击时自动执行」，点它就只把命令放进终端的输入行（替换掉已经输入的内容），可以修改后回车。点右边的闪电或 ▶ 总是直接执行；右键还可以输入到终端、复制命令、编辑和删除。终端里正在运行 vim、less 这类全屏程序时不会输入。Windows 主机上不会替换已经输入的内容，命令接在后面输入。
+Clicking a snippet runs its command in the terminal (snippets are set to “Run on click” by default). When the pointer is on a snippet, an icon at its right shows what a click will do: a lightning bolt means a click runs it, ▶ means a click only types it in. Uncheck “Run on click” in the snippet dialog, and clicking the snippet only puts the command on the terminal’s input line (replacing anything already typed), for you to edit and press Enter. Clicking the lightning bolt or ▶ at the right always runs it right away; the context menu also has “Insert into terminal”, “Copy command”, “Edit…” and “Delete…”. Nothing is typed in while a full-screen program such as vim or less is running in the terminal. On Windows hosts, what’s already typed isn’t replaced; the command is typed after it.
 
-**历史命令**列出远程主机上 bash 的历史命令（`~/.bash_history`），最近执行的在最前，同一条命令只列一次，下面写着执行过几次；bash 记录了时间（设置了 `HISTTIMEFORMAT`）时还写明最近一次是什么时候，多行的命令也能认出来。可以搜索，输入几个词时列出同时包含这些词的命令，不分大小写。点一条命令把它放进终端的输入行（替换掉已经输入的内容，不执行），可以修改后回车；点右边的执行按钮直接执行；右键还可以复制。终端里正在运行 vim、less 这类全屏程序时不会输入。
+**History** lists the remote host’s bash history (`~/.bash_history`), most recent first, each command once, with how many times it ran below it; when bash recorded times (`HISTTIMEFORMAT` is set), it also says when it last ran, and multi-line commands are recognized. You can search; with several words, commands that contain all of them are listed, ignoring case. Click a command to put it on the terminal’s input line (replacing anything already typed, without running it), for you to edit and press Enter; the “Run” button at the right runs it right away, and the context menu can also copy it. Nothing is typed in while a full-screen program such as vim or less is running in the terminal.
 
-bash 在 shell 退出时才把这次执行的命令写进历史文件，所以当前终端里刚执行的命令要等它退出后才会出现。列表在打开历史命令或切换终端时读取，之后点刷新按钮才重新读取；历史文件很长时只读最后 512 KB。
+bash writes a session’s commands to the history file only when the shell exits, so commands you’ve just run in the current terminal show up only after it exits. The list is read when you open History or switch terminals, and after that only when you click the refresh button; when the history file is long, only its last 512 KB is read.
 
-**文件**是终端旁的单栏远程文件列表，在这个终端自己的 SSH 连接上另开一个 SFTP 通道：不再登录，不再询问密码或验证码，跳板和代理照样走。第一次打开时连接，之后切到别的工具或收起右侧栏都保持原样；每个终端各有一份，各看各的目录，切换终端时跟着换。列表只有名称和大小两列；双击文件夹进入，双击文件用编辑器打开或预览，右键菜单和快捷键同 SFTP 标签的远程侧，点路径里的当前目录可以输入路径或打开书签。把文件从访达或资源管理器拖进列表，或点「上传…」选择文件，即可上传到当前目录；选中后按 F5 或点「下载…」下载，默认存到「下载」文件夹，确认框里可以换。进度显示在列表下方的传输队列里。它跟着终端：终端断开它也断开，终端重新连接后它自动重连；关闭终端时一起关闭，有传输进行中或编辑器里有未保存的修改时会先询问。传输和终端共用一条连接，传大文件时终端会变慢，这时用有自己连接的 SFTP 标签更合适。
+**Files** is a single remote file list beside the terminal, on an SFTP channel of that terminal’s own SSH connection: no second login, no password or verification code asked again, and jump hosts and proxies work as they do for the terminal. It connects the first time you open it and stays as it is when you switch to another tool or collapse the sidebar; each terminal has its own, showing its own folder, and it follows when you switch terminals. The list has two columns, name and size. Double-click a folder to open it and a file to edit or preview it; the context menu and shortcuts are those of an SFTP tab’s remote side, and clicking the current folder in the path lets you type a path or open a bookmark. To upload to the current folder, drag files in from Finder or File Explorer, or click “Upload…” to choose them; to download, select items and press F5 or click “Download…”, which saves to your Downloads folder unless you pick another one in the confirmation. Progress shows in the transfer queue below the list. It follows the terminal: it disconnects when the terminal does and reconnects when the terminal reconnects, and it closes with the terminal, which asks first while a transfer runs or an editor has unsaved changes. Transfers share the terminal’s connection, so a large one slows the terminal down; an SFTP tab, with a connection of its own, suits those better.
 
-「文件」会跟随终端的当前目录：终端里 `cd` 到别处，它就跳到同一个目录（进入后退历史）。这要靠远端 shell 在每次出提示符时报告当前目录（OSC 7）。打开「文件」时 ShellRS 会检测：bash 或 zsh 还没有配置时，询问「启用目录跟随？」。点「自动配置」，就在 shell 登录时读的启动文件末尾（bash 一般是 `~/.bashrc`，登录文件不读它时是 `~/.bash_profile`；zsh 是 `~/.zshrc`）追加一段以 `# >>> ShellRS directory follow >>>` 开头、`# <<< ShellRS directory follow <<<` 结尾的配置，再往终端输入一行 ` source ~/.bashrc` 让当前 shell 立即生效；终端正在运行 vim、top 这类全屏程序时不输入，重新连接后生效。不想要了，删掉这两行之间的内容即可。点「取消」后这次连接不再询问，重新连接后打开「文件」时会再问。fish 自己会报告目录，不用配置；其他 shell 不询问、不跟随。只在目录变了时才跳，在「文件」里手动浏览到别处不会被拉回去；终端里再 ssh 到别的机器时，那台机器报告的目录会被忽略。状态栏右边的「目录跟随」开关可以临时关掉跟随，只对这个终端、到关闭为止有效，初始值来自「设置 › SFTP › 自动检测目录配置」。
+Files follows the terminal’s current folder: `cd` somewhere in the terminal and it goes to the same folder (into its Back history). This relies on the host’s shell reporting its folder at each prompt (OSC 7). When Files opens, ShellRS checks: if bash or zsh isn’t set up to, it asks “Turn on folder following?”. “Set up” appends a block to the end of the startup file the shell reads when you log in (for bash usually `~/.bashrc`, or `~/.bash_profile` when the login file doesn’t read it; for zsh `~/.zshrc`), between the lines `# >>> ShellRS directory follow >>>` and `# <<< ShellRS directory follow <<<`, then types ` source ~/.bashrc` into the terminal so the shell running there reports at once. While a full-screen program such as vim or top runs in the terminal, nothing is typed and it takes effect after you reconnect. To undo it, delete the lines between those two. “Cancel” isn’t asked again on that connection; after you reconnect, opening Files asks again. fish reports its folder by itself and needs no setup; other shells aren’t asked and aren’t followed. Files only moves when the folder changes, so browsing elsewhere in Files isn’t undone; folders reported by another machine you ssh to from inside the terminal are ignored. The “Follow” switch at the right of the status bar turns following off for that terminal until it closes; it starts from Settings › SFTP › Detect folder reporting.
 
-**tmux** 列出远程主机上的 tmux 会话：名称、连着几个终端（「已连接 N」或「未连接」）和会话开始时的目录，当前终端所在的会话标着「当前」。顶部写着 tmux 的版本；主机没有装 tmux 时写「远端未安装 tmux」，按钮都不能用。「新建」先问名称（留空由 tmux 编号；只能用字母、数字、- 和 _），然后让当前终端进入这个新会话；「退出当前」让终端退出所在的会话，会话在后台继续运行。每个会话右边是「连接」（让当前终端进入这个会话）、「重命名」和「结束会话」（先确认，会话里运行的程序都会被结束）。
+**tmux** lists the remote host’s tmux sessions: the name, how many terminals are attached (“N attached” or “Detached”) and the folder the session started in, with the session the current terminal is in marked “Current”. The tmux version is at the top; a host without tmux says “tmux isn’t installed on the host”, and the buttons don’t work. “New” asks for a name (leave it empty for tmux to number it; letters, digits, - and _ only), then puts the current terminal in the new session; “Detach” takes the terminal out of its session, which keeps running. Each session has “Attach” (puts the current terminal in that session), “Rename” and “End session” (asks first; every program running in the session ends) at the right.
 
-当前终端不在 tmux 里时，连接和新建是往终端里输入并执行 `tmux attach -t 名称` 或 `tmux new -s 名称`（同历史命令，替换掉已经输入的内容；终端里正在运行 vim 这类全屏程序时不输入）。终端已经在 tmux 里时，键盘输入会交给 tmux 窗格里的程序，所以改为在终端的连接上另外通知 tmux 把这个终端切过去，不往终端里输入。ShellRS 从这条 SSH 连接的 sshd 找到终端用的 tty，再和 tmux 的客户端对照，判断终端在不在 tmux 里、在哪个会话；找不到时（比如服务器上没有 `ps`）当作不在 tmux 里。只列连接用户自己的会话：在终端里 `sudo -i` 后开的 tmux 会话不在这里。列表在打开 tmux 或切换终端时读取，连接、新建、重命名、结束、退出之后自动重读，其余时候点刷新按钮。
+When the current terminal isn’t in tmux, attaching and starting a session type `tmux attach -t name` or `tmux new -s name` into the terminal and run it (as History does, in place of what’s typed there; nothing is typed while a full-screen program such as vim runs). When the terminal is in tmux already, what’s typed goes to the program in the tmux pane, so tmux is told over the terminal’s connection to switch the terminal instead, and nothing is typed. ShellRS finds the terminal’s tty from the SSH connection’s sshd and matches it against tmux’s clients to tell whether the terminal is in tmux and in which session; when it can’t (a server without `ps`, say), the terminal counts as not in tmux. Only the login user’s own sessions are listed: tmux sessions started after `sudo -i` in the terminal aren’t here. The list is read when you open tmux or switch terminals, again after attaching, starting, renaming, ending and detaching, and otherwise when you click the refresh button.
 
-**Docker** 顶部是 Docker 和 Compose 的版本，下面「容器」「卷」「镜像」「网络」四个标签页带数量。「容器」页里，同一个 compose 项目的容器归在项目卡片下（项目名、运行中 / 总数、项目目录），点项目那一行折叠或展开，只有一个容器、而且它在运行的项目默认展开，有多个容器的项目默认折叠；不属于任何项目的在「独立容器」下。每个项目和容器右边有「停止」（或「启动」）和「重启」，项目的按钮作用于它所有的容器；点容器或它的「…」打开详情：「详情」页是名称、ID、镜像、创建时间、入口、命令、端口映射、挂载、环境变量和标签，「日志」页是容器最近 200 行输出；底部可以启动、停止、重启，已停止的容器还可以删除。「卷」「镜像」「网络」页列出各自的名称和基本信息，标出是否有容器在用；没有容器在用的可以点右边的删除按钮删除（Docker 自带的 bridge、host、none 网络不能删）。点卡片打开详情：卷是驱动、挂载点、创建时间、使用它的容器、选项和标签；镜像是完整 ID、标签、摘要、创建时间、大小、平台、层数、使用它的容器、运行配置（入口、命令、工作目录、用户、暴露端口）、环境变量和标签；网络是驱动、范围、IPv6、子网和网关、连在上面的容器及其地址、选项和标签。详情底部也可以删除。
+**Docker** shows the Docker and Compose versions at the top, and below them four tabs with counts: “Containers”, “Volumes”, “Images” and “Networks”. On “Containers”, the containers of the same compose project are grouped under a project card (project name, running / total, project folder); click the project’s row to collapse or expand it. A project with a single container that’s running starts expanded, and a project with several containers starts collapsed; containers that belong to no project are under “Standalone containers”. Each project and container has “Stop” (or “Start”) and “Restart” at the right, and a project’s buttons act on all its containers. Click a container or its “…” to open its details: the “Details” tab has the name, ID, image, creation time, entrypoint, command, ports, mounts, environment and labels, and the “Logs” tab the container’s last 200 lines of output; at the bottom you can start, stop and restart it, and delete it once it’s stopped. The “Volumes”, “Images” and “Networks” tabs list each item’s name and basic information and mark whether a container uses it; those no container uses can be deleted with the delete button at the right (Docker’s own bridge, host and none networks can’t be deleted). Click a card to open its details: for a volume, the driver, mountpoint, creation time, the containers using it, options and labels; for an image, the full ID, tags, digests, creation time, size, platform, number of layers, the containers using it, configuration (entrypoint, command, working directory, user, exposed ports), environment and labels; for a network, the driver, scope, IPv6, subnets and gateways, the containers attached with their addresses, options and labels. Items can be deleted from the bottom of the details too.
 
-停止、重启和删除都会先确认，启动直接执行，结果以通知显示，之后列表重新读取。不是以 root 登录、也不在 docker 组里时，通过免密码的 sudo 执行。列表在打开 Docker 或切换终端时读取，之后点刷新按钮才重新读取。主机没有安装 Docker 或 Docker 没有运行时会写明。
+Stopping, restarting and deleting ask first; starting happens right away. The result appears as a notification, and the list is read again. When you’re not logged in as root and not in the docker group, passwordless sudo is used. The list is read when you open Docker or switch terminals, and after that only when you click the refresh button. If Docker isn’t installed or isn’t running on the host, it says so.
 
-**系统服务**列出远程主机上的 systemd 服务（不含模板），分成「自定义服务」（unit 文件在 `/etc/systemd/system`，也就是管理员自己加的）和「系统服务」两组。顶部是 systemd 版本和整机状态（有服务失败时是「降级运行」）；「全部」「运行中」「已停止」「失败」四个标签页带数量，也可以按服务名或描述搜索。每个服务一张卡片：状态圆点、名称、描述、运行状态和开机启动状态；运行中的服务右边有「停止」「重启」，没运行的有「启动」，点「…」或卡片打开详情。详情的「状态」页是加载状态、运行状态、开机启动、主进程 PID、内存、任务数、重启次数、退出状态、启动和停止时间、unit 文件；「日志」页是这个服务在 journal 里最近 200 行。详情底部和右键菜单里同样可以启动、停止、重启，以及启用或禁用开机启动。
+**Services** lists the systemd services on the remote host (not templates) in two groups: “Custom services” (unit files in `/etc/systemd/system`, the ones an administrator added) and “System services”. The top shows the systemd version and the overall state of the machine (“Degraded” when a service has failed); there are four tabs with counts, “All”, “Active”, “Inactive” and “Failed”, and you can search by service name or description. Each service has a card: a status dot, the name, description, active state and whether it starts at boot. A running service has “Stop” and “Restart” at the right, one that isn’t running has “Start”, and “…” or clicking the card opens its details. The details’ “Status” tab has the load state, active state, at boot, main PID, memory, tasks, restarts, exit status, start and stop times, and unit file; the “Journal” tab has the service’s last 200 lines in the journal. At the bottom of the details and in the context menu you can likewise start, stop and restart it, and enable or disable it at boot.
 
-停止和重启会先确认（停止 SSH 服务时会特别说明），启动和开机启动的设置直接执行，结果以通知显示，之后列表重新读取。这些操作需要 root 权限：不是以 root 登录时通过免密码的 sudo 执行，sudo 需要密码时会提示需要 root 权限。列表在打开系统服务或切换终端时读取，之后点刷新按钮才重新读取。没有使用 systemd 的主机会写明暂不支持。
+Stopping and restarting ask first (with a special warning when you stop the SSH service); starting and the at-boot setting happen right away. The result appears as a notification, and the list is read again. These actions need root: when you’re not logged in as root, they run through passwordless sudo, and if sudo needs a password, you’re told that root is needed. The list is read when you open Services or switch terminals, and after that only when you click the refresh button. For hosts that don’t use systemd, it says they’re not supported yet.
 
-**进程管理**列出远程 Linux 主机上的进程（不含内核线程），每个一张卡片：状态圆点（绿色运行中、灰色休眠、黄色等待 I/O 或已暂停、红色僵尸进程，鼠标停上去显示状态）、进程名、PID、用户、启动时间（按本机时区），以及内存用量和占物理内存的比例、CPU 占用。CPU 占用和 `top` 的算法一样，按一个核计：占满两个核是 200%；它要两次读数才算得出，所以刚打开时先显示「—」，2 秒后出现。默认按内存从多到少排列，点「CPU」改按 CPU 排列，再点一次同一个按钮反过来排；可以按进程名、PID 或用户搜索，右边的数字是当前列出的个数。每 15 秒刷新一次，只在进程管理显示时读取，点右上角的刷新按钮立即读取。
+**Processes** lists the processes on a remote Linux host (without kernel threads), each on a card: a status dot (green running, gray sleeping, yellow waiting for I/O or stopped, red zombie; hover over it to see the state), the process name, PID, user, start time (in this computer’s time zone), memory use with its share of physical memory, and CPU usage. CPU usage is computed the way `top` does it, per core: two full cores is 200%. It takes two readings to compute, so right after the tool opens it shows “—”, and the figure appears 2 seconds later. Processes are sorted by memory, most first, by default; click “CPU” to sort by CPU instead, and click the same button again to reverse the order. You can search by process name, PID or user, and the number at the right is how many are listed. The list refreshes every 15 seconds, reading only while Processes is showing; click the refresh button at the top right to read it at once.
 
-点一个进程打开它的详情：PID、父进程、用户、状态（括号里是 `ps` 的状态字母，如 `Ssl`）、启动时间、运行时长、终端、优先级、Nice、CPU 使用率、累计 CPU 时间、常驻内存、虚拟内存、线程数、直接子进程数和全部后代进程数，下面是完整的命令行（打开详情时读取，可「复制命令」）。底部有「复制 PID」「结束进程」「强制结束」。
+Click a process to open its details: PID, parent, user, state (with the `ps` state letters in parentheses, such as `Ssl`), start time, elapsed time, TTY, priority, nice, CPU usage, CPU time, resident memory, virtual memory, number of threads, of direct children and of all descendants, and below them the full command line (read when the details open; “Copy command” copies it). At the bottom are “Copy PID”, “End process” and “Kill”.
 
-右键一个进程可以「查看详情」「结束进程…」（发送 SIGTERM，进程可以先做完收尾再退出）或「强制结束进程…」（发送 SIGKILL，立即终止）；从详情里结束也一样，都会先确认。结果以通知显示，1 秒后列表重新读取。不是以 root 登录时只能结束自己的进程。进程超过 2500 个时只列出前 2500 个，列表顶部会写明。
+Right-click a process for “View details”, “End process…” (sends SIGTERM, so the process can clean up before it exits) or “Kill process…” (sends SIGKILL, ending it immediately); ending it from the details works the same way, and both ask first. The result appears as a notification, and the list is read again 1 second later. When you’re not logged in as root, you can end only your own processes. With more than 2500 processes, only the first 2500 are listed, and the top of the list says so.
 
-**网络连接**列出远程 Linux 主机上所有的 TCP、UDP 连接和监听端口，每条一张卡片：协议、状态、本地和远端地址，占用它的进程和 PID，以及所属用户。右上角写明这是「监听端口」「入站连接」（连到本机监听的端口）还是「出站连接」。顶部是总数、监听端口数和已连接数；可以按地址、端口、状态、PID、进程名或用户搜索，也可以按协议和状态筛选。监听的排在最前，然后是已连接的，TIME_WAIT 等正在关闭的排在最后；同一个端口被多个进程共同监听（如 nginx 的多个 worker）时合成一张卡片。
+**Network** lists every TCP and UDP connection and listening port on a remote Linux host, each on a card: protocol, state, local and remote addresses, the process using it with its PID, and its user. The top right of each card says whether it’s a “Listening port”, “Inbound” (connected to a port this host listens on) or “Outbound”. The top of the panel shows the total, the number of listening ports and the number established; you can search by address, port, state, PID, process name or user, and filter by protocol and state. Listening sockets come first, then established ones, with TIME_WAIT and other closing ones last; when several processes listen on the same port together (such as nginx’s workers), they’re merged into one card.
 
-列表在打开网络连接或切换终端时读取一次，之后不会自己变化，点右上角的刷新按钮重新读取。数据通过这个终端已有的 SSH 连接读取，不需要再次登录，用的是主机上的 `ss` 命令；没有 `ss` 的主机（如 BusyBox）改为读取 `/proc/net`，这时看不到进程；不是以 root 登录时只能看到自己的进程。这两种情况列表顶部都会写明。连接超过 3000 条时只列出前 3000 条（监听端口总在其中），总数仍然准确。
+The list is read once when you open Network or switch terminals and doesn’t change by itself after that; click the refresh button at the top right to read it again. The data is read over this terminal’s existing SSH connection, with no second login, using the host’s `ss` command; on hosts without `ss` (such as BusyBox) it’s read from `/proc/net` instead, and then processes don’t show; when you’re not logged in as root, you see only your own processes. In both cases the top of the list says so. With more than 3000 connections, only the first 3000 are listed (listening ports are always among them), and the total stays accurate.
 
-**系统监控**显示远程 Linux 主机的：
+**Monitor** shows, for a remote Linux host:
 
-- **系统**：主机名、架构、发行版、运行时长（如「32 天 23:40:26」）。
-- **CPU**：型号、核数和平均使用率；多核时下面每核一根小竖条，鼠标停在竖条上显示这个核的编号和使用率。默认只显示一行，核多到一行放不下时点右上角的「N 核」展开全部。
-- **内存**：物理内存的使用率和用量；有交换空间时另有一行。
-- **网络**：主网卡（默认路由所在的网卡）的上传、下载速率；有多块网卡时点右上角的「N 个网卡」展开全部（不列回环网卡和从没收发过数据的网卡）。
-- **磁盘**：每个本地挂载点的占用（不含 tmpfs 等内存文件系统和系统目录下的挂载）。
+- **System**: host name, architecture, distribution and uptime (such as “32 days 23:40:26”).
+- **CPU**: model, number of cores and average usage; with several cores, a small bar for each core below, and hovering over a bar shows that core’s number and usage. Only one row shows by default; when there are too many cores for one row, click “N cores” at the top right to show them all.
+- **Memory**: physical memory usage and the amount used; a second row when there’s swap.
+- **Network**: upload and download rates of the main interface (the one with the default route); with several interfaces, click “N interfaces” at the top right to show them all (loopback interfaces and interfaces that have never sent or received data aren’t listed).
+- **Disks**: the usage of each local mount point (without in-memory file systems such as tmpfs, or mounts under system folders).
 
-数据通过这个终端已有的 SSH 连接读取，不需要再次登录，也不安装任何东西；每 2 秒刷新一次（磁盘每 30 秒一次），只在系统监控显示时读取。每次刷新只读取几个系统文件，除了执行它的 shell 不在服务器上启动其他进程。使用率达到 70% 显示为黄色，达到 90% 显示为红色。终端未连接时显示提示；还没识别出系统的主机如果不是 Linux，会写明暂不支持。
+The data is read over this terminal’s existing SSH connection, with no second login and nothing to install; it refreshes every 2 seconds (disks every 30 seconds), reading only while Monitor is showing. Each refresh reads only a few system files, and starts no processes on the server besides the shell that runs it. Usage of 70% or more shows in yellow, 90% or more in red. When the terminal isn’t connected, it says so; when a host whose system wasn’t known yet turns out not to be Linux, it says it isn’t supported yet.
 
-**GPU/NPU** 给 AI 主机的显卡运维用，显示远程 Linux 主机上的 NVIDIA GPU（读 `nvidia-smi`）和华为昇腾 NPU（读 `npu-smi info`）。它默认不显示，要先在「设置 › 终端 › 侧栏功能」里打开。按 8 卡的机器设计：
+**GPU/NPU** is for looking after AI hosts: it shows a remote Linux host’s NVIDIA GPUs (read with `nvidia-smi`) and Huawei Ascend NPUs (read with `npu-smi info`). It isn’t shown by default; turn it on first in Settings › Terminal › Sidebar tools. It’s laid out for hosts with eight:
 
-- **汇总**：型号和驱动版本，设备数和主机已运行的时长，以及所有设备的平均利用率、显存（占用比例，下面是已用 / 总量）、最高温度和总功耗。
-- **设备**：每张卡三行。第一行是编号（GPU 0、NPU 3；一张卡有多个芯片时每个芯片单列，写成 NPU 0.1）、型号、温度和功耗，下面两行是利用率和显存的条，一样长，方便对比。点一张卡展开详情：型号、UUID、总线 ID、性能状态、功耗和上限、风扇（有读数时）和健康状态；右上角的「全部展开」「全部收起」一次展开或收起所有卡。只有一张卡时默认展开。
-- **计算进程**：正在用卡计算的进程，按卡号排列，同一张卡上显存占得多的在前；每个写明命令行、显存、卡号、PID 和用户。`ps` 看不到的进程（如别的 PID 命名空间里的）只有程序名。右键可以「结束进程…」或「强制结束进程…」，同进程管理，都先确认。
+- **Summary**: the model and driver version, the number of devices and how long the host has been up, and over all devices the average utilization, memory (how full, with used / total under it), the highest temperature and the total power.
+- **Devices**: three lines a device. The first has its number (GPU 0, NPU 3; a card with more than one chip lists each, as NPU 0.1), model, temperature and power; the next two have its usage and memory bars, the same length so they compare. Click a device to unfold its details: model, UUID, bus ID, performance state, power and its limit, fan (when it has a reading) and health; “Expand all” and “Collapse all” at the top right do every device at once. A host with one device shows it unfolded.
+- **Compute processes**: the processes computing on the devices, by device, the most memory first on each; each with its command line, memory, device, PID and user. A process `ps` can’t see (in another PID namespace) has only its program name. Right-click one to “End process…” or “Kill process…”, as in Processes; both ask first.
 
-读不到的指标显示「—」，不当作 0。利用率和显存不按占用变色：训练时跑满、推理服务预先占满显存都是正常状态。温度达到 80 °C 显示为黄色，90 °C 显示为红色；健康状态不正常（NVIDIA 有 ECC 不可纠正错误，昇腾的 Health 不是 OK）时编号旁有黄点或红点，鼠标停上去显示原因。`nvidia-smi`、`npu-smi` 出错时（卡掉了、驱动没加载、权限不够）原样显示它们的报错。
+A figure that can’t be read shows as “—”, not 0. Utilization and memory aren’t colored by how full they are: a GPU at 100% while training, or memory taken up front by an inference server, is how they should run. Temperatures of 80 °C or more show in yellow, 90 °C or more in red; a device in poor health (uncorrectable ECC errors on NVIDIA, an Ascend Health other than OK) has a yellow or red dot beside its number, and pointing at it says why. When `nvidia-smi` or `npu-smi` fails (a GPU fell off the bus, the driver isn’t loaded, no permission), what it said shows as it said it.
 
-数据通过这个终端已有的 SSH 连接读取，不需要再次登录，也不安装任何东西；每 2 秒刷新一次（上一次读完才开始计时，`npu-smi` 慢时自动放慢），运行时长也随之更新，只在 GPU/NPU 显示时读取。每个工具最多等 3 秒，不回答就停掉它，自动读取也随之停止，点刷新按钮再读：卡出故障时 `nvidia-smi` 可能卡在驱动里，一直重试会在服务器上堆积进程。主机上两个工具都没有时会写明。**尚未支持：AMD、海光 DCU、寒武纪等其他厂商。**
+The data is read over this terminal’s existing SSH connection, with no second login and nothing to install; it refreshes every 2 seconds (counted from the end of the last reading, so a slow `npu-smi` slows it down), the uptime with it, reading only while GPU/NPU is showing. Each tool gets 3 seconds; one that doesn’t answer is stopped, and so is reading until you click the refresh button: a failing GPU can leave `nvidia-smi` stuck in the driver, and retrying would pile up stuck processes on the server. A host with neither tool says so. **Not supported yet: AMD, Hygon DCU, Cambricon and other vendors.**
 
 ### Kubernetes
 
-右侧栏的 Kubernetes 使用当前 SSH 主机上的 `kubectl` 和 kubeconfig，通过终端自己的连接读取，不额外登录。主机需要能运行 POSIX `sh`、已安装 kubectl、有可用的当前 context，并具备集群查询权限；Windows 主机和只允许一个通道的外部连接不显示此工具。它默认不显示，在「设置 › 终端 › 侧栏功能」里打开；关掉后入口隐藏，列表、日志和性能都停止读取。
+The Kubernetes sidebar uses `kubectl` and kubeconfig on the SSH host, over the terminal's existing connection. The host needs POSIX `sh`, kubectl, a current context and cluster read permissions. The tool is hidden for Windows hosts and external connections restricted to a single channel. It isn’t shown by default: turn it on in Settings › Terminal › Sidebar tools. Turning it off hides it and stops reading lists, logs and performance.
 
-1. 在远程终端右侧打开 Kubernetes，选择集群（context）。列表读取该集群的所有 namespace，默认显示“全部命名空间”，可以选择一个命名空间过滤。
-2. 选择资源类型：Pod、Deployment、StatefulSet、DaemonSet、ReplicaSet、Service、Ingress、Job、CronJob、PVC。搜索按名称、命名空间、状态或标签过滤当前列表。
-3. 点击资源名称查看状态、重点属性和带语法高亮的完整 YAML。次要属性可展开查看；详情字段可选择文字后用系统快捷键复制，右键可复制完整字段，也可使用“复制概要”。工作负载和 Service 有 Pod 选择器时，可点击关联 Pod 继续查看容器和日志。
-4. Pod 的“日志”页可以选择普通、初始化或临时容器，选择最近 100–10000 行和最近 5 分钟至 24 小时；“上一次容器”读取所选容器上一次终止前的日志。检索区分大小写，可启用正则表达式，显示匹配行数；检索仅针对已读取的日志，每次最多 512 KB。
-5. “生成命令”可以复制资源状态与事件、YAML、容器日志、实时跟踪日志、进入容器（`/bin/sh`）的命令。命令显式绑定 context、命名空间、资源和容器，可粘贴到对应 SSH 主机的终端执行。
-6. 列表操作菜单和详情顶部提供编辑、重启、删除。Deployment、StatefulSet、DaemonSet 支持按更新策略重启，受支持控制器管理的运行中 Pod 通过重建重启；ConfigMap 支持编辑和删除。YAML 默认只读，进入编辑后可用保存按钮或 Ctrl+S / ⌘S 提交。保存、重启、删除都必须二次确认，确认框显示目标集群、资源和影响；取消不会写入，保存失败或版本冲突会保留草稿。
+Select a context, then choose from all discovered namespaces or use “All namespaces”. Browse nodes, workloads, services, configuration and storage, including HPA, PDB and EndpointSlice resources. Search filters names, namespaces, status and labels in the loaded list. Open a resource to inspect its properties and syntax-highlighted YAML. Detail values support native text selection and copying. Secret lists and details read metadata only. Workloads link to pods in the same namespace after verifying ownership and UID; the relationship view lets you navigate controllers, containers and configuration references. The overview's related-pod list is independent of the diagram's 160-node display limit.
 
-节点和 Pod 的“性能”页复用系统监控的 CPU、内存仪表与动画，每 10 秒刷新；节点磁盘用量每 30 秒刷新。只在查看性能页时读取，查询失败会延长重试间隔；缺少指标权限或服务时显示原因。
+YAML editing, workload or managed-pod restarts, and deletion require confirmation that identifies the context and exact resource. Writes include UID and resourceVersion checks; failures retain the draft. Secrets cannot be edited. Node and pod performance tabs query optional Metrics API data only while visible; node disk readings use the kubelet Summary API. Missing permissions or metrics are shown without hiding resource details. Memory uses GiB-scale G units; displayed resource and log timestamps use UTC+08:00 while YAML and copied raw logs retain their original values.
 
-日志按时间戳、级别和 JSON 字段高亮，可复制单行或检索结果。“实时预览（2 秒）”串行刷新最新读取窗口，缓冲区最多 512 KB / 10000 行；超长行仅预览前 16 KB，检索与复制仍使用缓冲内完整内容。可关闭自动滚动以阅读旧行；离开日志页、关闭详情或查询失败时停止刷新。连续跟踪可使用生成的 `--follow` 命令。
+In a pod's Logs tab, choose a regular, init or ephemeral container, the last 100–10000 lines and a time range from 5 minutes to 24 hours. “Previous container” reads the selected container's previous instance. Search is case-sensitive, supports regular expressions and shows matched line counts. Logs highlight timestamps, levels and JSON fields; copy individual lines or search results. “Live preview (2 s)” refreshes the latest retrieved window with serial requests. The buffer is capped at 512 KB / 10000 lines; long lines display up to 16 KB while search and copy use the full buffered text. Turn off auto-scroll to read earlier lines. Refreshing stops when leaving Logs, closing details or encountering a query error. Commands offers continuous `--follow` in the terminal.
 
-查询不会切换 kubeconfig 的当前 context；编辑、重启和删除需要对应的 RBAC 写入权限，并在二次确认后才修改集群。列表在打开、切换 SSH 终端、改变查询范围、在这里修改资源之后和点击刷新时读取，不自己刷新。RBAC 权限不足、kubectl 不可用、API 失败或数据超过传输限制都会显示错误；读取 namespace 被拒绝时不会把空列表冒充完整列表。更多说明见 [Kubernetes](kubernetes.md)。
+Commands also generates describe, YAML, logs and `/bin/sh` exec commands, explicitly scoped to the selected context, namespace, resource and container. Copy them into a terminal on the same SSH host. Browsing does not modify kubeconfig or cluster resources. Lists are read when opened, on a change of terminal or scope, after a change made here and on Refresh; they don’t refresh themselves. Structured reads use API pagination and optional gzip/base64 compression, with a 1 MB SSH response limit, 16 MB decompression limit and 64 MB / 100000-item list limit. Permission failures and incomplete responses are displayed; namespace access denial never appears as an empty successful discovery.
 
 ## SFTP
 
-打开主机的「SFTP」标签即可浏览本地与远程目录；和终端一样，每次「打开 SFTP」都新开一个标签，同一台主机可以开多个，各自独立连接、各看各的目录。操作方式对标 WinSCP Commander。SFTP 使用独立 SSH 连接，仅请求 SFTP 子系统，不要求服务器提供 Shell；关闭终端不会中止传输。右侧栏的「文件」不同：它走终端自己的连接，随终端关闭（见「右侧栏」）。
+Open a host’s “SFTP” tab to browse local and remote folders. As with terminals, each “Open SFTP” opens a new tab, so one host can have several, each with its own connection, each showing its own folders. It works like WinSCP’s Commander interface. SFTP uses a separate SSH connection that asks only for the SFTP subsystem, so the server doesn’t need to provide a shell; closing the terminal doesn’t stop transfers. The right sidebar’s Files is different: it uses the terminal’s own connection and closes with the terminal (see “Right sidebar”).
 
-### 工具栏
+### Toolbars
 
-每一侧面板都有两行工具栏，下方是路径标签。面板太窄放不下时，按钮从右往左整个隐藏，不会换行（对应的命令在右键菜单和快捷键里仍然可用）。新开的 SFTP 标签本地、远程两侧各占一半；两侧和队列之间的分隔线拖到哪里，在这个标签关闭之前都会记住，切到别的标签再回来也不变：
+Each pane has two rows of toolbar, with the path label below them. When a pane is too narrow, buttons hide whole, from right to left, rather than wrapping (their commands are still in the context menus and shortcuts). A new SFTP tab splits evenly between the local and remote sides; wherever you drag the dividers between the sides and the queue, they stay there until the tab closes, even when you switch to another tab and back:
 
-- 第一行（导航）：
-  - 「目录列表」：列出从根到当前目录的每一级，本地另有主目录、桌面、文稿、下载，Windows 上还有各个驱动器（如「C: 本地磁盘」「D: 本地磁盘」），选中即前往。
-  - 书签：点按钮打开「打开目录/书签」（见下）；旁边的下拉箭头列出这台主机这一侧的书签，点击即前往，也可添加或移除当前路径。书签保存在本地数据库，删除主机时一并删除。
-  - 上级目录、根目录、主目录、刷新、后退、前进。
-  - 显示 / 不显示隐藏文件：名称以 `.` 开头的文件和目录。睁开的眼睛表示正在显示，划掉的眼睛表示不显示。本地和远程各自一个开关，互不影响；每一侧的选择对所有 SFTP 标签生效，保存在设置里，默认都不显示。不显示时面板底部写明「隐藏 N 项」；显示时隐藏文件的文字颜色浅一些。文件列表的图标默认是单色的，想要 WinSCP 那样的彩色图标，到「设置 › SFTP」里改。
-  - 查找文件（只在远程侧）：见下文「查找文件」。
-- 第二行（文件）：
-  - 远程是「下载…」，本地是「上传…」，下拉里还有「选择文件上传…」。
-  - 删除、重命名…、属性…、新建（文件夹… / 文件…）。
+- First row (navigation):
+  - The folder list: lists every level from the root to the current folder, plus Home, Desktop, Documents and Downloads on the local side, and on Windows every drive (such as “C: Local disk” and “D: Local disk”); choose one to go there.
+  - Bookmarks: the button opens the “Open folder” dialog (see below); the drop-down arrow next to it lists this host’s bookmarks for this side, which you click to go there, and can also add or remove the current path. Bookmarks are saved in the local database and deleted along with the host.
+  - Parent folder, Root folder, Home folder, Refresh, Back, Forward.
+  - Show / hide hidden files: files and folders whose names start with `.`. An open eye means they’re shown, a crossed-out eye that they’re hidden. Local and remote each have their own switch, independent of each other; each side’s choice applies to every SFTP tab and is saved in the settings; both are hidden by default. While they’re hidden, the bottom of the pane says “N hidden”; while they’re shown, hidden files’ text is lighter. The file lists’ icons are monochrome by default; for color ones as in WinSCP, see Settings › SFTP.
+  - Find files (remote side only): see “Find files” below.
+- Second row (files):
+  - “Download…” on the remote side and “Upload…” on the local side, whose drop-down also has “Choose files to upload…”.
+  - Delete, Rename…, Properties…, New (Folder… / File…).
 
-### 路径标签
+### Path label
 
-与 WinSCP 的路径标签相同：
+Works like WinSCP’s path label:
 
-- 显示当前目录的完整路径，例如 `/home/tester/`。
-- 每一级都可以点：悬停时从根到该级高亮，单击即前往。
-- 路径放不下时保留根目录和末尾几级，中间折成 `…`，点 `…` 前往被折叠的最后一级。
-- 单击当前目录、双击路径右侧空白处打开「打开目录/书签」。
-- 右键：前往、刷新、添加路径到书签、复制路径、打开目录/书签…。
+- It shows the full path of the current folder, such as `/home/tester/`.
+- Every level can be clicked: hovering highlights the path from the root to that level, and clicking goes there.
+- When the path doesn’t fit, the root and the last few levels stay, and the middle folds into `…`; clicking `…` goes to the last folded level.
+- Clicking the current folder, or double-clicking the empty space to the right of the path, opens the “Open folder” dialog.
+- Context menu: Go to, Refresh, Add path to bookmarks, Copy path, Open folder or bookmark….
 
-### 打开目录/书签
+### Open folder or bookmark
 
-与 WinSCP 的「打开目录」对话框相同，可以从路径标签、书签按钮、⌘O（其他平台 Ctrl+O；macOS 另有 ⌘⇧G）或路径标签的右键菜单打开：
+Works like WinSCP’s Open directory dialog. Open it from the path label, the bookmarks button, ⌘O (Ctrl+O on Windows and Linux; also ⌘⇧G on macOS) or the path label’s context menu:
 
-- 「目录」预填当前目录并已选中，直接输入即可替换。`~` 表示主目录，相对路径从当前目录算起。本地侧另有「浏览…」。
-- 下方是这台主机这一侧的书签。与目录相同的书签处于选中状态；单击书签把它填入目录，双击直接打开。
-- 「添加」把目录加入书签，「删除」（或在列表中按 Delete）删除选中的书签并选中相邻的一个，「上移」「下移」调整顺序。
-- 书签的改动立即保存，按「取消」也不会撤销，与 WinSCP 相同。
-- 回车或「打开」前往目录；Esc 或「取消」关闭。
+- “Folder” is filled in with the current folder, already selected, so typing replaces it. `~` means the home folder, and relative paths start from the current folder. The local side also has “Browse…”.
+- Below are this host’s bookmarks for this side. A bookmark that matches the folder is selected; clicking a bookmark puts it in the folder field, and double-clicking opens it directly.
+- “Add” adds the folder to the bookmarks, “Remove” (or Delete in the list) removes the selected bookmark and selects the one next to it, and “Up” and “Down” change the order.
+- Bookmark changes are saved at once and aren’t undone by “Cancel”, the same as in WinSCP.
+- Enter or “Open” goes to the folder; Esc or “Cancel” closes the dialog.
 
-列表下方的状态栏平时显示项目数和已选数量；连接中和读取目录超过 0.3 秒时显示「正在连接 SFTP…」或「正在读取目录…」。读不了目录或连接断开时，原因用红字显示在窗口最左下角（平时显示「已连接 主机的名称」的位置）；空闲时断网也会自己发现，不用等到刷新，时机和同一台主机的终端一样；重新连接用标签栏的「重新连接」按钮或标签菜单；断开时在远程列表里做任何操作（刷新、打开目录、删除、上传下载等）会弹出「SFTP 连接已断开」对话框，说明原因，并可直接「重新连接」。这些都不会让列表移动。
+The status bar below the list normally shows the number of items and how many are selected; while connecting, or when reading a folder takes longer than 0.3 seconds, it shows “Connecting to SFTP…” or “Reading folder…”. When a folder can’t be read or the connection drops, the reason appears in red at the far bottom left of the window (where “Connected to” and the host’s name normally are). A dropped connection is noticed even while idle, without waiting for a refresh, as soon as the same host’s terminal would notice. To reconnect, use the “Reconnect” button in the tab bar or the tab menu. While disconnected, any action in the remote list (refreshing, opening a folder, deleting, uploading, downloading and so on) brings up a “Lost the SFTP connection to …” dialog that explains why and can “Reconnect” right away. None of this makes the list move.
 
-列与 WinSCP 相同：本地为名称、大小、类型、修改时间，远程为名称、大小、修改时间、权限、所有者。点列标题（或它右边的箭头）按这一列排序，依次是降序、升序、恢复按名称；目录始终排在文件前面。换目录、刷新后排序和拖动过的列宽都保持不变。
+The columns are the same as in WinSCP: Name, Size, Type and Modified on the local side; Name, Size, Modified, Permissions and Owner on the remote side. Click a column header (or the arrow at its right) to sort by that column: descending, then ascending, then back to by name; folders always come before files. The order and any column widths you dragged stay when you open another folder or refresh.
 
-- 大小默认以 KB 显示（`4,008,960 KB`，向上取整，只有空文件是 0 KB），与 WinSCP 相同。右键「大小」列标题可切换为「字节」（`4,105,175,040 B`）、「千字节（KB）」或「简短格式」（按大小用 B、KB、MB、GB，如 `3.8 GB`），对所有 SFTP 标签生效并保存在设置里。按大小排序始终按实际字节数。
-- 时间形如 `2026/4/22 12:44:53`。
-- 权限形如 `rwxr-xr-x`。
-- 所有者来自服务器的 `ls -l` 行。
-- 链接到目录的符号链接显示为带箭头的文件夹，可以双击进入。
+- Sizes are shown in KB by default (`4,008,960 KB`, rounded up; only empty files are 0 KB), as in WinSCP. Right-click the “Size” column header to switch to “Bytes” (`4,105,175,040 B`), “Kilobytes (KB)” or “Short (B, KB, MB, GB)”, which uses B, KB, MB or GB depending on the size, such as `3.8 GB`; the choice applies to every SFTP tab and is saved in the settings. Sorting by size always uses the exact number of bytes.
+- Times look like `2026/4/22 12:44:53`.
+- Permissions look like `rwxr-xr-x`.
+- The owner comes from the server’s `ls -l` line.
+- A symbolic link to a folder shows as a folder with an arrow, and you can double-click it to go in.
 
-### 选择与右键菜单
+### Selection and context menus
 
-- 与 WinSCP 关闭「整行选择」时相同，「名称」格才是项目：鼠标移上去时只有名称格变灰，单击、双击、右键都作用在名称格上，选中时整个名称格高亮；行里的其他列和列表下方都算空白处。
-- 鼠标：单击名称格选中（其他选择取消），⌘ 单击（其他平台 Ctrl 单击）增减，Shift 单击选取范围，双击打开。单击空白处取消全部选择（按住 ⌘ 或 Shift 时不取消）。
-- 框选：在名称右边的空白、大小、类型、时间等列或列表下方按下拖动，画出选框，框住的行被选中；按住 ⌘ 或 Shift 开始拖动则加到已有选择上。拖到列表上下边缘时自动滚动。拖动文件名才是把文件拖到另一侧传输：按下未选中的文件名时只选中它（其他选择取消），拖走的就是它一个；按下已选中的文件名则拖走全部已选。拖动时只有到了另一侧列表上才显示「上传 / 下载 N 个项目」，在自己的列表或其他不能放下的地方，指针显示为禁止。
-- 键盘：↑↓、Home、End、PageUp、PageDown 移动，加 Shift 扩展；空格或 Insert 切换当前行；⌘A 全选；Tab 切到另一侧。
-- 右键未选中的名称格会先选中它；右键空白处取消选择并弹出空白处菜单。
-  - 文件名上的菜单：编辑（文件；图片、SVG 和 Markdown 另有预览，SVG 以外的图片只有预览）、上传… / 下载…、复制路径（选中项目的完整路径，多个时每行一个）、删除、重命名…、属性…。目录双击进入，菜单里没有「打开」。
-  - 空白处的菜单：前往（上级 / 根 / 主目录 / 后退 / 前进）、刷新、显示隐藏文件（勾选表示这一侧显示）、查找文件…（远程）、添加路径到书签、新建。
+- As in WinSCP with “Full row select” turned off, the “Name” cell is the item: on hover only the name cell turns gray; clicks, double-clicks and right-clicks all act on the name cell; and a selected item’s whole name cell is highlighted. The row’s other columns and the area below the list count as empty space.
+- Mouse: click a name cell to select it (deselecting everything else), ⌘-click (Ctrl-click on Windows and Linux) to add or remove items, Shift-click to select a range, double-click to open. Clicking empty space deselects everything (unless ⌘ or Shift is held).
+- Box selection: press and drag in the empty space to the right of the names, in the size, type, time and other columns, or below the list to draw a selection box; the rows inside it are selected. Start dragging with ⌘ or Shift held to add to the current selection. Dragging to the top or bottom edge of the list scrolls it. Dragging a file name is what drags files to the other side for transfer: pressing on an unselected file name selects only it (deselecting everything else), and only it is dragged; pressing on a selected file name drags everything selected. While dragging, “Upload N items” or “Download N items” appears only over the other side’s list; over your own list or anywhere else it can’t be dropped, the pointer shows that it isn’t allowed.
+- Keyboard: ↑↓, Home, End, PageUp and PageDown move, with Shift to extend the selection; Space or Insert toggles the current row; ⌘A selects all; Tab switches to the other side.
+- Right-clicking an unselected name cell selects it first; right-clicking empty space clears the selection and opens the empty-space menu.
+  - The menu on file names: Edit (for files; images, SVG and Markdown also have Preview, and images other than SVG have only Preview), Upload… / Download…, Copy path (the full paths of the selected items, one per line), Delete, Rename…, Properties…. Double-clicking a folder goes into it, so the menu has no “Open”.
+  - The empty-space menu: Go to (Parent folder / Root folder / Home folder / Back / Forward), Refresh, Show hidden files (checked means this side shows them), Find files… (remote), Add path to bookmarks, New.
 
-### 快捷键
+### Shortcuts
 
-| 命令 | 快捷键 |
+| Command | Shortcut |
 |---|---|
-| 上传 / 下载（按所在面板） | F5 |
-| 重命名 | F2 |
-| 新建文件夹 | F7 |
-| 删除 | F8、Delete；macOS 另有 ⌘⌫ |
-| 属性 | F9；macOS 另有 ⌘I |
-| 编辑文件 | F4 |
-| 刷新 | ⌘R / Ctrl+R |
-| 上级目录 | Backspace；macOS 另有 ⌘↑ |
-| 根目录 | ⌘\ / Ctrl+\ |
-| 主目录 | macOS ⌘⇧H，其他平台 Ctrl+H |
-| 后退 / 前进 | ⌥← / ⌥→；macOS 另有 ⌘[ / ⌘] |
-| 添加路径到书签 | ⌘D / Ctrl+D |
-| 打开目录 / 编辑文件 | Enter；macOS 另有 ⌘↓ |
-| 打开目录/书签 | ⌘O / Ctrl+O；macOS 另有 ⌘⇧G |
-| 显示 / 不显示隐藏文件（按所在面板） | macOS ⌘⇧.，其他平台 Ctrl+Alt+H |
-| 查找文件（远程） | ⌘F / Ctrl+F |
+| Upload / Download (depending on the pane) | F5 |
+| Rename | F2 |
+| New folder | F7 |
+| Delete | F8, Delete; also ⌘⌫ on macOS |
+| Properties | F9; also ⌘I on macOS |
+| Edit file | F4 |
+| Refresh | ⌘R / Ctrl+R |
+| Parent folder | Backspace; also ⌘↑ on macOS |
+| Root folder | ⌘\ / Ctrl+\ |
+| Home folder | ⌘⇧H on macOS, Ctrl+H on Windows and Linux |
+| Back / Forward | ⌥← / ⌥→; also ⌘[ / ⌘] on macOS |
+| Add path to bookmarks | ⌘D / Ctrl+D |
+| Open folder / Edit file | Enter; also ⌘↓ on macOS |
+| Open folder or bookmark | ⌘O / Ctrl+O; also ⌘⇧G on macOS |
+| Show / hide hidden files (depending on the pane) | ⌘⇧. on macOS, Ctrl+Alt+H on Windows and Linux |
+| Find files (remote) | ⌘F / Ctrl+F |
 
-### 查找文件
+### Find files
 
-对标 WinSCP 的「查找文件」，只在远程侧：点工具栏第一行最右边的放大镜、空白处右键菜单里的「查找文件…」或按 ⌘F（其他平台 Ctrl+F）打开。它是一个单独的窗口，和 WinSCP 一样不挡住主窗口：查找时可以照常浏览、传输，两个窗口随意切换。每个 SFTP 标签最多一个，再次打开就把它切到前面（没在查找时，「查找位置」换成远程面板当前的目录）；关闭这个 SFTP 标签时一起关闭。
+As WinSCP’s Find Files, on the remote side only: click the magnifying glass at the right end of the first toolbar row, choose “Find files…” in the empty-space menu, or press ⌘F (Ctrl+F on Windows and Linux). It’s a window of its own that, as in WinSCP, doesn’t block the main one: you can browse and transfer while it searches, and switch between the two windows. Each SFTP tab has at most one; opening it again brings it to the front (when it isn’t searching, “Search in” becomes the remote pane’s current folder), and it closes with its SFTP tab.
 
-- 「文件名」：同 WinSCP 的文件掩码。多个用分号（或逗号）隔开，不分大小写，要和整个名称相符：`*` 代表任意几个字符，`?` 代表一个，如 `*.log`、`nginx.conf`（`*.*` 表示所有名称）。掩码查找文件；以 `/` 结尾的查找文件夹，如 `logs/`。不支持 WinSCP 掩码里的排除（`|`）、路径、大小和时间条件。
-- 「查找位置」：打开时是远程面板当前的目录，`~` 表示主目录，相对路径从当前目录算起。
-- 回车或「查找」开始，查找中按钮变成「停止」。下面的每一层目录都会读到（同时读 4 个），找到的文件和文件夹随时列出，列是名称、目录、大小、修改时间，查完按目录、名称排好。列表下方写着正在查找的目录，结束后写找到几个；读不了的目录跳过，并写明有几个。
-- 和 WinSCP 一样，会进入链接到目录的符号链接；同一个目录（按真实路径）只读一次，链接绕回上层也不会没完没了。不跳过任何目录，也没有数量上限，从 `/` 查找会连 `/proc` 一起读，可能要很久，随时可以「停止」。远程侧显示隐藏文件时才查找隐藏的文件和目录。
-- 结果的排序和选择与主窗口的文件列表相同：点列标题（或它右边的箭头）依次按这一列降序、升序、恢复按目录排，文件夹始终排在文件前面；单击选中一个，⌘ 单击（其他平台 Ctrl 单击）增减，Shift 单击选取范围；↑↓、Home、End、PageUp、PageDown 移动，加 Shift 扩展，空格切换当前行，⌘A 全选。也和主窗口一样，「名称」格才是结果：行里的其他列和列表下方都算空白处，单击空白处取消选择，从空白处拖动画出选框，框住的行被选中（按住 ⌘ 或 Shift 开始拖动则加到已有选择上）。
-- 「定位」（或双击、回车）把主窗口切到前面，远程面板前往结果所在的目录并选中它；「编辑」（F4）用编辑器打开文件。这两个只对一个结果。「下载…」（F5）在主窗口弹出平常的下载确认，「删除」（F8、Delete；macOS 另有 ⌘⌫）在查找窗口里确认后删除，都作用于所有选中的结果；删掉的结果（和删掉的文件夹里找到的）从列表里去掉。查找窗口留在后面，可以接着处理下一个结果。「复制结果」复制全部结果的完整路径，每行一个。
-- 右键菜单就是这几个命令：右键结果的名称格时，没选中的话先只选中它，菜单里是定位、编辑、下载…、删除和复制结果；右键空白处取消选择，菜单里只有复制结果。
-- Esc、⌘W（其他平台 Ctrl+W）或窗口的关闭按钮关闭它，同时停止正在进行的查找；下次打开时「文件名」是上次查找的。
+- “File name”: file masks as in WinSCP. Separate several with semicolons (or commas); case doesn’t matter, and a mask must match the whole name: `*` stands for any characters and `?` for one, such as `*.log` or `nginx.conf` (`*.*` means every name). A mask finds files; one ending in `/` finds folders, such as `logs/`. WinSCP’s exclusions (`|`), paths, and size and time conditions aren’t supported.
+- “Search in”: the remote pane’s current folder when the dialog opens. `~` is the home folder, and a relative path starts from the current folder.
+- Press Return or “Find” to start; while searching, the button is “Stop”. Every folder below is read (four at a time), and the files and folders found are listed as they come, with their name, folder, size and modification time, then sorted by folder and name once the search is over. Below the list is the folder being searched, then how many were found; folders that can’t be read are skipped, and counted.
+- As in WinSCP, symbolic links to folders are followed; each folder (by its real path) is read once, so a link back up the tree doesn’t go on forever. No folder is skipped and there’s no limit on results: a search from `/` reads `/proc` too and can take long, and you can “Stop” it any time. Hidden files and folders are searched only while the remote side shows hidden files.
+- Results sort and select as the main window’s file lists do: click a column title (or the arrow beside it) to sort by that column descending, then ascending, then by folder again, folders always ahead of files; click to select one, ⌘-click (Ctrl-click on Windows and Linux) to add or remove one, Shift-click to select a range; ↑↓, Home, End, PageUp and PageDown move, with Shift to extend, Space toggles the current row, and ⌘A selects all. As in the main window, too, the “Name” cell is the result: the row’s other columns and the space below the list are empty space, where a click clears the selection and a drag draws a rectangle that selects the rows it covers (starting with ⌘ or Shift held adds them to the selection).
+- “Go to” (or a double-click, or Return) brings the main window to the front, and the remote pane goes to the result’s folder and selects it; “Edit” (F4) opens the file in the editor. These two act on one result. “Download…” (F5) asks the usual download question in the main window, and “Delete” (F8, Delete; also ⌘⌫ on macOS) deletes once confirmed in the Find files window; both act on every selected result. Deleted results, and what was found in a deleted folder, leave the list. The Find files window stays open behind, ready for the next result. “Copy results” copies the full paths of all results, one per line.
+- The context menu has the same commands: right-clicking a result’s name selects it alone unless it’s selected already, and offers Go to, Edit, Download…, Delete and Copy results; right-clicking empty space clears the selection and offers Copy results.
+- Escape, ⌘W (Ctrl+W on Windows and Linux) or the window’s close button closes it and stops a search under way; the next time, “File name” starts with the last one searched for.
 
-### 文件操作
+### File operations
 
-- 删除前会确认，并写明对象和后果：
-  - 本地项目移到废纸篓。
-  - 远程项目永久删除，目录连同其中全部内容。
-  - 删除符号链接只删除链接本身。
-- 重命名和新建：
-  - 按当前列表检查名称；不能为空，不能是 `.` 或 `..`，不能与已有项目同名。
-  - 重命名不会覆盖已有项目。
-- 属性：
-  - 显示位置、大小、修改时间，远程另有所有者和组。
-  - 权限用 3×3 复选框和八进制数字编辑，两者同步。
-  - 多选时，项目之间不一致的权限位保持原样，除非你改动它。
-  - 含目录时可以递归应用；递归时默认「为目录添加执行权限（X）」，避免目录无法进入。
-  - 符号链接不参与修改权限。
+- Deleting asks first, saying what will be deleted and what happens:
+  - Local items move to the Trash (the Recycle Bin on Windows).
+  - Remote items are deleted permanently, a folder together with everything in it.
+  - Deleting a symbolic link deletes only the link itself.
+- Renaming and creating:
+  - The name is checked against the current list: it can’t be empty, can’t be `.` or `..`, and can’t be the same as an existing item’s.
+  - Renaming never overwrites an existing item.
+- Properties:
+  - Shows the location, size and modification time, plus the owner and group for remote items.
+  - Permissions are edited with a 3×3 grid of checkboxes and an octal number, kept in sync.
+  - With several items selected, permission bits that differ between them stay as they are unless you change them.
+  - When folders are included, the change can be applied recursively; a recursive change checks “Add execute permission to folders (X)” by default, so the folders can still be opened.
+  - Symbolic links are left out of permission changes.
 
-### 编辑文件
+### Editing files
 
-文本文件可以直接在 ShellRS 里改，远程和本地的都行（与 WinSCP 的内置编辑器相同）：
+Text files can be edited right in ShellRS, remote and local alike (like WinSCP’s internal editor):
 
-- 打开：双击文件、选中后回车或按 F4、右键「编辑」。「新建 › 文件…」建好后也直接打开。文件在中间区的「编辑器」标签里打开，和终端、SFTP 一样可以拖成分栏；同一个文件只开一个标签，再打开就切到它。
-- 编辑器有行号、查找替换（⌘F / Ctrl+F，替换 ⌘⇧F / Ctrl+H），按文件名为 Shell、YAML、TOML、JSON、Python、JavaScript、HTML、CSS、Markdown、SQL、PHP、Go、Lua、Makefile、Diff 着色，其他文件是纯文本。Makefile 和用 Tab 缩进的文件按 Tab 输入制表符。
-- 保存：⌘S / Ctrl+S 或标签上方的「保存」。远程文件经打开它的 SFTP 标签的连接直接写回原文件（原地改写），所有者、权限和指向它的链接都不变。保存前会核对文件的大小和修改时间：打开后被别人改过或删掉了，会先问是否「覆盖」，不会悄悄覆盖。写到一半连接断开时，服务器上的文件可能只写了一部分，编辑器里的内容还在，重新连接后再保存一次即可。
-- 「重新加载」从服务器或磁盘重新读一遍；有没保存的修改时先确认。
-- 标签上的圆点表示有没保存的修改。关闭这样的标签会问「保存」「放弃修改」还是「取消」；一次关闭多个标签、关闭 SFTP 标签（它打开的远程文件会一起关掉）或退出 ShellRS 时，有没保存的文件会先问一次。macOS 上从程序坞退出和注销关机不会询问。
-- 窗口左下角是这个文件所走的 SFTP 连接（本地文件写「本机文件」），右下角是光标位置和编码、换行方式（如「UTF-8 · LF」）。
-- 限制：只打开 5 MB 以内的 UTF-8 文本文件（带不带 BOM 都可以，保存时原样保留 BOM 和 CRLF 换行）。更大的文件、二进制文件和 GBK 等其他编码的文件会说明原因、不打开，远程文件可以改用「下载…」。
+- Opening: double-click a file, select it and press Enter or F4, or right-click it and choose “Edit”. A file made with “New › File…” opens right away too. Files open in an editor tab in the center area, which can be dragged into a split like terminals and SFTP; each file has only one tab, and opening it again switches to that tab.
+- The editor has line numbers, find and replace (⌘F / Ctrl+F; replace ⌘⇧F / Ctrl+H), and coloring by file name for Shell, YAML, TOML, JSON, Python, JavaScript, HTML, CSS, Markdown, SQL, PHP, Go, Lua, Makefile and Diff; other files are plain text. In Makefiles and files indented with tabs, the Tab key types a tab character.
+- Saving: ⌘S / Ctrl+S or “Save” above the tab. A remote file is written straight back to the original file (in place) over the connection of the SFTP tab that opened it, so its owner, permissions and the links pointing to it stay the same. Before saving, ShellRS checks the file’s size and modification time: if someone else changed or deleted it after you opened it, you’re asked whether to “Overwrite” first, rather than having it overwritten silently. If the connection drops partway through writing, the file on the server may be only partly written; the editor still has your text, so reconnect and save again.
+- “Reload” reads the file again from the server or the disk, asking first if there are unsaved changes.
+- A dot on the tab means unsaved changes. Closing such a tab asks whether to “Save”, “Discard changes” or “Cancel”; closing several tabs at once, closing an SFTP tab (which also closes the remote files it opened) or quitting ShellRS with unsaved files asks once first. On macOS, quitting from the Dock and logging out or shutting down don’t ask.
+- The bottom left of the window shows the SFTP connection the file goes through (“Local file” for local files), and the bottom right the cursor position, the encoding and the line endings (such as “UTF-8 · LF”).
+- Limits: only UTF-8 text files of 5 MB or less open (with or without a BOM; the BOM and CRLF line endings are kept on save). Larger files, binary files and files in other encodings such as GBK are refused with the reason; remote ones can be downloaded with “Download…” instead.
 
-### 预览
+### Preview
 
-图片（PNG、JPG、GIF、WebP、SVG、BMP、ICO、TIFF）和 Markdown 可以预览，远程和本地的都行：
+Images (PNG, JPG, GIF, WebP, SVG, BMP, ICO, TIFF) and Markdown can be previewed, remote and local alike:
 
-- 打开：双击图片；Markdown 和 SVG 是文本，双击是编辑，预览用右键「预览」。
-- 预览是一个占窗口大部分的对话框，Esc、右上角的关闭或「关闭」按钮关掉。Markdown 排版后显示，可以滚动、选中复制，点链接用浏览器打开。
-- 图片默认「适合窗口」：按原比例缩小到放得下（小图不放大），居中显示；上方写像素尺寸、文件大小和当前比例。放大、缩小按钮（或 ⌘= / ⌘-，其他平台 Ctrl）按 10%–800% 的档位缩放，按住 ⌘（Ctrl）滚动滚轮或触控板可以连续缩放；「原图」（⌘0）按一个图片像素一个点显示，「适合窗口」（⌘9）回到放得下的大小；双击图片在两者之间切换。图片比预览区大时可以上下左右滚动查看，缩放时画面中间的位置保持不动。
-- 下方的「下载…」把远程文件下载到本机（打开下载确认框），Markdown 的「编辑」打开编辑器（已打开就切过去）。
-- 预览的是服务器或磁盘上的文件，编辑器里没保存的修改不会出现在预览里。
-- 限制：图片 20 MB 以内，Markdown 5 MB 以内且是 UTF-8；更大的会说明原因，远程文件可以改用「下载…」。
+- Opening: double-click an image. Markdown and SVG are text, so double-clicking them opens the editor; to preview them, choose “Preview” in the context menu.
+- The preview is a dialog that covers most of the window; Esc, the close button at the top right or the “Close” button closes it. Markdown is shown formatted: you can scroll, select and copy, and click links to open them in the browser.
+- Images start at “Fit to window”: scaled down in proportion until they fit (small images aren’t enlarged) and centered, with the size in pixels, the file size and the current scale above. The “Zoom in” and “Zoom out” buttons (or ⌘= / ⌘-, Ctrl on Windows and Linux) step through 10%–800%, and scrolling the wheel or trackpad with ⌘ (Ctrl) held zooms smoothly; “Actual size” (⌘0) shows one image pixel per point, and “Fit to window” (⌘9) goes back to the size that fits; double-click the image to switch between the two. When the image is larger than the preview area, you can scroll in every direction, and zooming keeps the point in the middle of the view in place.
+- At the bottom, “Download…” downloads a remote file to this computer (opening the download confirmation), and for Markdown, “Edit” opens the editor (or switches to it if it’s already open).
+- The preview shows the file on the server or the disk; changes not yet saved in the editor don’t appear in it.
+- Limits: images up to 20 MB, Markdown up to 5 MB and in UTF-8; larger files are refused with the reason, and remote ones can be downloaded with “Download…” instead.
 
-### 上传与下载
+### Uploading and downloading
 
-- 入口：
-  - 上传：「上传…」、本地列表中的 F5、「选择文件上传…」，或按住本地项目的文件名拖到远程列表，或把 Finder 中的文件拖到远程列表。
-  - 下载：「下载…」、远程列表中的 F5，或按住远程项目的文件名拖到本地列表。
-  - 拖到目录行时放进该目录，拖到其余区域时放进当前目录。
-- 所有入口都显示确认框，可以修改目标目录；下载可以用「浏览…」选择本机目录。确认框写明数量和种类（如「上传 2 个文件到 …」），来源的所在目录只写一次，每个项目占一行，悬停可看完整路径。
-- 确认后来源、端点和目标即固定。每个 SFTP 标签同时运行一个批次（上传和下载共用），批内同时传几个文件由「设置 › SFTP › 最大同时传输数量」决定（默认 3），文件夹里的等文件夹建好再开始。这和 WinSCP 的并行传输一样，只是都走这个标签的同一条连接，不另外登录。传输进行中还可以继续上传或下载，新的批次排进传输队列，前一批结束后自动开始。其他 SFTP 标签、主机和终端可以继续操作。
-- 递归传输包含空目录。符号链接原样创建，不跟随。默认二进制传输，保留普通文件的修改时间。
-- 新建项使用目标一侧的默认权限，覆盖时保留目标原有的基本权限。不复制所有者、ACL 或扩展属性。
-- 同名目录合并。文件或链接冲突时询问覆盖、跳过或取消，可以应用于本批剩余冲突；目录与非目录冲突不会自动删除。
-- 出错时可以重试、跳过或取消，完成后的汇总分别列出成功、跳过和失败。
+- Ways to start:
+  - Upload: “Upload…”, F5 in the local list, “Choose files to upload…”, dragging local items by their file names to the remote list, or dragging files from Finder to the remote list.
+  - Download: “Download…”, F5 in the remote list, or dragging remote items by their file names to the local list.
+  - Dropping on a folder’s row puts the items in that folder; dropping anywhere else puts them in the current folder.
+- Every way shows a confirmation where you can change the destination folder; for downloads, “Browse…” chooses a folder on this computer. The confirmation says how many items of which kinds (such as “Upload 2 files to …”), shows the source folder once, and lists each item on its own line, with the full path on hover.
+- Once confirmed, the source, endpoints and destination are fixed. Each SFTP tab runs one batch at a time (uploads and downloads share it), moving as many of its files at once as “Settings › SFTP › Maximum concurrent transfers” says (3 by default), with the items inside a folder waiting until the folder has been created. This works like WinSCP’s parallel transfers, except that all of them go over this tab’s one connection, with no second login. While a transfer runs, you can start more uploads or downloads, and each new batch waits in Transfers and starts automatically when the one before it ends. Other SFTP tabs, hosts and terminals stay usable.
+- Recursive transfers include empty folders. Symbolic links are recreated as links, not followed. Transfers are binary by default, and regular files keep their modification time.
+- New items get the destination side’s default permissions, and overwriting keeps the destination’s existing basic permissions. Owners, ACLs and extended attributes aren’t copied.
+- Folders with the same name are merged. When a file or link conflicts, you’re asked whether to overwrite, skip or cancel, and can apply the answer to the rest of the batch’s conflicts; a folder conflicting with something that isn’t a folder is never deleted automatically.
+- On an error, you can retry, skip or cancel, and the summary at the end lists what succeeded, what was skipped and what failed.
 
-### 传输队列
+### Transfers
 
-与 WinSCP 的队列面板相同，有传输时出现在双栏下方，高度可拖动，清除全部已结束的批次后收起。
+Works like WinSCP’s queue panel: it appears below the two panes when there are transfers, its height can be dragged, and it collapses once all finished batches are cleared.
 
-- 每一批一行：操作（上传 / 下载）、来源（一个项目时是它的路径，多个项目时是所在目录）、目标、已传输（单位与「大小」列相同）、时间（剩余时间）、速度（最近几秒）和进度。
-- 进行中的批次显示总进度条，下面一行是正在传的文件（同时传几个时是传得最久的那个）和它自己的进度条，对应 WinSCP 进度对话框里的两个进度条。
-- 进度列：等待中、正在扫描、百分比、等待回答、重连说明、已停止、已完成、部分失败（N 项）、已移出。
-- 点行首的箭头展开这一批的逐项结果（完成、已跳过、失败及原因），最新的在最上面。
-- 工具栏：继续（停止的批次）、停止（进行中的批次）、移出队列（选中的排队中或已结束的批次，或停止的批次）、丢弃续传进度、清除已完成。
-- 停止的批次留在队首，等你继续、丢弃续传进度或移出队列之后，后面的批次才会开始；移出队列不删除续传记录，下次传同样的文件仍会询问是否续传。
-- 队列只在本次运行中保留，关闭 SFTP 标签时一起清除；有未完成的批次时关闭标签会先确认。
+- One row per batch: Direction (upload / download), Source (the item’s path for a single item, the folder they’re in for several), Destination, Transferred (in the same units as the “Size” column), Time (time left), Speed (over the last few seconds) and Progress.
+- A batch in progress shows an overall progress bar, with a second line below for the file being transferred and its own progress bar, like the two progress bars in WinSCP’s progress dialog.
+- The Progress column shows: Waiting, Scanning, a percentage, Waiting for an answer, a note about reconnecting, Stopped, Done, N items failed, Removed.
+- Click the arrow at the start of a row to expand the batch’s results item by item (Done, Skipped, or Failed with the reason), newest first.
+- Toolbar: Resume (a stopped batch), Stop (a batch in progress), Remove from queue (the selected waiting or finished batches, or a stopped batch), Discard partial transfer, Clear finished.
+- A stopped batch stays at the front of the queue; the batches after it start only once you resume it, discard its partial transfer or remove it from the queue. Removing it from the queue doesn’t delete its resume record, so transferring the same files again still asks whether to resume.
+- The queue lasts only for this run and is cleared when the SFTP tab closes; closing the tab with unfinished batches asks first.
 
-## 断点续传和替换
+## Resuming and replacing
 
-和 WinSCP 默认的一样，小于 100 KB 的文件不续传。上传直接写到目标文件名：以独占方式新建，目标已存在时才询问覆盖，覆盖时就地改写，保留原文件的权限；只读等改写不了的文件改用下面先移开再发布的办法。关闭文件的同时设置修改时间。中途出错的文件会删掉，断线重连后整个重传。下载仍先写 `.filepart` 再改名，但不记续传。
+Files are first written to `<destination file name>.filepart`. Write requests go through a bounded pipeline, and once every write has been acknowledged and the file has closed successfully, its modification time (and, over an existing file, that file’s permissions) is set by path before the real file is published. Over an existing file, the old file is first moved to `.shellrs-<UUID>.backup`, then the new file is published and the backup deleted; this replacement isn’t atomic, as the destination is briefly missing between the two renames. Like WinSCP, transfers use no SFTP extensions (`fsync@openssh.com`, `posix-rename@openssh.com` and so on) and set no attributes on an open file: some bastion hosts refuse these requests, or even end the whole session over them. If the reply to a publish is lost, ShellRS recovers using the managed temporary path, the stage, the type and the size; when it can’t tell safely, it keeps the recovery files and reports it.
 
-100 KB 及以上的文件先写入 `<目标文件名>.filepart`。写入请求采用有界流水线，收到每个写入确认并关闭成功后，按路径设置修改时间（覆盖时还有原文件的权限），再发布正式文件。覆盖已有文件时，先将旧文件移到 `.shellrs-<UUID>.backup`，再发布新文件，最后删除备份；这样替换不是原子的，两次改名之间目标短暂不存在。和 WinSCP 一样，传输不用任何 SFTP 扩展（`fsync@openssh.com`、`posix-rename@openssh.com` 等），也不对打开的文件设置属性：有的堡垒机拒绝这些请求，甚至因此断开整个会话。发布响应丢失时根据受管理临时路径、阶段、类型和大小恢复，无法安全判断则保留恢复文件并报告。
+Resume records are kept in `upload-resume/` in the app’s data folder, as versioned JSON written atomically; they never contain passwords, passphrases or private keys, and they don’t change the database schema. A record ties together the endpoint, host fingerprint, source, destination and safe-replace stage. Resuming works as in WinSCP: ShellRS reads the current size of the remote `.filepart`, skips that much of the local file and carries on; it’s up to you to make sure the source is still the same version. Uploads never read the remote file back to verify it.
 
-续传记录保存在应用数据目录的 `upload-resume/`，采用版本化 JSON 和原子写入，不写入密码、口令或私钥，不改变数据库结构。记录用于绑定端点、主机指纹、来源、目标和安全替换阶段。续传方式与 WinSCP 相同：读取远端 `.filepart` 的当前大小，在本地文件中跳过相同长度并继续传输；使用者需确保来源仍是同一版本。上传过程不会为了校验而回读远端文件内容。
+Downloads likewise write first to `<destination file name>.filepart` on this computer; when done, ShellRS sets the remote modification time, runs fsync, and renames it to the real file within the same file system (an atomic replace). Concurrent read requests may come back out of order or short, but the temporary file is written strictly in order, because resuming trusts only its length. Download resume records are kept in `download-resume/` and tie together the endpoint, host fingerprint, remote source with its size and modification time, and local destination; if the remote file changes, the download can’t resume and can only start over or be skipped.
 
-下载同样先写入本机的 `<目标文件名>.filepart`，完成后设置远程的修改时间、fsync，再在同一文件系统内重命名为正式文件（原子替换）。并发的读取请求可能乱序、短读返回，但临时文件严格按顺序写入，因为续传只信它的长度。下载续传记录保存在 `download-resume/`，绑定端点、主机指纹、远程来源及其大小与修改时间、本地目标；远程文件变化后不能续传，只能重新下载或跳过。
+On network failures, each batch reconnects automatically up to three times, after 1, 3 and 10 seconds. After that, resume the batch with “Resume” in Transfers; resuming by hand resets the count. Authentication failures, a changed host key and a deliberate cancel need you to deal with them. Reconnecting uses the original connection settings, so editing the host doesn’t change the destination of a transfer in progress.
 
-网络故障每批最多自动重连三次，间隔 1、3、10 秒。耗尽后使用「继续上传」或「继续下载」，手动恢复会重置次数。认证失败、主机密钥变化和主动取消需要用户处理。重连沿用原连接配置，编辑主机不会改变正在传输的目标。
+Cancelling, closing the tab, disconnecting or quitting keeps the resume records; closing a tab with a transfer in progress asks first. After a restart, transfers don’t continue by themselves; choosing the same source and destination again asks whether to resume. While a batch is stopped, “Discard partial transfer” cleans up its managed temporary files; if there’s a recovery backup that can’t be judged safely, the files are kept and the reason is given. Items published successfully have their records and backups cleaned up automatically.
 
-取消、关闭标签、断开连接或退出时保留续传记录；关闭正在传输的标签会先确认。重启后不会自动继续，再次选择相同来源和目标时会询问续传。停止状态下可使用「丢弃续传进度」清理该批受管理的临时文件和传到一半的小文件；存在无法判断的恢复备份时会保留文件并说明原因。成功发布的项目自动清理记录和备份。
+When a file name can’t be represented exactly, ShellRS reports an error. The remote string decoding of the current `russh-sftp 3.0.0` replaces invalid UTF-8, so the browser refuses remote names that contain the replacement character `U+FFFD`, to avoid acting on the wrong path. Symbolic links use OpenSSH’s SFTP v3 argument order.
 
-文件名不能准确表示时会明确报错。当前 `russh-sftp 3.0.0` 的远端字符串解码会替换无效 UTF-8，浏览器因此拒绝包含替换字符 `U+FFFD` 的远端名称，避免访问错误路径。符号链接沿用 OpenSSH 的 SFTP v3 参数顺序。
+**Not implemented yet: folder sync in SFTP tabs (the external CLI’s `shellrs sync` can sync), a foreground transfer progress dialog, reordering the queue, filtering, finding files, a folder tree, and keeping the Dock layout.**
 
-**尚未实现：SFTP 标签里的目录同步（外部 CLI 的 `shellrs sync` 可以同步）、前台传输进度对话框、队列排序、过滤、查找文件、目录树和 Dock 布局持久化。**
+## Download and updates
 
-## 下载与更新
+Packages are on [GitHub Releases](https://github.com/since2006/shell-rs/releases):
 
-安装包在 [GitHub Releases](https://github.com/since2006/shell-rs/releases)：
-
-| 系统 | 首次安装 | 自动更新 |
+| System | First install | Automatic updates |
 |---|---|---|
-| macOS（Apple Silicon 和 Intel 共用一个包） | DMG，把 ShellRS 拖进「应用程序」 | 支持 |
-| Windows x64 | 安装程序，按当前用户安装到 `%LOCALAPPDATA%\Programs\ShellRS`，不需要管理员 | 支持 |
-| Linux x64 | AppImage | 支持 |
+| macOS (one package for Apple Silicon and Intel) | DMG; drag ShellRS into Applications | Yes |
+| Windows x64 | Setup program, which installs for the current user into `%LOCALAPPDATA%\Programs\ShellRS`, with no administrator rights needed | Yes |
+| Linux x64 | AppImage | Yes |
 
-ShellRS 启动 30 秒后检查一次有没有新版本，之后每 6 小时检查一次。有新版本就在后台下载并校验，完成后标题栏右上角出现绿色的更新按钮。点开后，「查看更新内容」打开官网的更新日志，「重启并安装」换成新版本并重新打开。重启会断开已打开的连接、停止传输（续传进度保留）和端口转发，对话框里会写明具体有哪些。
+ShellRS checks for a new version 30 seconds after it starts, then every 6 hours. When there is one, it downloads and verifies it in the background, and then a green update button appears at the top right of the title bar. Click it: “What’s new” opens the changelog on the website, and “Restart to update” switches to the new version and reopens. Restarting closes open connections and stops transfers (keeping their progress for resuming) and port forwards; the dialog lists exactly which.
 
-「设置 › 关于」里的「应用更新」只有三行：
+“Updates” in “Settings › About” has just three rows:
 
-- **当前版本**：下面写着现在的状态（已是最新、正在下载、已下载等），右边是版本号和一个按钮：平时是「检查更新」，下载好之后变成「重启并安装…」。构建号和平台在版本号的悬停提示里。
-- **更新渠道**：稳定版适合日常使用；Beta 可以提前收到测试版本，稳定版发布时也会收到。切换后马上按新渠道检查（关掉自动升级时等你手动检查）。
-- **自动升级**：关掉之后只在手动检查时才联网，发现新版本时由你决定是否下载。
+- **Current version**: below it, the current state (up to date, downloading, downloaded and so on); at the right, the version number and a button, normally “Check for updates”, which becomes “Restart to update…” once an update is downloaded. The build number and platform are in the version number’s tooltip.
+- **Update channel**: Stable is for everyday use; Beta gets test versions early, and stable releases too when they come out. After you switch, ShellRS checks the new channel right away (with automatic updates off, it waits until you check by hand).
+- **Automatic updates**: when this is off, ShellRS goes online only when you check by hand, and when it finds a new version, you decide whether to download it.
 
-- **校验**：更新清单由 ShellRS 的发布密钥签名，安装包按清单里的大小和 SHA-256 核对，任何一步对不上都不会安装。macOS 上还会核对新版本的开发者签名。
-- **隐私**：检查更新只发送 ShellRS 的版本号、操作系统和 CPU 架构，不发送任何能识别这台电脑或用户的信息。匿名使用统计见「隐私」一节。
-- **不能自动更新的情况**：从 DMG 里直接运行、没有放进「应用程序」文件夹、对安装位置没有写权限、Linux 上不是用 AppImage 运行，或者是自己编译的开发构建。这时「关于」页会说明原因，有新版本时给出「前往下载页」。
-- **退回旧版本**：数据库在升级到新结构之前会备份成 `shellrs.db.v<旧版本>.bak`。旧版本打开新结构的数据库时会拒绝打开，以免把新版本保存的数据弄乱；需要退回时，把备份改名回 `shellrs.db`。
+- **Verification**: the update manifest is signed with ShellRS’s release key, and the package is checked against the size and SHA-256 in the manifest; if any step doesn’t match, nothing is installed. On macOS, the new version’s developer signature is checked as well.
+- **Privacy**: checking for updates sends only ShellRS’s version number, the operating system and the CPU architecture, nothing that could identify this computer or you. For anonymous usage statistics, see “Privacy”.
+- **When automatic updates aren’t possible**: when ShellRS runs straight from the DMG or outside the Applications folder, you can’t write to where it’s installed, on Linux it isn’t run as the AppImage, or it’s a development build you compiled yourself. The About page then says why, and offers “Open download page” when a new version is out.
+- **Going back to an older version**: before the database is upgraded to a new schema, it’s backed up as `shellrs.db.v<old version>.bak`. An older version refuses to open a database with a newer schema, so as not to mess up data a newer version saved; to go back, rename the backup to `shellrs.db`.
 
-## 隐私
+## Privacy
 
-ShellRS 不发送主机、凭据、会话内容、命令、文件名或路径，也不发送任何能识别这台电脑或用户的标识。联网的只有这两件事（连接主机本身除外）：
+ShellRS never sends hosts, credentials, session content, commands, file names or paths, or any identifier that could identify this computer or you. Only these two things go online (besides connecting to your hosts):
 
-- **检查更新**：只发送 ShellRS 的版本号、操作系统和 CPU 架构，见「下载与更新」。
-- **匿名使用统计**：发给 [Aptabase](https://aptabase.com)，用来了解安装量、每天有多少台设备在用、各版本的分布，以及哪些功能用得多。「设置 › 关于 › 隐私」里的「发送匿名使用统计」默认打开；关掉后不再发送，本机攒下的计数也一并清除。
+- **Checking for updates**: sends only ShellRS’s version number, the operating system and the CPU architecture; see “Download and updates”.
+- **Anonymous usage statistics**: sent to [Aptabase](https://aptabase.com) to learn how many installs there are, how many devices use ShellRS each day, how the versions are spread, and which features are used most. “Send anonymous usage statistics” in “Settings › About › Privacy” is on by default; turn it off and nothing more is sent, and the counts collected on this computer are cleared too.
 
-每个统计事件都带 ShellRS 的版本号、操作系统的名称和版本（如 macOS 15.1、Windows 10.0.22631、Ubuntu 24.04）。事件只有四种：
+Every statistics event carries ShellRS’s version number and the operating system’s name and version (such as macOS 15.1, Windows 10.0.22631, Ubuntu 24.04). There are only four events:
 
-| 事件 | 什么时候发 |
+| Event | When it’s sent |
 |---|---|
-| `app_installed` | 第一次启动时发一次。数据目录里记着已经报过，换一个数据目录或删掉它会再报 |
-| `app_started` | 每次启动 |
-| `app_active` | 当天（UTC）第一次把窗口切到前台时；启动当天不再重复。macOS 上关了窗口、留在后台不算 |
-| `usage` | 各功能的使用次数：从第一次使用算起满 4 小时，在下一次启动、切到前台或使用时汇总成一条 |
+| `app_installed` | Once, on the first launch. The data folder records that it was reported; a different data folder, or deleting it, reports it again |
+| `app_started` | Every launch |
+| `app_active` | The first time each day (UTC) the window comes to the front; not again on the day ShellRS started. On macOS, a closed window with ShellRS left in the background doesn’t count |
+| `usage` | How many times each feature was used: once 4 hours have passed since the first use, summed up into one event at the next launch, activation or use |
 
-前三种附带这些设置和数量，取值都是固定的几种：CPU 架构、应用外观、界面语言、浅色和深色主题（内置主题的名字）、界面是否跟随主题、关键字高亮、外部 CLI 和自动升级是否打开、更新渠道、是否改过快捷键、SFTP 的图标风格（单色或彩色），以及保存的主机、凭据、端口转发、命令片段各有多少（只报档位：0、1-5、6-20、21-100、100+）。
+The first three carry these settings and counts, each with a fixed set of possible values: CPU architecture, appearance, interface language, light and dark themes (names of built-in themes), whether the interface matches the theme, whether highlighting, the external CLI and automatic updates are on, the update channel, whether any shortcut was changed, the SFTP icon style (monochrome or color), and how many hosts, credentials, port forwards and snippets are saved (only as a band: 0, 1-5, 6-20, 21-100, 100+).
 
-`usage` 只有次数，没有内容，计的是：SSH 终端连上（另按跳板、代理、凭据、无密码、临时连接、外部连接分别计数）、SFTP 连上（另按临时连接、外部连接计数）、打开 SFTP 的查找文件、本地终端、串口终端连上、Telnet 终端连上、端口转发开启（本地、远程、动态）、上传和下载批次、终端里的 ZMODEM 上传和下载、编辑器打开本地和远程文件、预览图片和 Markdown、打开右侧栏的十一个工具、命令片段和历史命令送进终端、终端查找、通知（程序、响铃、关键字），外部 CLI 的 `exec`、`exec --terminal`、`upload`、`download`、`sync`、`hosts`、`credentials` 命令，以及打开和关闭关键字高亮、外部 CLI。
+`usage` has only counts, no content. It counts: SSH terminals connected (also counted separately for jump hosts, proxies, credentials, no password, quick connections and external connections), SFTP connected (also counted for quick connections and external connections), opening SFTP’s Find files, local terminals, serial terminals connected, Telnet terminals connected, port forwards started (local, remote, dynamic), upload and download batches, ZMODEM uploads and downloads in terminals, the editor opening local and remote files, previews of images and Markdown, opening each of the eleven right sidebar tools, snippets and history commands sent to the terminal, terminal find, notifications (program, bell, keyword), the external CLI’s `exec`, `upload`, `download`, `sync`, `hosts` and `credentials` commands, and turning highlighting and the external CLI on and off.
 
-- 计数先存在数据目录的 `analytics.json` 里，退出不会丢，之后再补发。离线或在内网里不影响使用：发不出去时等 1 分钟，之后每次加倍、最长 6 小时再试，而且只在使用 ShellRS 时顺带重试，空闲时不发任何请求。
-- Aptabase 按请求的 IP 地址推断国家和地区，但不保存 IP。它区分设备用的是 IP 和 User-Agent 加上每天更换的随机盐算出的散列，所以看不到同一台设备跨天的行为。
-- 自己编译的开发构建不发送统计；外部 CLI（`shellrs` 命令）本身也不发送。
+- Counts are first kept in `analytics.json` in the data folder, so quitting doesn’t lose them, and they’re sent later. Being offline or on an intranet doesn’t get in the way: when sending fails, ShellRS waits 1 minute, then doubles the wait each time up to 6 hours, and retries only while you’re using ShellRS, sending no requests while it’s idle.
+- Aptabase infers the country and region from the request’s IP address but doesn’t store the IP. It tells devices apart by a hash of the IP and User-Agent with a random salt that changes every day, so it can’t follow the same device across days.
+- Development builds you compile yourself don’t send statistics, and neither does the external CLI (the `shellrs` command) itself.

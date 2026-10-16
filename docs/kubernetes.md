@@ -1,6 +1,6 @@
 # Kubernetes
 
-[返回使用手册](manual.md#kubernetes)
+[返回使用手册](manual.zh.md#kubernetes)
 
 Kubernetes 是远程终端右侧栏的一个工具。集群来自 **SSH 主机**上的 kubeconfig，不是运行 ShellRS 的电脑。连接到能访问集群的管理主机后，在右侧选择 Kubernetes。
 

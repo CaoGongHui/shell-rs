@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目是什么
 
-ShellRS（crate 与二进制都叫 `shellrs`）是 Xshell / WinSCP 式的 SSH 主机管理工具，基于 `gpui-kit` 0.6.1（GPUI + gpui-base + gpui-component）。界面文案有简体中文和英文两种（中文是源语言，见「多语言」），标识符用英文。功能说明见 `docs/manual.md`（开源首页 `README.md` 是英文、默认显示，中文版是 `README.zh-CN.md`；截图在 `docs/screenshots/`，英文界面的在 `docs/screenshots/en/`）。
+ShellRS（crate 与二进制都叫 `shellrs`）是 Xshell / WinSCP 式的 SSH 主机管理工具，基于 `gpui-kit` 0.6.1（GPUI + gpui-base + gpui-component）。界面文案有简体中文和英文两种（中文是源语言，见「多语言」），标识符用英文。功能说明见使用手册 `docs/manual.zh.md`（英文版 `docs/manual.md`，默认显示；开源首页 `README.md` 是英文、默认显示，中文版是 `README.zh-CN.md`；截图在 `docs/screenshots/`，英文界面的在 `docs/screenshots/en/`）。
 
 - **术语。** 保存的一项叫「主机」（量词「台」），代码和库里叫 host（`Host`、`HostId`、`HostStore`、`hosts` 表）。它以前叫「会话」/ `Session`，已全部改掉，新代码和文案别再用。填 IP / 域名的字段叫「地址」（`Host.address`）。SSH 协议层的 session（「SSH 会话通道」、russh 的 `Session`、SFTP 会话）照旧。英文用词见「多语言」的用词表。
 - **两种不保存的连接。** 「外部连接」：堡垒机像调 Xshell（`ssh://`、`-url`）或 WinSCP（`sftp://`）一样拉起 ShellRS，只开一个终端或 SFTP 标签（`HostStore::is_external`）。「临时连接」：标题栏「临时连接…」打开，功能齐全。两者共同的「不保存」在代码里叫 temporary（`HostInfo::temporary`）。
@@ -14,7 +14,7 @@ ShellRS（crate 与二进制都叫 `shellrs`）是 Xshell / WinSCP 式的 SSH �
 
 ## 已定的产品决定
 
-用户定过的事，不要改回去。细节以 `docs/manual.md` 和代码为准。
+用户定过的事，不要改回去。细节以使用手册（`docs/manual.zh.md`，英文版 `docs/manual.md`）和代码为准。
 
 - **界面语言**：「设置 › 外观 › 界面语言」有跟随系统（默认：中文系统用简体中文，其余用英文，系统没说时用中文）、简体中文、English。改了立刻生效，不用重启。老用户的 settings.json 里已存着 `zh-CN`，不迁移。框架用 gpui-kit 自带的 `rust-i18n`，不另引 Fluent 之类。
 - **SFTP**：Dock 标签，每次「打开 SFTP」新开一个、各自连接。操作对标 WinSCP Commander：两行工具栏、路径标签、WinSCP 的列、高亮多选、「名称」格才是项目、框选。本地侧与远程侧对称，本地删除进废纸篓；书签按主机、按侧持久化。传输进行中还能再发起，新批次在标签底部的传输队列里排队，不做前台进度对话框。传输逻辑按 WinSCP（用户反馈小文件太慢后定的）：一批里同时传的文件数是「设置 › SFTP › 传输 › 最大同时传输数量」（默认 3，可选 1–10），文件夹里的等文件夹建好；但走标签的同一条 SFTP 会话，不像 WinSCP 另开连接（不另登录，堡垒机上也能用）。小于 100 KB 的不走 `.filepart`、不续传（WinSCP 默认的 100 KB）。大小列默认整 KB，右键列标题可切换。「显示隐藏文件」（`.` 开头的）本地、远程各一个开关、互不影响，每侧对所有标签生效，存进设置，默认不显示；工具栏用睁眼 / 闭眼两个图标表示状态，不用选中效果；显示时隐藏文件的文字浅一些。文件图标默认单色（gpui-kit 规范：一个产品一套图标）；用户反馈后加了「设置 › SFTP › 图标风格」可换彩色（对标 WinSCP / Xftp），只管文件列表和传输确认框里的文件图标，工具栏、路径标签不变。彩色取自 Material Icon Theme（MIT），只带服务器、项目、主目录常见的约 160 个，普通文件夹改成黄色（它本身的蓝灰太像单色）；Linux 的 `/dev`、`/media` 不按它的项目含义配图标。「查找文件」只在远程侧（同 WinSCP，工具栏、空白处菜单、⌘F）：逐层发普通的 `List`（同时 4 个）。用户要求和 WinSCP 一致：掩码匹配整个名称（不带通配符也不是「包含」），普通掩码只找文件、以 `/` 结尾的找文件夹；进入链接到目录的符号链接，按 `List` 返回的真实路径防循环；不跳过 `/proc` 之类，没有数量上限。只有隐藏文件跟远程侧的「显示隐藏文件」走。它是单独的普通窗口（同 WinSCP，可以被主窗口盖住），不用 gpui-kit 的对话框（那只能是模态的）：每个 SFTP 标签最多一个，定位、编辑、下载把主窗口切到前面、查找窗口留着；关窗口就停止查找、丢掉结果，只记住上次的文件名。结果的排序、多选、框选和键同主窗口的文件列表（`Selection` 按路径、点标题循环排序、文件夹在前、「名称」格才是结果，指针处理和框选与文件面板共用 `marquee.rs`）；右键菜单就是下方那几个按钮（空白处只有「复制结果」），菜单项派发的是文件列表的 `ExplorerShortcut`，由查找窗口自己处理；下载、删除作用于所有选中的，删除在查找窗口里确认，经标签的 `DeletePaths` 执行，完成后标签把结果告诉窗口。SFTP 标签暂不做目录同步（外部 CLI 有 `shellrs sync`）、过滤、目录树和 Dock 布局持久化。
@@ -95,7 +95,7 @@ ShellRS（crate 与二进制都叫 `shellrs`）是 Xshell / WinSCP 式的 SSH �
 - **在线升级**：
   - 清单地址 `https://dl.shellrs.com/update/v1/{channel}.json`、平台 key 的名字和公钥槽位一经发布就不能改。
   - 默认在后台检查并下载，下好、校验完才在标题栏亮按钮（`success` 色，出错时 `warning` 色）。
-  - 更新对话框不列更新内容：「查看更新内容」打开整页的 `https://shellrs.com/changelog`，另一个按钮是「重启并安装」，没有「稍后」。不点也在退出时装好。
+  - 更新对话框不列更新内容：「查看更新内容」打开整页的 `https://shellrs.com/changelog`（中文界面打开 `/zh/changelog`，那里是中文的更新日志），另一个按钮是「重启并安装」，没有「稍后」。不点也在退出时装好。
   - 「设置 › 关于」三组：「应用更新」三行（当前版本、更新渠道（稳定版 / Beta，运行时切换）、自动升级），「隐私」一行（见下条），「ShellRS」一行「官网」（打开 `https://shellrs.com`）。
   - 检查只发 User-Agent，不发安装标识。
 - **匿名使用统计**：发给 Aptabase（没有 Rust SDK，自己调 `POST /api/v0/events`；App Key 是 `analytics::APP_KEY`，不是秘密）。「设置 › 关于 › 隐私 › 发送匿名使用统计」默认开，关掉就清空本机攒下的计数。
@@ -425,10 +425,10 @@ cargo test -- --ignored                     # 会读写真实钥匙串的测试�
   - 重启走 `set_restart_path` 加 `restart`。Windows 不在退出过程中起进程，交给 `run` 返回之后的 `start_handed_over`。
 - **匿名使用统计**：
   - 只在 `Workspace::new` 里启动（`AnalyticsServices::system`），`new_with_services` 没有；UI 测试用 `Analytics::new(sender)` 读信号。
-  - 计数只能是 `Counter` 的变体，快照字段只有 `&'static str`、开关和数量，用户输入的东西放不进去。计数的键发布后不能改，新加的要同步 `docs/manual.md`「隐私」一节的清单。
+  - 计数只能是 `Counter` 的变体，快照字段只有 `&'static str`、开关和数量，用户输入的东西放不进去。计数的键发布后不能改，新加的要同步两份手册「隐私」一节的清单（`docs/manual.zh.md`，英文版 `docs/manual.md` 的 Privacy）。
   - UI 线程只往通道里发信号；系统检测（`os_info` 会起 `uname` 等子进程）、HTTP、写 `analytics.json` 都在 `shellrs-analytics` 线程上，退出不冲队列。
   - SSH 连上靠 `TerminalEvent::Started` → `TerminalPanelEvent::Connected`，不能在每批输出都发的 `StatusChanged` 里记；SFTP 看 `StateChanged` 时的 `connection_state()`（右侧栏的「文件」不算，它计 `tool_files`）。外部 CLI 的请求种类由 `CliServer::take_usage` 交给 `serve_cli` 的轮询。
-- **发布走 tag** `v<版本>`（`release.yml`，需要人工批准，清单最后才上传）。`CHANGELOG.md` 那一节由改版本号的提交写，功能提交不改。一次性准备见 `docs/release.md`。
+- **发布走 tag** `v<版本>`（`release.yml`，需要人工批准，清单最后才上传）。更新日志的那一节由改版本号的提交写，中文 `CHANGELOG.zh.md` 和英文 `CHANGELOG.md` 同时写，功能提交不改。GitHub Release 用英文那节；官网的更新日志中文页读 `CHANGELOG.zh.md`，英文、日文页读 `CHANGELOG.md`（发布时都从 main 读），所以两份都要有这一节，`release.yml` 会核对。一次性准备见 `docs/release.md`。
 - **macOS 上关窗口是隐藏**（`hide_when_closed`），⌘Q 才退出。测试平台的 `hide()` 没实现，所以这条只挂在生产路径上。
 
 ### 终端

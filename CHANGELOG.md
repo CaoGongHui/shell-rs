@@ -1,396 +1,398 @@
-# 更新日志
+# Changelog
 
-每个版本一节，标题写成 `## [版本号]`，可以在后面加日期。发布流程（`.github/workflows/release.yml`）把与 tag 同版本的那一节原样作为更新说明：显示在 GitHub Release 和官网的更新日志里（ShellRS 的更新对话框用「查看更新内容」打开官网的更新日志），用 Markdown 书写，面向使用者。
+[简体中文](CHANGELOG.zh.md)
+
+One section per version, titled `## [version]`, optionally followed by a date. Each section is written in English here and in Chinese in [CHANGELOG.zh.md](CHANGELOG.zh.md), in the same change. The release workflow (`.github/workflows/release.yml`) takes the section with the tag’s version, as it is, for the GitHub release. The website’s changelog shows this file in English and Japanese and CHANGELOG.zh.md in Chinese (ShellRS’s update dialog opens it with What’s new). Written in Markdown, for users.
 
 ## [0.1.12]
 
-### 新增
+### Added
 
-- 终端支持 ZMODEM：远端运行 rz、sz 即可上传、下载文件，也可以把文件拖到远程终端上传。
-- 新增 Telnet 主机：支持自动登录、SSH 跳板和代理连接。
-- 新增串口主机：连接本机的串口设备，支持测试连接和发送 Break。
-- 右侧栏新增 Kubernetes：浏览集群资源和容器日志，编辑 YAML、重启和删除；默认不显示，在 设置 › 终端 › 侧栏功能 里打开。
-- 右侧栏新增 tmux：查看、新建、连接、重命名和结束 tmux 会话。
-- 右侧栏新增「GPU/NPU」：查看 NVIDIA 和华为昇腾的利用率、显存、温度、功耗和计算进程；默认不显示，在 设置 › 终端 › 侧栏功能 里打开。
-- 设置 › 终端 › 侧栏功能：选择右侧栏显示哪些工具。
-- 设置 › 外观 新增界面字号，终端外按 ⌘= / ⌘- 调整。
-- 终端右键菜单新增全选、复制 IP 和复制 ID。
+- ZMODEM in the terminal: run rz or sz on the remote end to upload or download files, or drop files on a remote terminal to upload them.
+- Telnet hosts, with automatic login, jump hosts and proxies.
+- Serial hosts: connect to a serial port of this computer, with Test connection and Send break.
+- Kubernetes in the right sidebar: browse cluster resources and container logs, edit YAML, restart and delete. Off by default; turn it on in Settings › Terminal › Sidebar tools.
+- tmux in the right sidebar: list, create, attach, rename and end tmux sessions.
+- GPU/NPU in the right sidebar: utilization, memory, temperature, power and compute processes of NVIDIA and Huawei Ascend cards. Off by default; turn it on in Settings › Terminal › Sidebar tools.
+- Settings › Terminal › Sidebar tools: choose which tools the right sidebar shows.
+- Interface font size in Settings › Appearance; outside the terminal, ⌘= / ⌘- change it.
+- Select all, Copy IP and Copy ID in the terminal’s context menu.
 
-### 改进
+### Improved
 
-- 编辑主机时可以更换协议。
-- 编辑或删除主机不再影响已打开的标签，新开的标签才用新的设置。
-- 主机图标一律彩色；标签断开或连接中时图标和名称变灰，不再显示状态小点。
-- 状态栏显示当前标签的连接状态。
-- SFTP 同时传输多个文件，大量小文件的上传下载更快；最大同时传输数量可在 设置 › SFTP 里调整。
-- 系统监控里放不下的系统名、CPU 型号等改为换行显示，不再截断。
+- A host’s protocol can be changed when editing it.
+- Editing or deleting a host no longer affects tabs already open; new tabs use the new settings.
+- Host icons are always in color; a tab that is disconnected or connecting shows its icon and name in gray instead of a status dot.
+- The status bar shows the current tab’s connection.
+- SFTP transfers several files at once, so many small files upload and download faster; set how many in Settings › SFTP.
+- System names, CPU models and the like that don’t fit in Monitor wrap instead of being cut off.
 
-### 修复
+### Fixed
 
-- 修复堡垒机的 ssh:// 链接用户名带 / 时连错地址的问题。
-- 修复跳板主机连不上目标主机时，报错像是跳板主机本身连接超时的问题。
-- 修复终端里拖动选择到上下边缘以外时不会滚动、选不到屏幕外内容的问题。
-- 修复终端里运行 ollama 等程序后，提示符后多出 11;rgb:… 的问题。
-- 修复 Linux 版在 Ubuntu 20.04 等较老的系统上打不开的问题，现在 glibc 2.31 以上即可运行。
+- A bastion host’s ssh:// link with a / in the username connected to the wrong address.
+- When a jump host couldn’t reach the target host, the error read as if the jump host itself had timed out.
+- Dragging a selection past the top or bottom of the terminal didn’t scroll, so text off screen couldn’t be selected.
+- After running programs such as ollama, 11;rgb:… appeared after the prompt.
+- The Linux version didn’t open on older systems such as Ubuntu 20.04; glibc 2.31 or later is now enough.
 
 ## [0.1.11-beta.2]
 
-### 新增
+### Added
 
-- 新增 Telnet 主机：支持自动登录、SSH 跳板和代理连接。
-- 新增串口主机：连接本机的串口设备，支持测试连接和发送 Break。
-- 右侧栏新增 Kubernetes：浏览集群资源和容器日志，编辑 YAML、重启和删除；默认不显示，在 设置 › 终端 › 侧栏功能 里打开。
-- 右侧栏新增 tmux：查看、新建、连接、重命名和结束 tmux 会话。
+- Telnet hosts, with automatic login, jump hosts and proxies.
+- Serial hosts: connect to a serial port of this computer, with Test connection and Send break.
+- Kubernetes in the right sidebar: browse cluster resources and container logs, edit YAML, restart and delete. Off by default; turn it on in Settings › Terminal › Sidebar tools.
+- tmux in the right sidebar: list, create, attach, rename and end tmux sessions.
 
-### 改进
+### Improved
 
-- 编辑主机时可以更换协议。
-- 编辑或删除主机不再影响已打开的标签，新开的标签才用新的设置。
-- 主机图标一律彩色；标签断开或连接中时图标和名称变灰，不再显示状态小点。
-- 状态栏显示当前标签的连接状态。
+- A host’s protocol can be changed when editing it.
+- Editing or deleting a host no longer affects tabs already open; new tabs use the new settings.
+- Host icons are always in color; a tab that is disconnected or connecting shows its icon and name in gray instead of a status dot.
+- The status bar shows the current tab’s connection.
 
 ## [0.1.11-beta.1]
 
-### 新增
+### Added
 
-- 右侧栏新增「GPU/NPU」：查看 NVIDIA 和华为昇腾的利用率、显存、温度、功耗和计算进程，按 8 卡机器设计；默认不显示，在 设置 › 终端 › 侧栏功能 里打开。
-- 设置 › 终端 › 侧栏功能：选择右侧栏显示哪些工具。
-- 设置 › 外观 新增界面字号，终端外按 ⌘= / ⌘- 调整。
-- 终端右键菜单新增全选、复制 IP 和复制 ID。
+- GPU/NPU in the right sidebar: utilization, memory, temperature, power and compute processes of NVIDIA and Huawei Ascend cards, laid out for 8-card machines. Off by default; turn it on in Settings › Terminal › Sidebar tools.
+- Settings › Terminal › Sidebar tools: choose which tools the right sidebar shows.
+- Interface font size in Settings › Appearance; outside the terminal, ⌘= / ⌘- change it.
+- Select all, Copy IP and Copy ID in the terminal’s context menu.
 
-### 改进
+### Improved
 
-- SFTP 同时传输多个文件，大量小文件的上传下载更快；最大同时传输数量可在 设置 › SFTP 里调整。
-- 系统监控里放不下的系统名、CPU 型号等改为换行显示，不再截断。
+- SFTP transfers several files at once, so many small files upload and download faster; set how many in Settings › SFTP.
+- System names, CPU models and the like that don’t fit in Monitor wrap instead of being cut off.
 
-### 修复
+### Fixed
 
-- 修复堡垒机的 ssh:// 链接用户名带 / 时连错地址的问题。
-- 修复终端里拖动选择到上下边缘以外时不会滚动、选不到屏幕外内容的问题。
-- 修复终端里运行 ollama 等程序后，提示符后多出 11;rgb:… 的问题。
-- 修复 Linux 版在 Ubuntu 20.04 等较老的系统上打不开的问题，现在 glibc 2.31 以上即可运行。
+- A bastion host’s ssh:// link with a / in the username connected to the wrong address.
+- Dragging a selection past the top or bottom of the terminal didn’t scroll, so text off screen couldn’t be selected.
+- After running programs such as ollama, 11;rgb:… appeared after the prompt.
+- The Linux version didn’t open on older systems such as Ubuntu 20.04; glibc 2.31 or later is now enough.
 
 ## [0.1.10]
 
-### 新增
+### Added
 
-- 右侧栏新增「文件」：在终端旁浏览、上传、下载和编辑远程文件，直接使用终端的连接，不用再次登录。
-- 「文件」跟随终端的当前目录，bash、zsh 可一键自动配置。
-- SFTP 远程侧新增「查找文件」。
-- SFTP 文件列表可选彩色图标（设置 › SFTP › 图标风格）。
-- 标签显示连接状态：连接中黄点、断开红点；远程终端断开后按 Enter 即可重连。
+- Files in the right sidebar: browse, upload, download and edit remote files beside the terminal, over the terminal’s own connection, without logging in again.
+- Files follows the terminal’s current folder; bash and zsh can be set up for it in one click.
+- Find files on the remote side of SFTP.
+- Color icons for SFTP file lists (Settings › SFTP › Icon style).
+- Tabs show their connection: a yellow dot while connecting, a red one when disconnected. Press Enter in a disconnected remote terminal to reconnect.
 
-### 改进
+### Improved
 
-- 服务器主机密钥变更时，可在核验指纹后选择「更新并连接」，无需手动修改 known_hosts。
-- 主机名称可以留空，默认使用连接地址。
+- When a server’s host key changes, you can check the fingerprint and choose Update and connect, without editing known_hosts by hand.
+- A host’s name can be left empty; its address is used instead.
 
-### 修复
+### Fixed
 
-- 修复 Windows 下部分堡垒机配置 ShellRS 为 Xshell 或 WinSCP 客户端时，提示「请使用官方客户端」的问题。
-- 修复连接 Windows 主机时标签不显示 Windows 图标的问题。
+- On Windows, some bastion hosts set to use ShellRS as their Xshell or WinSCP client said “Please use the official client”.
+- Tabs connected to Windows hosts didn’t show the Windows icon.
 
 ## [0.1.10-beta.2]
 
-### 改进
+### Improved
 
-- 服务器主机密钥变更时，可在核验指纹后选择「更新并连接」，无需手动修改 known_hosts。
+- When a server’s host key changes, you can check the fingerprint and choose Update and connect, without editing known_hosts by hand.
 
-### 修复
+### Fixed
 
-- 修复 Windows 下部分堡垒机配置 ShellRS 为 Xshell 或 WinSCP 客户端时，提示「请使用官方客户端」的问题。
+- On Windows, some bastion hosts set to use ShellRS as their Xshell or WinSCP client said “Please use the official client”.
 
 ## [0.1.10-beta.1]
 
-### 改进
+### Improved
 
-- 服务器主机密钥变更时，可在核验指纹后选择「更新并连接」，无需手动修改 known_hosts。
+- When a server’s host key changes, you can check the fingerprint and choose Update and connect, without editing known_hosts by hand.
 
-### 修复
+### Fixed
 
-- 修复 Windows 下部分堡垒机配置 ShellRS 为 Xshell 客户端时，提示「请使用官方客户端」的问题。
+- On Windows, some bastion hosts set to use ShellRS as their Xshell client said “Please use the official client”.
 
 ## [0.1.9]
 
-### 新增
+### Added
 
-- 设置 › 终端新增「本地终端」：可指定本地终端运行的 shell 和参数，下拉列出本机装的常用 shell。
-- 自定义快捷键可以用 Shift 加 Insert、Delete 等键，如 Shift+Insert 粘贴。
+- Local terminal in Settings › Terminal: choose the shell local terminals run, with its arguments; the list offers the common shells installed on this computer.
+- Custom shortcuts can use Shift with Insert, Delete and similar keys, such as Shift+Insert to paste.
 
-### 改进
+### Improved
 
-- Windows 本地终端默认使用 PowerShell，标签只显示程序名。
-- Windows 安装程序在中文系统上显示中文。
-- 应用图标大小与 macOS 上的其他应用一致。
+- On Windows, local terminals run PowerShell by default, and their tabs show only the program’s name.
+- The Windows installer is in Chinese on Chinese systems.
+- The app icon is the same size as other apps’ icons on macOS.
 
 ## [0.1.9-beta.1]
 
-### 新增
+### Added
 
-- 设置 › 终端新增「本地终端」：可指定本地终端运行的 shell 和参数，下拉列出本机装的常用 shell。
-- 自定义快捷键可以用 Shift 加 Insert、Delete 等键，如 Shift+Insert 粘贴。
+- Local terminal in Settings › Terminal: choose the shell local terminals run, with its arguments; the list offers the common shells installed on this computer.
+- Custom shortcuts can use Shift with Insert, Delete and similar keys, such as Shift+Insert to paste.
 
-### 改进
+### Improved
 
-- Windows 本地终端默认使用 PowerShell。
-- Windows 安装程序在中文系统上显示中文。
-- 应用图标大小与 macOS 上的其他应用一致。
+- On Windows, local terminals run PowerShell by default.
+- The Windows installer is in Chinese on Chinese systems.
+- The app icon is the same size as other apps’ icons on macOS.
 
 ## [0.1.8]
 
-### 新增
+### Added
 
-- 设置 › 终端新增「终端交互」：选中即复制，右键可设为粘贴、显示菜单或无动作。
+- Interaction in Settings › Terminal: copy on select, and make right-click paste, show a menu or do nothing.
 
-### 改进
+### Improved
 
-- macOS 安装包分为 Apple Silicon 和 Intel 两种，下载更小。
+- macOS packages come separately for Apple silicon and Intel, so downloads are smaller.
 
-### 修复
+### Fixed
 
-- 修复 ESXi 等主机「测试连接」报需要键盘交互式认证、保存的密码不起作用。
-- 修复启动后不久检查更新时，「重启并安装」报找不到文件。
+- On ESXi and similar hosts, Test connection said keyboard-interactive authentication was needed, and saved passwords didn’t work.
+- Restart to update said a file couldn’t be found when updates were checked for soon after starting.
 
 ## [0.1.8-beta.1]
 
-### 新增
+### Added
 
-- 设置 › 终端新增「终端交互」：选中即复制，右键可设为粘贴、显示菜单或无动作。
+- Interaction in Settings › Terminal: copy on select, and make right-click paste, show a menu or do nothing.
 
-### 改进
+### Improved
 
-- macOS 安装包分为 Apple Silicon 和 Intel 两种，下载更小。
+- macOS packages come separately for Apple silicon and Intel, so downloads are smaller.
 
-### 修复
+### Fixed
 
-- 修复 ESXi 等主机「测试连接」报需要键盘交互式认证、保存的密码不起作用。
+- On ESXi and similar hosts, Test connection said keyboard-interactive authentication was needed, and saved passwords didn’t work.
 
 ## [0.1.7]
 
-### 新增
+### Added
 
-- Windows 上 SFTP 本地目录列表列出各个驱动器，可切换到其他盘。
+- On Windows, the SFTP local folder list shows every drive, so you can switch to another one.
 
-### 改进
+### Improved
 
-- SFTP 文件列表点列名即可排序。
+- Click a column title in SFTP file lists to sort by it.
 
-### 修复
+### Fixed
 
-- 修复经部分堡垒机上传文件失败、编辑器保存时 SFTP 连接断开。
-- 修复 SFTP 换目录后拖宽的列恢复原宽。
+- Uploads through some bastion hosts failed, and saving in the editor dropped the SFTP connection.
+- Columns widened by dragging in SFTP went back to their old width after changing folders.
 
 ## [0.1.7-beta.2]
 
-### 新增
+### Added
 
-- Windows 上 SFTP 本地目录列表列出各个驱动器，可切换到其他盘。
+- On Windows, the SFTP local folder list shows every drive, so you can switch to another one.
 
-### 改进
+### Improved
 
-- SFTP 文件列表点列名即可排序。
+- Click a column title in SFTP file lists to sort by it.
 
-### 修复
+### Fixed
 
-- 修复 SFTP 换目录后拖宽的列恢复原宽。
+- Columns widened by dragging in SFTP went back to their old width after changing folders.
 
 ## [0.1.7-beta.1]
 
-### 修复
+### Fixed
 
-- 修复经部分堡垒机上传文件失败、编辑器保存时 SFTP 连接断开。
+- Uploads through some bastion hosts failed, and saving in the editor dropped the SFTP connection.
 
 ## [0.1.6]
 
-### 新增
+### Added
 
-- 外部 CLI 新增 `shellrs exec --terminal`：在 ShellRS 已打开的终端里执行命令，适用于只允许登录一次的堡垒机。
-- 终端右侧显示滚动条，可拖动翻看历史输出。
+- `shellrs exec --terminal` in the external CLI: runs a command in a terminal already open in ShellRS, for bastion hosts that allow logging in only once.
+- A scrollbar on the right of the terminal, to drag through earlier output.
 
 ## [0.1.6-beta.1]
 
-### 新增
+### Added
 
-- 外部 CLI 新增 `shellrs exec --terminal`：在 ShellRS 已打开的终端里执行命令，适用于只允许登录一次的堡垒机。
+- `shellrs exec --terminal` in the external CLI: runs a command in a terminal already open in ShellRS, for bastion hosts that allow logging in only once.
 
 ## [0.1.5]
 
-### 新增
+### Added
 
-- 界面支持英文：默认跟随系统语言，也可在「设置 › 外观 › 界面语言」切换，改了立即生效。
-- 英文用户手册；README 默认显示英文版。
-- 匿名使用统计，可在「设置 › 关于 › 隐私」关闭。
+- An English interface: it follows the system language by default, or choose one in Settings › Appearance › Language; changes apply at once.
+- An English user manual; the README shows the English version by default.
+- Anonymous usage statistics, which can be turned off in Settings › About › Privacy.
 
-### 改进
+### Improved
 
-- 默认深色外观改为不刺眼的炭灰。
-- 列表里悬停和选中的行更容易分清。
-- 分屏时右侧栏跟着点进去的远程终端，标题显示主机名。
-- Docker 的标签放不下时横向滚动，不再截断。
+- The default dark appearance is a softer charcoal gray.
+- Hovered and selected rows in lists are easier to tell apart.
+- With split panes, the right sidebar follows the remote terminal you click into, and its title shows the host’s name.
+- Docker tabs that don’t fit scroll sideways instead of being cut off.
 
-### 修复
+### Fixed
 
-- 把标签拖进另一组盖住终端后，右侧栏随之收起。
+- The right sidebar closes once a tab dragged into another group covers the terminal.
 
 ## [0.1.4]
 
-### 新增
+### Added
 
-- 终端主题：浅色、深色外观各有 10 套配色可选，界面也可以选择跟着主题配色。
-- 终端关键字高亮：按规则给匹配的文字上色，匹配时还可以发通知。
-- 设置新增「键盘快捷键」：查看、改绑、禁用或恢复默认快捷键，并新增切换标签的快捷键。
-- 终端里 ⌘= / ⌘- / ⌘0（其他平台 Ctrl）调终端字号，终端外缩放界面。
-- 设置 › 应用：记住窗口大小和位置。
-- 设置 › 关于：官网链接。
-- 外部 CLI 可以查看、新建、修改和删除主机与凭据（`shellrs hosts`、`shellrs credentials`），并新增目录同步 `shellrs sync`。
+- Terminal themes: 10 color schemes each for the light and dark appearance, and the interface can take the theme’s colors too.
+- Keyword highlighting in the terminal: color the text that matches your rules, and get a notification when one matches if you like.
+- Keyboard shortcuts in Settings: view, rebind, disable or restore shortcuts, with new shortcuts to switch tabs.
+- In the terminal, ⌘= / ⌘- / ⌘0 (Ctrl on other platforms) change the terminal font size; outside it, they zoom the interface.
+- Settings › General: remember the window’s size and position.
+- Settings › About: a link to the website.
+- The external CLI can list, create, change and delete hosts and credentials (`shellrs hosts`, `shellrs credentials`), and sync folders with `shellrs sync`.
 
-### 改进
+### Improved
 
-- 主机列表的搜索也能按分组名找。
-- 设置页切到别的标签再回来，停在原来的分类上。
-- 终端字号范围改为 10–28。
-- 外部 CLI 列出主机改为 `shellrs hosts list`。
+- Searching the host list also finds group names.
+- Settings stays on its category when you switch to another tab and back.
+- The terminal font size ranges from 10 to 28.
+- The external CLI lists hosts with `shellrs hosts list`.
 
-### 修复
+### Fixed
 
-- 远程程序卡在半帧时，终端画面不再冻住。
+- The terminal no longer freezes when a remote program stops halfway through a frame.
 
 ## [0.1.3]
 
-### 新增
+### Added
 
-- SFTP 内置编辑器：双击文本文件在编辑器标签里编辑，⌘S 直接保存回服务器，常见语言语法高亮。
-- SFTP 预览：双击图片快速查看，可放大、缩小、看原图；Markdown 和 SVG 右键「预览」。
-- SFTP「显示隐藏文件」开关，本地、远程各自独立。
-- SFTP 右键「复制路径」。
-- 终端里的网址显示为链接，⌘ 单击（其他平台 Ctrl 单击）用浏览器打开。
-- 终端支持鼠标：vim、htop、tmux 里可以点击和滚动。
-- 远程程序（如 tmux、vim）复制的内容直接进本机剪贴板。
-- 终端通知：程序请求通知或响铃时，ShellRS 不在前台会发系统通知。
-- 外部 CLI 新增 `shellrs exec --json`，Windows PowerShell 下不再有引号和乱码问题。
+- A built-in editor for SFTP: double-click a text file to edit it in an editor tab, and ⌘S saves it straight back to the server, with syntax highlighting for common languages.
+- SFTP preview: double-click an image for a quick look, and zoom in, zoom out or see it at actual size; right-click Markdown and SVG files and choose Preview.
+- Show hidden files in SFTP, separately for the local and remote sides.
+- Copy path in the SFTP context menu.
+- Web addresses in the terminal show as links; ⌘-click (Ctrl-click on other platforms) opens them in the browser.
+- Mouse support in the terminal: click and scroll in vim, htop and tmux.
+- What remote programs (such as tmux and vim) copy goes straight to this computer’s clipboard.
+- Terminal notifications: when a program asks for a notification or rings the bell while ShellRS isn’t in front, you get a system notification.
+- `shellrs exec --json` in the external CLI: no more quoting trouble or garbled text in Windows PowerShell.
 
-### 改进
+### Improved
 
-- SFTP 目录的右键菜单去掉了多余的「打开」，双击即可进入。
+- The context menu of SFTP folders no longer has a needless Open; double-click to go in.
 
 ## [0.1.2]
 
-### 新增
+### Added
 
-- 临时连接：标题栏右上角的「临时连接…」连一台主机而不保存，密码只留在内存里（新建主机请用主机列表的「+」或 ⌘N）。
-- 开始页的「快速连接」：搜索保存的主机，回车或单击连接。
+- Quick connect: Quick connect… at the top right of the title bar connects to a host without saving it, keeping the password in memory only (to add a host, use + in the host list or ⌘N).
+- Find a host on the start page: search the saved hosts, then press Enter or click to connect.
 
-### 改进
+### Improved
 
-- 「测试连接」不再要求填写密码，没填时按「无密码」的方式尝试。
+- Test connection no longer needs a password; without one, it tries the way No password does.
 
 ## [0.1.1]
 
-### 改进
+### Improved
 
-- 精简了给 AI Agent 的 Skill 说明。
+- A shorter skill description for AI agents.
 
 ## [0.1.0]
 
-ShellRS 的第一个公开版本。
+The first public release of ShellRS.
 
-### 新增
+### Added
 
-- 主机与分组：持久保存，分组可以多层嵌套，支持搜索和拖动整理。
-- 凭据：密码、密钥（本机文件、粘贴或生成新密钥）和 SSH Agent，多台主机可以共用一条凭据。
-- 连接方式：直接连接、SSH 跳板或 HTTP / SOCKS5 代理。
-- 终端：本地终端和多个 SSH 终端，支持查找、清屏和延迟显示。
-- 右侧栏：跟着当前远程终端的系统监控、网络连接、进程管理、系统服务、Docker、历史命令和命令片段。
-- SFTP：对标 WinSCP 的双栏文件浏览器，上传和下载都支持断点续传和传输队列。
-- 端口转发：本地、远程和动态转发，断线后自动重连，可随 ShellRS 一起启动。
-- 从堡垒机打开：像调用 Xshell、WinSCP 一样用 `ssh://`、`sftp://` 链接打开终端或 SFTP，不保存连接。
-- 外部 CLI：`shellrs` 命令让 AI Agent 用已保存的主机执行命令、传输文件。
-- 在线升级：在后台检查并下载新版本，下好后标题栏右上角提示，重启或退出时安装。
+- Hosts and groups: saved, with groups nested to any depth, search, and dragging to arrange them.
+- Credentials: passwords, keys (a file on this computer, pasted or newly generated) and the SSH agent; several hosts can share one credential.
+- Connections: direct, through jump hosts, or through an HTTP / SOCKS5 proxy.
+- Terminals: local terminals and multiple SSH terminals, with find, clear and latency.
+- The right sidebar: Monitor, Network, Processes, Services, Docker, History and Snippets for the current remote terminal.
+- SFTP: a WinSCP-style dual-pane file browser, with resumable uploads and downloads and a transfer queue.
+- Port forwarding: local, remote and dynamic, reconnecting after a drop, and able to start with ShellRS.
+- Opening from bastion hosts: open a terminal or SFTP with `ssh://` and `sftp://` links, as with Xshell and WinSCP, without saving the connection.
+- The external CLI: the `shellrs` command lets AI agents run commands and transfer files with the saved hosts.
+- Online updates: new versions are checked for and downloaded in the background, announced at the top right of the title bar, and installed on restart or quit.
 
 ## [0.1.0-beta.9]
 
-### 新增
+### Added
 
-- 堡垒机可以像调用 WinSCP 一样，用 `sftp://` 链接打开 ShellRS 的 SFTP。
-- 从堡垒机打开时，左侧主机栏自动收起，终端或 SFTP 占满窗口。
+- Bastion hosts can open ShellRS’s SFTP with an `sftp://` link, as they open WinSCP.
+- When ShellRS is opened from a bastion host, the host sidebar on the left collapses and the terminal or SFTP fills the window.
 
 ## [0.1.0-beta.8]
 
-### 修复
+### Fixed
 
-- 从堡垒机打开的连接登录后立即断开。
+- Connections opened from bastion hosts closed right after logging in.
 
 ## [0.1.0-beta.7]
 
-### 修复
+### Fixed
 
-- 连不上部分堡垒机：Apache SSHD 等不支持 curve25519、只能提供 2048 位 DH 组的 SSH 服务器，以前握手时会被断开。现在密钥交换和 OpenSSH 的默认一致，支持 ECDH（NIST 曲线），DH 组交换也接受 2048 位的组；OpenSSH 默认能连上的服务器，ShellRS 都能连上。
-- 连接失败时写明具体原因，比如连接被拒绝、连接超时，或者和服务器没有共同的算法（列出服务器支持哪些），不再只有一句「无法建立 SSH 连接，请检查地址、端口和主机密钥」。
-- Docker：同一个镜像打了多个标签时，每个标签单独一行，查看详情和删除都对应这一行的标签，删除只去掉这个标签。只有仓库名、没有标签的镜像显示为「仓库:<none>」，不再被当成「仓库:latest」。带仓库地址的镜像（如 `registry.example.com/app:1.0`）现在也能删除和查看详情。
+- Some bastion hosts couldn’t be reached: SSH servers such as Apache SSHD that have no curve25519 and offer only 2048-bit DH groups used to drop the connection during the handshake. Key exchange now matches OpenSSH’s defaults, with ECDH (NIST curves), and group exchange accepts 2048-bit groups: any server OpenSSH reaches with its defaults, ShellRS reaches too.
+- A failed connection says why, such as connection refused, timed out, or no algorithm in common with the server (listing the server’s), instead of only “Couldn’t establish an SSH connection. Check the address, port and host key”.
+- Docker: an image with several tags shows one row per tag; details and deletion apply to that row’s tag, and deleting removes only that tag. An image with a repository name but no tag shows as “repository:<none>” instead of being taken for “repository:latest”. Images with a registry address (such as `registry.example.com/app:1.0`) can now be deleted and inspected too.
 
 ## [0.1.0-beta.6]
 
-### 新增
+### Added
 
-- 从堡垒机打开：JumpServer 等堡垒机可以像调用 Xshell 一样调用 ShellRS（`ShellRS ssh://用户@地址:端口`，或 `-url ssh://… -newtab 名称`），打开一个终端标签连过去。这是临时连接：不保存到主机列表，标签都关掉后就没了；链接里的密码只留在内存里。ShellRS 已经在运行时，链接交给它打开，不会再起一个。堡垒机里要填的程序：Windows 是安装目录里的 `shellrs.exe`（默认 `%LOCALAPPDATA%\Programs\ShellRS\shellrs.exe`），macOS 是 `/Applications/ShellRS.app/Contents/MacOS/shellrs`。
-- 外部 CLI：`shellrs list` 也列出标签开着的临时连接（标为临时），Agent 可以用它执行命令、传输文件。
-- 外部 CLI：Agent Skills 可以安装到 WorkBuddy。
+- Opening from bastion hosts: bastion hosts such as JumpServer can call ShellRS as they call Xshell (`ShellRS ssh://user@address:port`, or `-url ssh://… -newtab name`) to open a terminal tab to the host. It’s a temporary connection: it isn’t saved to the host list and goes away when its tabs close, and a password in the link stays in memory only. When ShellRS is already running, the link opens there instead of in another copy. The program to enter in the bastion host is `shellrs.exe` in the installation folder on Windows (by default `%LOCALAPPDATA%\Programs\ShellRS\shellrs.exe`), and `/Applications/ShellRS.app/Contents/MacOS/shellrs` on macOS.
+- External CLI: `shellrs list` also lists temporary connections with tabs open (marked as temporary), so agents can run commands and transfer files with them.
+- External CLI: Agent Skills can be installed to WorkBuddy.
 
-### 改进
+### Improved
 
-- 新版本下载好后，标题栏右上角的更新按钮改成绿色，更醒目。更新对话框不再列出更新说明，改为「查看更新内容」打开官网的更新日志，旁边是「重启并安装」。
-- Docker：有多个容器的 compose 项目默认折叠，只有一个容器且在运行的项目默认展开。
+- Once a new version has downloaded, the update button at the top right of the title bar turns green to stand out. The update dialog no longer lists the release notes: What’s new opens the changelog on the website, next to Restart to update.
+- Docker: compose projects with several containers start collapsed; a project with one container, running, starts expanded.
 
 ## [0.1.0-beta.5]
 
-### 新增
+### Added
 
-- 终端右侧栏：SSH 终端在前时，窗口最右边有一列工具按钮，点一个就在右侧打开，⌘⌥B（其他平台 Ctrl+Alt+B）显示或隐藏。工具都通过这个终端已有的 SSH 连接执行，不用再次登录：
-  - **命令片段**：按分类保存常用命令，点一下输入到终端或直接执行。
-  - **历史命令**：列出主机上 bash 的历史命令，可以搜索，点一下输入到终端或直接执行。
-  - **Docker**：容器按 compose 项目分组，启动、停止、重启和查看日志；卷、镜像和网络可以查看详情和删除。
-  - **系统服务**：systemd 服务的状态和日志，启动、停止、重启和开机启动。
-  - **进程管理**：进程的内存和 CPU 占用，查看详情、结束进程。
-  - **网络连接**：TCP、UDP 连接和监听端口，以及占用它们的进程。
-  - **系统监控**：CPU、内存、网络和磁盘的实时状态。
+- A right sidebar for terminals: with an SSH terminal in front, a column of tool buttons runs down the right edge of the window. Click one to open it on the right; ⌘⌥B (Ctrl+Alt+B on other platforms) shows or hides it. The tools run over the terminal’s own SSH connection, without logging in again:
+  - **Snippets**: save common commands by category, and type one into the terminal or run it with a click.
+  - **History**: the host’s bash history, searchable; type a command into the terminal or run it with a click.
+  - **Docker**: containers grouped by compose project, to start, stop, restart and view logs; details and deletion for volumes, images and networks.
+  - **Services**: systemd services’ status and logs, to start, stop, restart and enable at boot.
+  - **Processes**: the memory and CPU use of processes, with details and ending a process.
+  - **Network**: TCP and UDP connections and listening ports, with the processes they belong to.
+  - **Monitor**: live CPU, memory, network and disk.
 
-  系统服务、进程管理、网络连接和系统监控只支持 Linux 主机。
-- 主机右键菜单增加「复制 IP 地址」（地址是域名时叫「复制主机名」）。
+  Services, Processes, Network and Monitor support Linux hosts only.
+- Copy IP address in the host context menu (Copy hostname when the address is a domain name).
 
-### 改进
+### Improved
 
-- 端口转发和凭据列表的提示和主机列表一样，显示在行的右侧。
-- SFTP 框选的颜色和选中的文件一致。
-- 应用图标留出更多边距。
+- Hints in the port forwarding and credential lists show on the right of the row, as in the host list.
+- The SFTP selection rectangle has the same color as selected files.
+- The app icon has more margin.
 
-### 注意
+### Note
 
-- 第一次启动会升级本地数据库（加入命令片段），升级前自动备份为 `shellrs.db.v13.bak`。升级后 0.1.0-beta.4 及更早的版本无法再打开这个数据库。
+- The first start upgrades the local database (adding snippets), backing it up first as `shellrs.db.v13.bak`. After the upgrade, 0.1.0-beta.4 and earlier can no longer open the database.
 
 ## [0.1.0-beta.4]
 
-### 修复
+### Fixed
 
-- Windows：SFTP 本地面板的路径不再显示成 `\\?\C:\Users` 这样，而是平常的 `C:\Users`，传输队列的「来源」也一样。以前添加的本地书签如果带着 `\\?\`，删掉重新添加即可；升级前停在一半的上传不能接着续传，需要重新开始。
+- Windows: paths in the SFTP local panel no longer show as `\\?\C:\Users` but as the usual `C:\Users`, and so does Source in the transfer queue. Local bookmarks added earlier with `\\?\` can be deleted and added again; uploads stopped halfway before the update can’t be resumed and have to start over.
 
 ## [0.1.0-beta.3]
 
-### 改进
+### Improved
 
-- macOS：点窗口左上角的关闭按钮，现在会把 ShellRS 隐藏到后台，已打开的连接、SFTP 传输和端口转发照常运行；点 Dock 图标就能把窗口找回来，原来的标签都在。要退出请用 ⌘Q，或右键 Dock 图标选「退出」。以前关掉窗口后，ShellRS 留在 Dock 里却打不开窗口。
-- 开始页没有连接记录时，去掉了一句重复的提示。
+- macOS: the close button at the top left of the window now hides ShellRS in the background, with open connections, SFTP transfers and port forwarding running as before; click the Dock icon to get the window back with all its tabs. To quit, press ⌘Q or right-click the Dock icon and choose Quit. Before, after the window was closed, ShellRS stayed in the Dock but its window couldn’t be opened.
+- The start page no longer repeats a hint when there are no recent connections.
 
 ## [0.1.0-beta.2]
 
-ShellRS 的第一个测试版本，只发到 Beta 渠道，用来验证安装和在线升级。之后的测试版会通过在线升级自动送达。
+The first test release of ShellRS, on the Beta channel only, to try out installation and online updates. Later test releases arrive by online update.
 
-### 新增
+### Added
 
-- 主机与分组：持久保存，分组可以多层嵌套，支持搜索和拖动整理。
-- 凭据：密码、密钥（本机文件、粘贴或生成新密钥）和 SSH Agent，多台主机可以共用一条凭据。
-- 连接方式：直接连接、SSH 跳板或 HTTP / SOCKS5 代理。
-- 终端：本地终端和多个 SSH 终端，支持查找、清屏和延迟显示。
-- SFTP：对标 WinSCP 的双栏文件浏览器，上传和下载都支持断点续传和传输队列。
-- 端口转发：本地、远程和动态转发，断线后自动重连，可随 ShellRS 一起启动。
-- 外部 CLI：`shellrs` 命令让 AI Agent 用已保存的主机执行命令、传输文件。
-- 在线升级：在后台检查并下载新版本，下好后标题栏右上角提示，重启或退出时安装。
+- Hosts and groups: saved, with groups nested to any depth, search, and dragging to arrange them.
+- Credentials: passwords, keys (a file on this computer, pasted or newly generated) and the SSH agent; several hosts can share one credential.
+- Connections: direct, through jump hosts, or through an HTTP / SOCKS5 proxy.
+- Terminals: local terminals and multiple SSH terminals, with find, clear and latency.
+- SFTP: a WinSCP-style dual-pane file browser, with resumable uploads and downloads and a transfer queue.
+- Port forwarding: local, remote and dynamic, reconnecting after a drop, and able to start with ShellRS.
+- The external CLI: the `shellrs` command lets AI agents run commands and transfer files with the saved hosts.
+- Online updates: new versions are checked for and downloaded in the background, announced at the top right of the title bar, and installed on restart or quit.

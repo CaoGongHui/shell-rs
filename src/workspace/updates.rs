@@ -13,7 +13,7 @@ use crate::app::{
 use crate::host::ConnectionState;
 use crate::i18n::t;
 use crate::terminal::TerminalLifecycle;
-use crate::update::build_info::{CHANGELOG_PAGE, WEBSITE};
+use crate::update::build_info::{WEBSITE, changelog_page};
 use crate::update::{RestartImpact, UpdaterEvent, open_update_dialog};
 
 use super::workspace_view::Workspace;
@@ -88,7 +88,7 @@ impl Workspace {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        cx.open_url(CHANGELOG_PAGE);
+        cx.open_url(changelog_page(crate::i18n::locale()));
     }
 
     pub(super) fn on_open_website(

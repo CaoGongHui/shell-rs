@@ -2,9 +2,9 @@
 
 [返回 README](../README.zh-CN.md)
 
-在 `CHANGELOG.md` 里写好 `## [x.y.z]` 一节，把 `Cargo.toml` 的版本改成 `x.y.z`，提交后推送 tag `vx.y.z`。`.github/workflows/release.yml` 依次：
+在 `CHANGELOG.md`（英文）和 `CHANGELOG.zh.md`（中文）里各写好 `## [x.y.z]` 一节，把 `Cargo.toml` 的版本改成 `x.y.z`，提交后推送 tag `vx.y.z`。`.github/workflows/release.yml` 依次：
 
-1. 核对 tag 与 `Cargo.toml` 一致，截出更新说明，确认代码里有发布公钥；
+1. 核对 tag 与 `Cargo.toml` 一致，两份更新日志都有这一节，从英文版截出 GitHub Release 的说明，确认代码里有发布公钥；
 2. 构建并打包：macOS 按 `aarch64`（Apple Silicon）和 `x86_64`（Intel）分别构建、签名、公证、staple，各自产出升级用的 `.app.zip` 和首次安装用的 `.dmg`；Windows 用 Inno Setup 打安装程序；Linux 打 AppImage；
 3. 在 `release` 环境里人工批准后：给每个包签名，上传到 R2（`dl.shellrs.com/releases/<版本>/`），建 GitHub Release，**最后**才替换更新清单 `dl.shellrs.com/update/v1/<通道>.json` 并清 CDN 缓存，然后调用官网的部署挂钩重新构建 shellrs.com（官网的下载页和更新日志在构建时读这份清单）。清单里每个包有两个下载地址：先 R2，下载失败时客户端接着试 GitHub Release（仓库是公开的，下载不用登录）。
 

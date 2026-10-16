@@ -405,7 +405,23 @@ async fn the_update_dialog_links_the_changelog_and_restarts_into_the_new_version
         assert!(window.try_find("restart-to-update").is_some());
     });
 
-    // What changed is on the website's changelog; the dialog stays.
+    // What changed is on the website's changelog, in the interface's
+    // language; the dialog stays.
+    in_frame(cx, handle, |window, cx| window.click("open-changelog", cx));
+    assert_eq!(
+        cx.opened_url().as_deref(),
+        Some("https://shellrs.com/zh/changelog")
+    );
+    let settings = cx.update(|cx| workspace.read(cx).settings().clone());
+    cx.update(|cx| {
+        settings.update(cx, |settings, cx| {
+            settings.update(
+                |settings| settings.language = InterfaceLanguage::English,
+                cx,
+            )
+        })
+    });
+    cx.run_until_parked();
     in_frame(cx, handle, |window, cx| window.click("open-changelog", cx));
     assert_eq!(
         cx.opened_url().as_deref(),
