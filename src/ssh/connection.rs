@@ -341,7 +341,26 @@ impl SshConnector {
                     error.context(RouteFailure(text))
                 })
         };
-        let channel = step(broker, open).await?;
+        // Given up on while the jump host still tries to connect (a
+        // firewall that drops what is sent its way): the jump host itself
+        // answered, so say where it could not get to.
+        let channel = step(broker, open).await.map_err(|error| {
+            if !matches!(
+                error.downcast_ref::<russh::Error>(),
+                Some(russh::Error::ConnectionTimeout)
+            ) {
+                return error;
+            }
+            error.context(RouteFailure(
+                t!(
+                    "ssh.jump.forward.timed_out",
+                    name = name,
+                    host = next_host,
+                    port = next_port
+                )
+                .into(),
+            ))
+        })?;
         Ok(Box::new(channel.into_stream()))
     }
 }

@@ -27,6 +27,9 @@ ssh.jump.forward.connect_failed:
 ssh.jump.forward.prohibited:
   zh-CN: 跳板主机「%{name}」无法连接到 %{host}:%{port}：服务器不允许端口转发
   en: "Jump host “%{name}” couldn’t connect to %{host}:%{port}: the server doesn’t allow port forwarding"
+ssh.jump.forward.timed_out:
+  zh-CN: 跳板主机「%{name}」无法连接到 %{host}:%{port}：连接超时
+  en: "Jump host “%{name}” couldn’t connect to %{host}:%{port}: connection timed out"
 ssh.jump.forward.channel_failed:
   zh-CN: 跳板主机「%{name}」无法连接到 %{host}:%{port}：无法打开转发通道
   en: "Jump host “%{name}” couldn’t connect to %{host}:%{port}: couldn’t open a forwarding channel"

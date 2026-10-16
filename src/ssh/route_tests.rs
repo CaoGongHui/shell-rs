@@ -37,6 +37,10 @@ struct RouteServer {
     _runtime: tokio::runtime::Runtime,
 }
 
+/// A target the jump host never gets an answer from, as when a firewall
+/// drops what is sent to it: the channel is neither opened nor refused.
+const UNANSWERED: &str = "unanswered.invalid";
+
 #[derive(Default)]
 struct RouteState {
     /// Where each direct-tcpip channel asked to go.
@@ -125,6 +129,9 @@ impl server::Handler for RouteHandler {
             .unwrap()
             .targets
             .push((host_to_connect.to_string(), port_to_connect));
+        if host_to_connect == UNANSWERED {
+            std::future::pending::<()>().await;
+        }
         match TcpStream::connect((host_to_connect, port_to_connect as u16)).await {
             Ok(mut socket) => {
                 reply.accept().await;
@@ -545,6 +552,34 @@ fn a_jump_host_that_cannot_reach_the_next_says_so() {
         test_login(&directory.path().join("known_hosts"), keychain, request),
         Err(format!(
             "跳板主机「阿里云99」无法连接到 127.0.0.1:{closed}：连接失败"
+        ))
+    );
+}
+
+#[test]
+fn a_jump_host_that_gets_no_answer_from_the_next_says_so() {
+    let Some(jump) = start_server(JUMP_USER, JUMP_PASSWORD) else {
+        eprintln!("loopback sockets are unavailable in this sandbox; skipping");
+        return;
+    };
+    let directory = tempfile::tempdir().unwrap();
+    let keychain = Arc::new(InMemorySecretStore::default());
+    keychain
+        .set(
+            &SecretRef::password(JUMP_USER, "127.0.0.1", jump.port),
+            JUMP_PASSWORD,
+        )
+        .unwrap();
+    let request = LoginTest::typed(
+        manual(UNANSWERED, 22, TARGET_USER)
+            .with_route(LoginRoute::Jump(vec![hop("阿里云99", jump.port)])),
+    );
+    // Not 「跳板主机「阿里云99」：连接超时」, which reads as the jump host
+    // itself not answering.
+    assert_eq!(
+        test_login(&directory.path().join("known_hosts"), keychain, request),
+        Err(format!(
+            "跳板主机「阿里云99」无法连接到 {UNANSWERED}:22：连接超时"
         ))
     );
 }
