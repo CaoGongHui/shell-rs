@@ -4,6 +4,16 @@
 
 One section per version, titled `## [version]`, optionally followed by a date. Each section is written in English here and in Chinese in [CHANGELOG.zh.md](CHANGELOG.zh.md), in the same change. The release workflow (`.github/workflows/release.yml`) takes the section with the tag’s version, as it is, for the GitHub release. The website’s changelog shows this file in English and Japanese and CHANGELOG.zh.md in Chinese (ShellRS’s update dialog opens it with What’s new). Written in Markdown, for users.
 
+## [0.1.13-beta.1]
+
+### Added
+
+- Windows portable version: unzip and run, with all its data in the data folder next to the program; it updates itself too.
+
+### Improved
+
+- In the Chinese interface, What’s new opens the changelog in Chinese.
+
 ## [0.1.12]
 
 ### Added
