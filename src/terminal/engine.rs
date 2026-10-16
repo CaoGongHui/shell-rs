@@ -183,24 +183,39 @@ impl TerminalEngine {
         cx: &mut gpui_kit::Context<Self>,
     ) -> gpui_kit::Task<()> {
         cx.spawn(async move |this, cx| {
+            // When the last frame was drawn, and whether output came in
+            // since: with the processor drawing, frames are spaced out
+            // (`crate::app::frame_due`).
+            let mut drawn: Option<Instant> = None;
+            let mut undrawn = false;
             loop {
                 cx.background_executor()
                     .timer(Duration::from_millis(16))
                     .await;
                 let batch: Vec<_> = events.try_iter().collect();
-                if !batch.is_empty()
-                    && this
-                        .update(cx, |this, cx| {
-                            for event in batch {
-                                if let Some(event) = this.handle_event(event, cx) {
-                                    cx.emit(event);
-                                }
+                if batch.is_empty() && !undrawn {
+                    continue;
+                }
+                let now = Instant::now();
+                let draw = crate::app::frame_due(drawn, now);
+                if this
+                    .update(cx, |this, cx| {
+                        for event in batch {
+                            if let Some(event) = this.handle_event(event, cx) {
+                                cx.emit(event);
                             }
+                        }
+                        if draw {
                             cx.notify();
-                        })
-                        .is_err()
+                        }
+                    })
+                    .is_err()
                 {
                     break;
+                }
+                undrawn = !draw;
+                if draw {
+                    drawn = Some(now);
                 }
             }
         })

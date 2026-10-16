@@ -1018,12 +1018,11 @@ fn build_description() -> String {
         (Some(commit), None) => commit.get(..7).unwrap_or(commit).to_string(),
         _ => t!("settings.about.local_build").to_string(),
     };
-    t!(
-        "settings.about.build",
-        build = build,
-        platform = platform::platform_label(crate::app::portable_root().is_some())
-    )
-    .to_string()
+    let mut platform = platform::platform_label(crate::app::portable_root().is_some()).to_string();
+    if crate::app::software_rendering() {
+        platform = format!("{platform} · {}", t!("settings.about.software_rendering"));
+    }
+    t!("settings.about.build", build = build, platform = platform).to_string()
 }
 
 /// Where the `shellrs` command stands, with the one thing to do about it.

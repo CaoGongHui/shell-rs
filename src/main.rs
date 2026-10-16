@@ -65,6 +65,9 @@ fn main() {
                     window.activate_window();
                     window.set_window_title("ShellRS");
                     shellrs::app::hide_when_closed(window, cx);
+                    // Drawn by the processor (a virtual machine without 3D),
+                    // ShellRS draws fewer frames.
+                    shellrs::app::note_renderer(window, cx);
                     let (store, problem) = open_store();
                     let store = cx.new(|_| store);
                     let settings = cx.new(|_| settings);

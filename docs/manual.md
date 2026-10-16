@@ -251,6 +251,7 @@ The terminal’s context menu has “Copy”, “Paste”, “Select all”, “
   - A download never overwrites a file: one with the same name is saved as “name (1)”, and a file not received in full is deleted. lrzsz’s `rz` doesn’t overwrite a file of the same name on the server either and shows “Skipped”; use `rz -y` to overwrite.
   - After you cancel a download, lrzsz’s `sz` sends on for a moment before it stops; ShellRS doesn’t show that data, and shows the prompt once it has stopped. Press Ctrl+C again to stop waiting.
   - A file can be at most 4 GB, the limit of the ZMODEM protocol. It doesn’t work inside tmux or screen, which change the data on its way. Over Telnet, the server has to handle carriage returns the way Telnet says (most do).
+- **Without a graphics card**: in a virtual machine without 3D acceleration, the processor draws the interface (the version number’s tooltip on the About page says “software rendering”), and every frame costs processor time. ShellRS then draws fewer frames: terminal output at most every 50 milliseconds (the first after a pause still at once, so typing isn’t affected), a cursor that doesn’t blink, and no animations. If the virtual machine can turn on 3D acceleration, turn it on.
 
 ## Right sidebar
 

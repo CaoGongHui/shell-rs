@@ -458,6 +458,10 @@ settings.about.local_build:
 settings.about.build:
   zh-CN: "%{build}（%{platform}）"
   en: "%{build} (%{platform})"
+# After the platform in that tooltip when the processor draws the window.
+settings.about.software_rendering:
+  zh-CN: 软件渲染
+  en: software rendering
 settings.about.channel:
   zh-CN: 更新渠道
   en: Update channel

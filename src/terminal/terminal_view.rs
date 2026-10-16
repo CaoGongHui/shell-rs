@@ -328,7 +328,11 @@ impl TerminalView {
                     .await;
                 if this
                     .update(cx, |this, cx| {
-                        if this.focused && this.engine.read(cx).cursor_blinking() {
+                        // Every blink is a frame, which costs the processor
+                        // where it draws: the cursor stays on there.
+                        let blinking = this.engine.read(cx).cursor_blinking()
+                            && !crate::app::software_rendering();
+                        if this.focused && blinking {
                             this.cursor_visible = !this.cursor_visible;
                             cx.notify();
                         } else if this.focused && !this.cursor_visible {

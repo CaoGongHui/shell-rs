@@ -106,6 +106,7 @@ ShellRS（crate 与二进制都叫 `shellrs`）是 Xshell / WinSCP 式的 SSH �
   - 升级（`update/install_portable.rs`）：平台 key `windows-x86_64-portable`（`UpdateServices::platform`，只读的便携版「前往下载页」也给 zip）；zip 解到下载旁的 `unpacked`，跳过 `data`、`bin` 和 `.` 开头的；换文件只改名：旧文件改名成 `.<名字>.old-<uuid>`（Windows 允许改名正在运行的 exe）、新的改名进来，失败全部还原；重启走 GPUI 的 `restart`，新版本启动后删掉改名下来的。
   - 搬家：凭据记的是私钥的绝对路径，`HostStore::adopt_moved_keys` 在启动时把父目录同名（`keys`）、文件名是 PublicId 形状、当前 `keys` 里有同名文件的改指向当前那份（换盘符、从安装版拷数据都靠它）；口令按路径记，会再问一次。
   - 统计快照的 `install`：`setup` / `portable` / `bundle` / `appimage` / `other`（`InstallKind::install_type`，取值发布后不改）。
+- **软件渲染时少画几帧**（用户在没开 3D 的 Windows 虚拟机里嫌 CPU 高）：主窗口打开时读 `window.gpu_specs()`（`is_software_emulated`，另把微软的适配器厂商 0x1414 也算上），是的话（`app::software_rendering`）终端输出最多每 50 ms 画一次（`app::frame_due`：停了一会儿后的第一帧立即画，打字照样跟手）、光标不闪、`set_reduce_motion(true)` 关掉动画；「关于」页版本号的悬停提示加「软件渲染」，方便在虚拟机里确认。只在 `main` 里判断，UI 测试照 GPU 走。
 - **匿名使用统计**：发给 Aptabase（没有 Rust SDK，自己调 `POST /api/v0/events`；App Key 是 `analytics::APP_KEY`，不是秘密）。「设置 › 关于 › 隐私 › 发送匿名使用统计」默认开，关掉就清空本机攒下的计数。
   - 只发版本、系统名和版本、CPU 架构、设置快照（取值固定，主机等数量只报档位）和功能使用次数。不发主机、凭据、命令、文件名、路径、语言，也没有任何标识（Aptabase 用 IP + UA 加每日的盐算日活）。
   - 四种事件：`app_installed`（`analytics.json` 记着已报过，送达后才记）、`app_started`、`app_active`（窗口到前台且当天 UTC 还没报过，macOS 藏在后台不算）、`usage`（功能次数，从第一次使用起满 4 小时汇总一条，不是每次使用一条：免费额度每月 2 万个事件）。
