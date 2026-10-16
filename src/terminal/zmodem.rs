@@ -24,6 +24,8 @@ use crate::shared::format_bytes;
 /// offering some.
 const HEADER: &[u8] = b"**\x18B0";
 const CAN: u8 = 0x18;
+/// ZMODEM's escape, the same byte as CAN.
+const ZDLE: u8 = CAN;
 /// lrzsz's `rz` and `sz` give up on five CANs in a row, which is how the
 /// other end cancels; so does this.
 const CANCEL_RUN: usize = 5;
@@ -41,8 +43,15 @@ const QUIET_TIMES: u32 = 6;
 const PROGRESS_EVERY: Duration = Duration::from_millis(100);
 /// Subpackets (of 1 KB) sent before waiting for the other end to
 /// acknowledge them: what keeps an upload from piling up in the
-/// connection's queue, and fast enough on a link with some latency.
-const STREAMING_WINDOW: usize = 256;
+/// connection's queue. It starts small and follows how long each lot takes
+/// to be acknowledged: doubled under `FRAME_QUICK`, halved over
+/// `FRAME_SLOW`, so a link with some latency gets the most, and a serial
+/// line at 9600 baud (1 KB a second) lots it sends within a few seconds,
+/// well inside `QUIET` and soon cancelled.
+const WINDOW_FIRST: usize = 4;
+const WINDOW_MOST: usize = 256;
+const FRAME_QUICK: Duration = Duration::from_secs(1);
+const FRAME_SLOW: Duration = Duration::from_secs(3);
 /// Bad headers in a row tolerated before giving up.
 const ERRORS: u32 = 10;
 /// After this side stops a download, the sender streams on until it reads
@@ -630,7 +639,78 @@ enum Peer {
         file: Option<Outgoing>,
         /// The next file is to start, or the session to end.
         next: bool,
+        pace: Pace,
     },
+}
+
+/// The window an upload streams, after how long the last lot of
+/// subpackets took: see `WINDOW_FIRST`.
+struct Pace {
+    window: usize,
+    /// When the lot being sent began.
+    started: Option<Instant>,
+    /// The sender is waiting for the other end: the next file data read
+    /// begins a new lot.
+    waiting: bool,
+}
+
+impl Pace {
+    fn new() -> Self {
+        Self {
+            window: WINDOW_FIRST,
+            started: None,
+            waiting: false,
+        }
+    }
+
+    /// File data is read for the sender: when it had been waiting, the
+    /// lot before was acknowledged (or asked for again), and how long it
+    /// took sets the window.
+    fn moved(&mut self, sender: &mut Sender, now: Instant) {
+        if !std::mem::take(&mut self.waiting) {
+            return;
+        }
+        if let Some(started) = self.started.replace(now) {
+            let took = now.duration_since(started);
+            let window = if took < FRAME_QUICK {
+                (self.window * 2).min(WINDOW_MOST)
+            } else if took > FRAME_SLOW {
+                (self.window / 2).max(1)
+            } else {
+                self.window
+            };
+            if window != self.window {
+                self.window = window;
+                sender.set_streaming_window(window);
+            }
+        }
+    }
+
+    /// The sender has nothing to send until the other end answers.
+    fn wait(&mut self) {
+        self.waiting = true;
+    }
+
+    /// A file is done: the time to the next one's data is not the link's.
+    fn file_done(&mut self) {
+        self.started = None;
+        self.waiting = false;
+    }
+}
+
+/// `bytes` from the sender as they go on the wire, with NULs escaped
+/// too: busybox's telnetd drops a NUL that ends what it reads from the
+/// connection, wherever in the data that falls. ZMODEM lets any control
+/// character go as ZDLE and the character with bit 6 flipped (lrzsz's
+/// `sz -e` sends all of them so), and every receiver reads it back.
+fn put_escaped(wire: &mut Vec<u8>, bytes: &[u8]) {
+    for &byte in bytes {
+        if byte == 0 {
+            wire.extend_from_slice(&[ZDLE, 0x40]);
+        } else {
+            wire.push(byte);
+        }
+    }
 }
 
 /// How far a file has come, for the progress line.
@@ -743,7 +823,7 @@ impl Transfer {
             Ok(sender) => sender,
             Err(error) => return failed(Failure::Protocol(error.to_string()), fed),
         };
-        sender.set_streaming_window(STREAMING_WINDOW);
+        sender.set_streaming_window(WINDOW_FIRST);
         fed.note(Note::Started(ZmodemDirection::Upload, None));
         State::Transfer(Box::new(Self::new(
             Peer::Sending {
@@ -751,6 +831,7 @@ impl Transfer {
                 files: files.into(),
                 file: None,
                 next: true,
+                pace: Pace::new(),
             },
             now,
         )))
@@ -836,7 +917,8 @@ impl Transfer {
                     files,
                     file,
                     next,
-                } => send_step(sender, files, file, next, now, fed),
+                    pace,
+                } => send_step(sender, files, file, next, pace, now, fed),
             };
             match step {
                 Step::Moved => {
@@ -913,7 +995,9 @@ fn last_subpacket_end(bytes: &[u8]) -> Option<usize> {
 
 /// The text in what came last of a sender: what follows its last
 /// subpacket's end and CRC-32, or all of it when no data came, if it
-/// reads as text.
+/// reads as text, or else the text it ends with. The CANs and backspaces
+/// lrzsz's `sz` sends as it gives up (`canit()`) come before its shell's
+/// prompt and are left out.
 fn text_after_data(bytes: &[u8]) -> &[u8] {
     let rest = match last_subpacket_end(bytes) {
         None => bytes,
@@ -929,16 +1013,46 @@ fn text_after_data(bytes: &[u8]) -> &[u8] {
             bytes.get(at..).unwrap_or_default()
         }
     };
-    if looks_like_text(rest) { rest } else { &[] }
+    let rest = without_cancel(rest);
+    if looks_like_text(rest) {
+        return rest;
+    }
+    // A subpacket cut short: `sz` throws away what it has not written out
+    // yet as it gives up. The text at the end, perhaps after a few bytes
+    // of the data.
+    let start = rest
+        .iter()
+        .rposition(|byte| !is_text_byte(*byte))
+        .map_or(0, |at| at + 1);
+    let mut tail = &rest[start..];
+    loop {
+        match std::str::from_utf8(tail) {
+            Ok(_) => return without_cancel(tail),
+            Err(error) => match error.error_len() {
+                Some(len) => tail = &tail[error.valid_up_to() + len..],
+                None => return without_cancel(&tail[..error.valid_up_to()]),
+            },
+        }
+    }
+}
+
+/// `bytes` without the CANs and backspaces they start with.
+fn without_cancel(bytes: &[u8]) -> &[u8] {
+    let cancel = bytes
+        .iter()
+        .take_while(|byte| matches!(byte, &&CAN | 8))
+        .count();
+    &bytes[cancel..]
 }
 
 /// Whether `bytes` read as a terminal's text: UTF-8, without control
 /// characters other than line ends, tabs, backspaces, the bell and ESC.
 fn looks_like_text(bytes: &[u8]) -> bool {
-    std::str::from_utf8(bytes).is_ok()
-        && bytes
-            .iter()
-            .all(|byte| *byte >= 0x20 || matches!(byte, b'\r' | b'\n' | b'\t' | 0x07 | 0x08 | 0x1b))
+    std::str::from_utf8(bytes).is_ok() && bytes.iter().all(|byte| is_text_byte(*byte))
+}
+
+fn is_text_byte(byte: u8) -> bool {
+    byte >= 0x20 || matches!(byte, b'\r' | b'\n' | b'\t' | 0x07 | 0x08 | 0x1b)
 }
 
 /// A transfer that never began.
@@ -978,7 +1092,7 @@ impl Peer {
                 },
                 Peer::Sending { sender, .. } => match sender.poll() {
                     Action::WriteWire(bytes) => {
-                        fed.wire.extend_from_slice(bytes);
+                        put_escaped(&mut fed.wire, bytes);
                         bytes.len()
                     }
                     _ => return,
@@ -1100,17 +1214,19 @@ fn send_step(
     files: &mut VecDeque<PathBuf>,
     file: &mut Option<Outgoing>,
     next: &mut bool,
+    pace: &mut Pace,
     now: Instant,
     fed: &mut Fed,
 ) -> Step {
     match sender.poll() {
         Action::WriteWire(bytes) => {
-            fed.wire.extend_from_slice(bytes);
+            put_escaped(&mut fed.wire, bytes);
             let written = bytes.len();
             sender.wire_written(written);
             Step::Wrote
         }
         Action::ReadFile { offset, max_len } => {
+            pace.moved(sender, now);
             let Some(outgoing) = file.as_mut() else {
                 return Step::Abort(Note::Failed(Failure::Protocol(
                     zmodem2::Error::InvalidState.to_string(),
@@ -1141,6 +1257,7 @@ fn send_step(
             Step::Moved
         }
         Action::Event(Event::FileCompleted) => {
+            pace.file_done();
             if let Some(outgoing) = file.take() {
                 let progress = &outgoing.progress;
                 // lrzsz's `rz` keeps a file it has (ZSKIP) unless run as
@@ -1160,7 +1277,12 @@ fn send_step(
             *next = false;
             start_next(sender, files, file, now, fed)
         }
-        _ => Step::Idle,
+        _ => {
+            if file.is_some() {
+                pace.wait();
+            }
+            Step::Idle
+        }
     }
 }
 

@@ -476,6 +476,86 @@ fn rz_takes_the_files_chosen_and_keeps_the_ones_it_has() {
     assert!(!zmodem.active());
 }
 
+/// Upload `content` to `rz` over a link carrying `rate` bytes a second,
+/// time passing as the bytes go. Gives what was shown, every byte sent,
+/// and the most sent before the other end answered.
+fn upload_over(rate: f64, content: &[u8]) -> (Rz, Talk, Vec<u8>, usize) {
+    let folder = tempfile::tempdir().unwrap();
+    let path = folder.path().join("up");
+    std::fs::write(&path, content).unwrap();
+    let mut rz = Rz::new(None);
+    let mut zmodem = Zmodem::default();
+    let mut shown = Talk::default();
+    let (mut sent, mut most) = (Vec::new(), 0);
+    let mut now = Instant::now();
+    let mut to_us = rz.start();
+    for _ in 0..100_000 {
+        let fed = zmodem.feed(&to_us, now, true);
+        let ask = fed.ask;
+        let mut to_remote = shown.take(fed);
+        if ask.is_some() {
+            let reply = ZmodemReply::Files(vec![path.clone()]);
+            let fed = zmodem.control(ZmodemControl::Reply(reply), now);
+            to_remote.extend(shown.take(fed));
+        }
+        let mut on_the_way =
+            Duration::from_secs_f64(to_remote.len() as f64 / rate).max(Duration::from_millis(1));
+        while !on_the_way.is_zero() {
+            let step = on_the_way.min(Duration::from_millis(500));
+            now += step;
+            on_the_way -= step;
+            let fed = zmodem.tick(now);
+            to_remote.extend(shown.take(fed));
+        }
+        most = most.max(to_remote.len());
+        sent.extend_from_slice(&to_remote);
+        to_us = rz.pump(&to_remote);
+        if to_us.is_empty() && to_remote.is_empty() {
+            break;
+        }
+    }
+    (rz, shown, sent, most)
+}
+
+#[test]
+fn an_upload_sends_no_bare_nul() {
+    // busybox's telnetd drops a NUL that ends what it reads.
+    let content = data(20_000, 3);
+    let (rz, shown, sent, _) = upload_over(1e9, &content);
+    assert_eq!(
+        rz.received,
+        [("up".to_string(), content)],
+        "{:?}",
+        shown.last()
+    );
+    assert!(!sent.contains(&0));
+}
+
+#[test]
+fn the_window_follows_how_fast_the_link_is() {
+    // Fast: it grows to the most.
+    let content = data(1_200_000, 7);
+    let (rz, shown, _, most) = upload_over(1e9, &content);
+    assert_eq!(
+        rz.received,
+        [("up".to_string(), content)],
+        "{:?}",
+        shown.last()
+    );
+    assert!(most > 200 * 1024, "{most}");
+    // A serial line at 9600 baud: a few kilobytes at a time, each answered
+    // within seconds, so the other end is never taken to say nothing.
+    let content = data(60_000, 7);
+    let (rz, shown, _, most) = upload_over(960.0, &content);
+    assert_eq!(
+        rz.received,
+        [("up".to_string(), content)],
+        "{:?}",
+        shown.last()
+    );
+    assert!(most < 5 * 1024, "{most}");
+}
+
 #[test]
 fn files_dropped_go_to_the_rz_typed_for_them_without_asking() {
     let folder = tempfile::tempdir().unwrap();
@@ -578,6 +658,23 @@ fn text_after_the_sender_stops_shows_once_it_is_quiet() {
     let fed = zmodem.tick(now + DRAIN_QUIET);
     assert_eq!(screen(&fed), b"$ ");
     assert!(!zmodem.active());
+}
+
+#[test]
+fn the_cans_sz_gives_up_with_leave_its_prompt_shown() {
+    // A subpacket's end and CRC-32, lrzsz's `canit()`, then the shell.
+    let mut bytes = b"data\x18i\x41\x18\x6d\x43\x44".to_vec();
+    bytes.extend([CAN; 10]);
+    bytes.extend([8; 10]);
+    bytes.extend(b"STOPPED\r\n# ");
+    assert_eq!(text_after_data(&bytes), b"STOPPED\r\n# ");
+    // `sz` threw away the rest of a subpacket as it gave up.
+    let mut bytes = b"data\x18i\x41\x42\x43\x44".to_vec();
+    bytes.extend([0; 600]);
+    bytes.extend([CAN; 10]);
+    bytes.extend([8; 10]);
+    bytes.extend("已停止\r\n# ".as_bytes());
+    assert_eq!(text_after_data(&bytes), "已停止\r\n# ".as_bytes());
 }
 
 #[test]
