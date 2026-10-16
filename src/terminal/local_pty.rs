@@ -120,7 +120,10 @@ impl TerminalTransport for LocalPtyTransport {
         let mut shutting_down = false;
         let exit = loop {
             match commands.recv_timeout(Duration::from_millis(20)) {
-                Ok(TerminalTransportCommand::Write(bytes)) if !shutting_down => {
+                Ok(
+                    TerminalTransportCommand::Write(bytes)
+                    | TerminalTransportCommand::WriteData(bytes),
+                ) if !shutting_down => {
                     if let Err(error) = writer.write_all(&bytes).and_then(|_| writer.flush()) {
                         send_event(
                             &events,

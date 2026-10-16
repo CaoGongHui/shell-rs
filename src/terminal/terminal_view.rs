@@ -1,4 +1,5 @@
 use std::ops::Range;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -35,7 +36,7 @@ use super::search::SearchMark;
 use super::{
     RightClick, SearchDirection, SharedTerminalTransportFactory, TerminalColors, TerminalEngine,
     TerminalEvent, TerminalFont, TerminalInteraction, TerminalLifecycle, TerminalSize,
-    TerminalSnapshot, TerminalStatus, TerminalTheme,
+    TerminalSnapshot, TerminalStatus, TerminalTheme, ZmodemReply,
 };
 
 pub const TERMINAL_KEY_CONTEXT: &str = "Terminal";
@@ -263,6 +264,8 @@ pub struct TerminalView {
     context_menu: Option<(Entity<PopupMenu>, gpui_kit::Point<Pixels>)>,
     context_menu_subscription: Option<Subscription>,
     menu_items: Option<TerminalMenuItems>,
+    /// Files dropped on it are for ZMODEM: see [`Self::take_dropped_files`].
+    takes_dropped_files: bool,
     reconnect_action: Option<Box<dyn Action>>,
     reconnect_pending: bool,
     find: Option<FindBar>,
@@ -357,6 +360,7 @@ impl TerminalView {
             context_menu: None,
             context_menu_subscription: None,
             menu_items: None,
+            takes_dropped_files: false,
             reconnect_action: None,
             reconnect_pending: false,
             find: None,
@@ -547,6 +551,31 @@ impl TerminalView {
     /// Add the owner's items to the terminal's own in the context menu.
     pub fn set_menu_items(&mut self, items: TerminalMenuItems) {
         self.menu_items = Some(items);
+    }
+
+    /// Tell of files dropped on the terminal ([`TerminalEvent::FilesDropped`]),
+    /// which a remote terminal uploads with ZMODEM.
+    pub fn take_dropped_files(&mut self) {
+        self.takes_dropped_files = true;
+    }
+
+    /// See [`TerminalEngine::zmodem_reply`].
+    pub fn zmodem_reply(&self, reply: ZmodemReply, cx: &App) {
+        self.engine.read(cx).zmodem_reply(reply);
+    }
+
+    /// See [`TerminalEngine::upload_dropped`].
+    pub fn upload_dropped(
+        &mut self,
+        files: Vec<PathBuf>,
+        cx: &mut Context<Self>,
+    ) -> Result<(), SharedString> {
+        self.engine.read(cx).upload_dropped(files)?;
+        self.selecting = false;
+        self.scroll_accumulator.reset();
+        self.cursor_visible = true;
+        cx.notify();
+        Ok(())
     }
 
     /// Clear the screen and the scrollback, keeping the prompt line.
@@ -1142,6 +1171,11 @@ impl Render for TerminalView {
             }))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_mouse_down(MouseButton::Right, cx.listener(Self::right_click))
+            .when(self.takes_dropped_files, |terminal| {
+                terminal.on_drop(cx.listener(|_, paths: &ExternalPaths, _, cx| {
+                    cx.emit(TerminalEvent::FilesDropped(paths.paths().to_vec()));
+                }))
+            })
             .child(element)
             .when_some(context_menu, |terminal, (menu, position)| {
                 terminal.child(

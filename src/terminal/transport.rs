@@ -13,6 +13,9 @@ use crate::host::{HostConnection, HostLogin, HostOs, SerialLine, TelnetLogin};
 /// Commands accepted by every terminal byte-stream transport.
 pub enum TerminalTransportCommand {
     Write(Vec<u8>),
+    /// A file transfer's bytes (ZMODEM): written as they are, which for
+    /// a Telnet terminal means past its local line editing.
+    WriteData(Vec<u8>),
     Resize(TerminalSize),
     PromptReply {
         request_id: u64,
@@ -105,6 +108,10 @@ impl std::fmt::Debug for TerminalTransportCommand {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Write(bytes) => formatter.debug_tuple("Write").field(&bytes.len()).finish(),
+            Self::WriteData(bytes) => formatter
+                .debug_tuple("WriteData")
+                .field(&bytes.len())
+                .finish(),
             Self::Resize(size) => formatter.debug_tuple("Resize").field(size).finish(),
             Self::PromptReply { request_id, reply } => formatter
                 .debug_struct("PromptReply")

@@ -1561,3 +1561,34 @@ async fn a_matching_line_notifies_from_a_terminal_out_of_sight(cx: &mut TestAppC
     let shown = system_notifications(cx, 2).await;
     assert_eq!(shown[1].body.as_ref(), "12:05 ERROR later");
 }
+
+/// A local terminal where one ssh'd on to a machine that runs `rz`: the
+/// picker is asked for there too, and choosing nothing cancels it.
+#[gpui_kit::test]
+async fn rz_in_a_local_terminal_asks_for_files_too(cx: &mut TestAppContext) {
+    let factory = Arc::new(FakeTerminalFactory::printing(
+        "rz waiting to receive.**\x18B0100000023be50\r\n\x11",
+    ));
+    let (handle, _) = open_workspace_with_factory(cx, factory.clone());
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.click("new-local-terminal", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    for _ in 0..200 {
+        if cx.did_prompt_for_paths() {
+            break;
+        }
+        cx.executor().timer(Duration::from_millis(10)).await;
+        cx.run_until_parked();
+    }
+    cx.simulate_path_prompt_response(|options| {
+        assert!(options.files && options.multiple);
+        None
+    });
+    cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
+        factory.data().starts_with(&[0x18; 10])
+    })
+    .await;
+}

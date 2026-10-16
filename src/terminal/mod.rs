@@ -20,6 +20,7 @@ mod terminal_panel;
 mod terminal_view;
 mod theme;
 mod transport;
+mod zmodem;
 
 pub use directory::ReportedDirectory;
 pub use directory_setup::{
@@ -67,3 +68,4 @@ pub use transport::{
     TelnetTerminalTransportProvider, TerminalChannels, TerminalTransport, TerminalTransportCommand,
     TerminalTransportEvent, TerminalTransportFactory,
 };
+pub use zmodem::{ZmodemDirection, ZmodemReply};

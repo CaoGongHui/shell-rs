@@ -19,7 +19,13 @@ pub enum FakeBehavior {
         exe: &'static str,
         ends: bool,
     },
+    /// Runs `rz` when a line of it is typed: says the header `rz` starts
+    /// ZMODEM with, and nothing after.
+    Rz,
 }
+
+/// What lrzsz's `rz` prints first: its greeting, then ZRINIT.
+pub const RZ_STARTS: &[u8] = b"rz waiting to receive.**\x18B0100000023be50\r\x8a\x11";
 
 #[derive(Default)]
 pub struct FakeTerminalFactory {
@@ -38,9 +44,26 @@ pub struct FakeTerminalFactory {
     pub sftp_opens: Arc<Mutex<Vec<usize>>>,
     /// How many times the line was broken (发送 Break).
     pub breaks: Arc<AtomicUsize>,
+    /// What a file transfer sent ([`TerminalTransportCommand::WriteData`]).
+    pub data: Arc<Mutex<Vec<Vec<u8>>>>,
 }
 
 impl FakeTerminalFactory {
+    /// What file transfers sent, all of it.
+    pub fn data(&self) -> Vec<u8> {
+        self.data
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .concat()
+    }
+
+    pub fn rz() -> Self {
+        Self {
+            behavior: FakeBehavior::Rz,
+            ..Self::default()
+        }
+    }
+
     pub fn breaks(&self) -> usize {
         self.breaks.load(Ordering::SeqCst)
     }
@@ -136,6 +159,7 @@ impl TerminalTransportFactory for FakeTerminalFactory {
             exec_commands: self.exec_commands.clone(),
             sftp_opens: self.sftp_opens.clone(),
             breaks: self.breaks.clone(),
+            data: self.data.clone(),
         })
     }
 }
@@ -149,6 +173,7 @@ pub struct FakeTerminalTransport {
     pub exec_commands: Arc<Mutex<Vec<String>>>,
     pub sftp_opens: Arc<Mutex<Vec<usize>>>,
     pub breaks: Arc<AtomicUsize>,
+    pub data: Arc<Mutex<Vec<Vec<u8>>>>,
 }
 
 impl TerminalTransport for FakeTerminalTransport {
@@ -185,6 +210,8 @@ impl TerminalTransport for FakeTerminalTransport {
             })?;
             return Ok(());
         }
+        // What was typed since the last Enter, for `FakeBehavior::Rz`.
+        let mut line = Vec::new();
         while let Ok(command) = commands.recv() {
             match command {
                 TerminalTransportCommand::Write(bytes) => {
@@ -192,11 +219,27 @@ impl TerminalTransport for FakeTerminalTransport {
                         .lock()
                         .unwrap_or_else(|error| error.into_inner())
                         .push(bytes.clone());
-                    let answer = shell_answer(self.behavior, &bytes);
+                    let mut answer = shell_answer(self.behavior, &bytes);
+                    if matches!(self.behavior, FakeBehavior::Rz) {
+                        line.extend_from_slice(&bytes);
+                        if line.ends_with(b"\r") {
+                            if line == b"rz\r" {
+                                answer = Some(RZ_STARTS.to_vec());
+                            }
+                            line.clear();
+                        }
+                    }
                     events.send_blocking(TerminalTransportEvent::Output(bytes))?;
                     if let Some(answer) = answer {
                         events.send_blocking(TerminalTransportEvent::Output(answer))?;
                     }
+                }
+                // A transfer's bytes are not echoed: the other end takes them.
+                TerminalTransportCommand::WriteData(bytes) => {
+                    self.data
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .push(bytes);
                 }
                 TerminalTransportCommand::Resize(size) => {
                     self.resizes

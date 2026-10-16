@@ -190,6 +190,8 @@ pub enum BusyReason {
     NoAnswer,
     /// The shell did not start the command.
     NotStarted,
+    /// A ZMODEM transfer has the terminal.
+    Transfer,
 }
 
 /// How long each step of a run may take.

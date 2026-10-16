@@ -35,3 +35,4 @@ mod tmux;
 mod transfer;
 mod update;
 mod workspace;
+mod zmodem;

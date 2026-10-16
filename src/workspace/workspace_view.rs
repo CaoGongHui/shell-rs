@@ -2434,6 +2434,12 @@ fn new_terminal_panel(
             TerminalPanelEvent::DirectoryChanged(terminal_id, directory) => {
                 this.follow_directory(*terminal_id, directory, window, cx)
             }
+            TerminalPanelEvent::ZmodemAsk(terminal_id, direction) => {
+                this.ask_zmodem(CenterTab::Terminal(*terminal_id), *direction, window, cx)
+            }
+            TerminalPanelEvent::FilesDropped(terminal_id, files) => {
+                this.upload_dropped(*terminal_id, files, window, cx)
+            }
         },
     );
     (panel, subscription)
@@ -2607,6 +2613,9 @@ fn new_local_terminal_panel(
             LocalTerminalPanelEvent::StatusChanged(_) => cx.notify(),
             LocalTerminalPanelEvent::Notice(id, notice) => {
                 this.on_terminal_notice(CenterTab::LocalTerminal(*id), notice, window, cx)
+            }
+            LocalTerminalPanelEvent::ZmodemAsk(id, direction) => {
+                this.ask_zmodem(CenterTab::LocalTerminal(*id), *direction, window, cx)
             }
         },
     );

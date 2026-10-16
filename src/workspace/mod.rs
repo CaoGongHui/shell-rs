@@ -24,6 +24,7 @@ mod tools;
 mod updates;
 mod window_state;
 mod workspace_view;
+mod zmodem;
 
 pub use links::open_link_once_open;
 pub use window_state::WindowState;

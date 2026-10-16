@@ -153,7 +153,7 @@ Errors are printed to stderr with a code in brackets, such as `[not_enabled]`. E
 - `host_key_unknown`, `missing_credential`: ShellRS has not connected to this host yet, or has no saved password. Ask the user to connect to the host once in ShellRS and save the password. For a host opened from a bastion host, use `--terminal` (see above).
 - `host_key_changed`: the server's host key changed. Tell the user; do not try to work around it.
 - `no_terminal` (`--terminal`): the host has no connected terminal in ShellRS. Ask the user to open or reconnect it.
-- `terminal_busy` (`--terminal`): a full-screen program has the terminal, another `--terminal` command still runs there, the shell did not answer, or it did not start the command (a bastion host's command filter may hold it back). Tell the user the message.
+- `terminal_busy` (`--terminal`): a full-screen program has the terminal, another `--terminal` command still runs there, a ZMODEM transfer (`rz` / `sz`) has it, the shell did not answer, or it did not start the command (a bastion host's command filter may hold it back). Tell the user the message.
 - `unsupported_shell` (`--terminal`): the terminal runs a shell other than bash, dash or busybox ash. Tell the user.
 - `too_long` (`--terminal`): split the command into shorter ones.
 - `not_ssh`: the host is a Telnet or serial host, which has no SSH connection. Tell the user.

@@ -156,7 +156,9 @@ fn serve(
     send_event(events, TerminalTransportEvent::Started);
     while !stop.load(Ordering::Acquire) {
         match commands.recv_timeout(Duration::from_millis(20)) {
-            Ok(TerminalTransportCommand::Write(bytes)) => {
+            Ok(
+                TerminalTransportCommand::Write(bytes) | TerminalTransportCommand::WriteData(bytes),
+            ) => {
                 if let Err(error) = port.write_all(&bytes)
                     && !stop.swap(true, Ordering::AcqRel)
                 {

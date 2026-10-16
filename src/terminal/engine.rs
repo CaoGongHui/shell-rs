@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
@@ -33,6 +34,7 @@ use super::links::{LinkMarker, url_search, visible_links};
 use super::notices::{NoticeScanner, ProgramNotice, TerminalNotice};
 use super::run::{BusyReason, RunFailure, RunHandle};
 use super::search::{MatchMarker, SearchDirection, SearchMark, SearchPosition, TerminalSearch};
+use super::zmodem::{Fed, Shown, Zmodem, ZmodemControl, ZmodemDirection, ZmodemReply};
 use super::{
     ExecRequest, ExecResult, SharedTerminalTransportFactory, TerminalChannels, TerminalColors,
     TerminalLifecycle, TerminalSize, TerminalStatus, TerminalTheme, TerminalTransportCommand,
@@ -265,6 +267,9 @@ impl TerminalEngine {
                 return Some(TerminalEvent::Notice(TerminalNotice::keyword(
                     &hit.rule, &hit.line,
                 )));
+            }
+            TerminalUiEventKind::ZmodemAsk(direction) => {
+                return Some(TerminalEvent::ZmodemAsk(direction));
             }
         }
         None
@@ -609,6 +614,9 @@ impl TerminalEngine {
         if self.mode().contains(TermMode::ALT_SCREEN) {
             return Err(RunFailure::Busy(BusyReason::FullScreen));
         }
+        if self.runtime.transferring() {
+            return Err(RunFailure::Busy(BusyReason::Transfer));
+        }
         {
             let mut slot = lock_run(&self.runtime.run);
             if slot.as_ref().is_some_and(RunHandle::is_active) {
@@ -621,6 +629,35 @@ impl TerminalEngine {
         }
         self.send_user_input(b"\x03".to_vec());
         Ok(())
+    }
+
+    /// What the user chose for the transfer [`TerminalEvent::ZmodemAsk`]
+    /// asked about.
+    pub fn zmodem_reply(&self, reply: ZmodemReply) {
+        let _ = self.runtime.zmodem.try_send(ZmodemControl::Reply(reply));
+    }
+
+    /// Upload `files`, dropped on the terminal: `rz` typed and run for
+    /// them, which takes them without asking. Says why not while the
+    /// shell is not running, a full-screen program has the keys or a
+    /// transfer the terminal.
+    pub fn upload_dropped(&self, files: Vec<PathBuf>) -> Result<(), SharedString> {
+        if self.runtime.transferring() {
+            return Err(t!("terminal.zmodem.busy"));
+        }
+        // Sent first: `rz` answers once the other end has run it.
+        let _ = self.runtime.zmodem.try_send(ZmodemControl::Dropped(files));
+        self.enter_command("rz", true, false).inspect_err(|_| {
+            let _ = self
+                .runtime
+                .zmodem
+                .try_send(ZmodemControl::Dropped(Vec::new()));
+        })
+    }
+
+    /// Whether a ZMODEM transfer has the terminal.
+    pub fn transferring(&self) -> bool {
+        self.runtime.transferring()
     }
 
     pub fn status(&self) -> TerminalStatus {
@@ -784,6 +821,13 @@ pub enum TerminalEvent {
     Notice(TerminalNotice),
     /// The shell reported another folder than the last one.
     DirectoryChanged(ReportedDirectory),
+    /// `rz` or `sz` started on the other end: the user chooses the files
+    /// to upload or the folder to download into, and the answer goes to
+    /// [`TerminalEngine::zmodem_reply`].
+    ZmodemAsk(ZmodemDirection),
+    /// Files were dropped on a terminal that takes them (a remote one),
+    /// for [`TerminalEngine::upload_dropped`]. The view sends it.
+    FilesDropped(Vec<PathBuf>),
 }
 
 struct TerminalRuntime {
@@ -794,6 +838,11 @@ struct TerminalRuntime {
     /// The `exec --terminal` run this connection carries, which the parser
     /// thread reads the output for. Given up with the connection.
     run: Arc<Mutex<Option<RunHandle>>>,
+    /// What the user says to the parser thread's ZMODEM.
+    zmodem: async_channel::Sender<ZmodemControl>,
+    /// A ZMODEM transfer has the terminal (see [`Zmodem::active`]): the
+    /// parser thread sets it, the keys go nowhere but Ctrl+C meanwhile.
+    transferring: Arc<AtomicBool>,
 }
 
 impl TerminalRuntime {
@@ -822,80 +871,81 @@ impl TerminalRuntime {
         let config = terminal_config();
         let term = Arc::new(FairMutex::new(AlacrittyTerm::new(config, &size, proxy)));
 
-        let parser_term = term.clone();
         let run: Arc<Mutex<Option<RunHandle>>> = Arc::default();
-        let parser_run = run.clone();
+        let (zmodem, zmodem_controls) = async_channel::unbounded();
+        let transferring = Arc::new(AtomicBool::new(false));
+        let mut parser = Parser {
+            term: term.clone(),
+            processor: Processor::new(),
+            notices: NoticeScanner::default(),
+            watcher: LineWatcher::new(current(&highlights)),
+            highlights,
+            proxy: parser_proxy,
+            run: run.clone(),
+            zmodem: Zmodem::default(),
+            transferring: transferring.clone(),
+        };
         thread::Builder::new()
             .name("shellrs-terminal-parser".into())
             .spawn(move || {
-                let mut processor: Processor = Processor::new();
-                // Alacritty drops the notifications programs ask for.
-                let mut notices = NoticeScanner::default();
-                let mut watcher = LineWatcher::new(current(&highlights));
                 loop {
                     // Output inside a synchronized update is held back until
                     // the program ends it. Alacritty's own event loop draws
                     // it anyway once the update's time is up, so a program
                     // that never ends it (killed mid-frame, or its connection
                     // lost) does not freeze the screen; this loop has to too.
-                    let deadline = processor.sync_timeout().sync_timeout();
-                    let event = match receive(&transport_receiver, deadline) {
+                    // A transfer waits for the other end only so long, too.
+                    let deadline = earliest(
+                        parser.processor.sync_timeout().sync_timeout(),
+                        parser.zmodem.deadline(),
+                    );
+                    let event = match receive(&transport_receiver, &zmodem_controls, deadline) {
                         Received::Event(event) => event,
+                        Received::Control(control) => {
+                            let fed = parser.zmodem.control(control, Instant::now());
+                            parser.transfer(fed);
+                            continue;
+                        }
                         Received::Closed => break,
                         Received::Overdue => {
                             {
-                                let mut term = parser_term.lock();
-                                processor.stop_sync(&mut *term);
-                                parser_proxy.answer(&term);
+                                let mut term = parser.term.lock();
+                                if end_overdue_sync(&mut parser.processor, &mut term) {
+                                    parser.proxy.answer(&term);
+                                }
                             }
-                            parser_proxy.wakeup();
+                            let fed = parser.zmodem.tick(Instant::now());
+                            parser.transfer(fed);
+                            parser.proxy.wakeup();
                             continue;
                         }
                     };
                     match event {
                         TerminalTransportEvent::Started => {
-                            parser_proxy.send(TerminalUiEventKind::Started);
+                            parser.proxy.send(TerminalUiEventKind::Started);
                         }
                         TerminalTransportEvent::Output(bytes) => {
-                            watcher.sync(current(&highlights));
-                            // The lines are only read under the lock; the
-                            // rules match them once it is let go.
-                            let lines = {
-                                let mut term = parser_term.lock();
-                                // Output that never pauses gives the wait no
-                                // chance to see the time is up.
-                                end_overdue_sync(&mut processor, &mut term);
-                                let lines = advance_watching(
-                                    &mut processor,
-                                    &mut term,
-                                    &bytes,
-                                    watcher.is_watching(),
-                                );
-                                parser_proxy.answer(&term);
-                                lines
-                            };
-                            if let Some(hit) = watcher.check(lines, Instant::now()) {
-                                parser_proxy.send(TerminalUiEventKind::Keyword(hit));
-                            }
-                            for notice in notices.scan(&bytes) {
-                                parser_proxy.send(TerminalUiEventKind::Notice(notice));
-                            }
-                            if let Some(directory) = notices.take_directory() {
-                                parser_proxy.send(TerminalUiEventKind::Directory(directory));
-                            }
-                            feed_run(&parser_run, &bytes);
-                            parser_proxy.wakeup();
+                            // `exec --terminal` reads the output for its
+                            // markers: no transfer starts under it.
+                            let detect = !lock_run(&parser.run)
+                                .as_ref()
+                                .is_some_and(RunHandle::is_active);
+                            let fed = parser.zmodem.feed(&bytes, Instant::now(), detect);
+                            parser.transfer(fed);
+                            parser.proxy.wakeup();
                         }
                         TerminalTransportEvent::HostOsDetected(os) => {
-                            parser_proxy.send(TerminalUiEventKind::HostOs(os));
+                            parser.proxy.send(TerminalUiEventKind::HostOs(os));
                         }
                         TerminalTransportEvent::Latency(latency) => {
-                            parser_proxy.send(TerminalUiEventKind::Latency(latency));
+                            parser.proxy.send(TerminalUiEventKind::Latency(latency));
                         }
                         TerminalTransportEvent::Prompt(prompt) => {
-                            parser_proxy.send(TerminalUiEventKind::Prompt(prompt));
+                            parser.proxy.send(TerminalUiEventKind::Prompt(prompt));
                         }
                         TerminalTransportEvent::Exited { code, signal } => {
+                            let fed = parser.zmodem.disconnected();
+                            parser.transfer(fed);
                             let description = signal
                                 .as_deref()
                                 .map(|signal| {
@@ -907,26 +957,30 @@ impl TerminalRuntime {
                                 })
                                 .unwrap_or_else(|| t!("terminal.notice.exited", code = code));
                             append_message_with_processor(
-                                &parser_term,
-                                &mut processor,
+                                &parser.term,
+                                &mut parser.processor,
                                 &description,
                             );
-                            parser_proxy.send(TerminalUiEventKind::Exited { code, signal });
-                            parser_proxy.wakeup();
+                            parser
+                                .proxy
+                                .send(TerminalUiEventKind::Exited { code, signal });
+                            parser.proxy.wakeup();
                             break;
                         }
                         TerminalTransportEvent::Failed(error) => {
+                            let fed = parser.zmodem.disconnected();
+                            parser.transfer(fed);
                             append_message_with_processor(
-                                &parser_term,
-                                &mut processor,
+                                &parser.term,
+                                &mut parser.processor,
                                 &t!("terminal.notice.error", error = error),
                             );
-                            parser_proxy.send(TerminalUiEventKind::Failed(error));
-                            parser_proxy.wakeup();
+                            parser.proxy.send(TerminalUiEventKind::Failed(error));
+                            parser.proxy.wakeup();
                         }
                     }
                 }
-                if let Some(run) = lock_run(&parser_run).take() {
+                if let Some(run) = lock_run(&parser.run).take() {
                     run.disconnected();
                 }
             })
@@ -949,11 +1003,24 @@ impl TerminalRuntime {
             size: shared_size,
             wakeup_pending,
             run,
+            zmodem,
+            transferring,
         }
     }
 
     fn write(&self, bytes: Vec<u8>) {
+        if self.transferring() {
+            // Keys would land in the transfer: only Ctrl+C means anything.
+            if bytes.contains(&0x03) {
+                let _ = self.zmodem.try_send(ZmodemControl::Cancel);
+            }
+            return;
+        }
         let _ = self.commands.send(TerminalTransportCommand::Write(bytes));
+    }
+
+    fn transferring(&self) -> bool {
+        self.transferring.load(Ordering::Acquire)
     }
 
     fn resize(&self, size: TerminalSize) {
@@ -1148,6 +1215,8 @@ enum TerminalUiEventKind {
     Bell,
     /// A finished line that a 关键字高亮 rule tells of.
     Keyword(KeywordHit),
+    /// `rz` or `sz` started: the user chooses files or a folder.
+    ZmodemAsk(ZmodemDirection),
 }
 
 fn append_message(term: &Arc<FairMutex<AlacrittyTerm>>, message: &str) {
@@ -1171,32 +1240,127 @@ fn append_message_with_processor(
 }
 
 /// What waiting for the transport came to.
-enum Received<T> {
+enum Received<T, C> {
     Event(T),
-    /// The open synchronized update's time is up before anything came.
+    /// The UI thread had something to say to ZMODEM.
+    Control(C),
+    /// The deadline is up before anything came: an open synchronized
+    /// update's, or a transfer's.
     Overdue,
     /// The transport is gone.
     Closed,
 }
 
-/// The transport's next event; with a synchronized update open, waiting
-/// only until its `deadline`. `recv_blocking` cannot stop at a time, hence
-/// the timer.
-fn receive<T>(events: &async_channel::Receiver<T>, deadline: Option<Instant>) -> Received<T> {
-    let Some(deadline) = deadline else {
-        return events
-            .recv_blocking()
-            .map_or(Received::Closed, Received::Event);
-    };
+/// The transport's next event, or what the UI thread tells ZMODEM; with a
+/// `deadline`, waiting only until then.
+fn receive<T, C>(
+    events: &async_channel::Receiver<T>,
+    controls: &async_channel::Receiver<C>,
+    deadline: Option<Instant>,
+) -> Received<T, C> {
     async_io::block_on(async {
         let next = std::pin::pin!(events.recv());
-        // What has come already wins over a deadline that has passed.
-        match select(next, async_io::Timer::at(deadline)).await {
+        let control = std::pin::pin!(controls.recv());
+        let either = select(next, control);
+        let received = match deadline {
+            None => either.await,
+            // What has come already wins over a deadline that has passed.
+            Some(deadline) => match select(either, async_io::Timer::at(deadline)).await {
+                Either::Left((received, _)) => received,
+                Either::Right(_) => return Received::Overdue,
+            },
+        };
+        match received {
             Either::Left((Ok(event), _)) => Received::Event(event),
-            Either::Left((Err(_), _)) => Received::Closed,
-            Either::Right(_) => Received::Overdue,
+            Either::Right((Ok(control), _)) => Received::Control(control),
+            Either::Left((Err(_), _)) | Either::Right((Err(_), _)) => Received::Closed,
         }
     })
+}
+
+fn earliest(one: Option<Instant>, other: Option<Instant>) -> Option<Instant> {
+    match (one, other) {
+        (Some(one), Some(other)) => Some(one.min(other)),
+        (one, other) => one.or(other),
+    }
+}
+
+/// What the parser thread keeps: the emulator it feeds, and what reads
+/// the output beside it.
+struct Parser {
+    term: Arc<FairMutex<AlacrittyTerm>>,
+    processor: Processor,
+    /// Alacritty drops the notifications programs ask for.
+    notices: NoticeScanner,
+    watcher: LineWatcher,
+    highlights: SharedHighlights,
+    proxy: TerminalEventProxy,
+    run: Arc<Mutex<Option<RunHandle>>>,
+    /// Takes the output first: `rz` and `sz`'s is not for the screen.
+    zmodem: Zmodem,
+    transferring: Arc<AtomicBool>,
+}
+
+impl Parser {
+    /// Show what ZMODEM let through and wrote, in order, send what it
+    /// answers, and ask what it asks.
+    fn transfer(&mut self, fed: Fed) {
+        let Fed { shown, wire, ask } = fed;
+        for shown in shown {
+            match shown {
+                Shown::Output(bytes) => self.output(&bytes),
+                Shown::Note(note) => {
+                    let mut term = self.term.lock();
+                    end_overdue_sync(&mut self.processor, &mut term);
+                    let text = note.render(term.columns());
+                    self.processor.advance(&mut *term, text.as_bytes());
+                }
+            }
+        }
+        if !wire.is_empty() {
+            let _ = self
+                .proxy
+                .commands
+                .send(TerminalTransportCommand::WriteData(wire));
+        }
+        if let Some(direction) = ask {
+            self.proxy.send(TerminalUiEventKind::ZmodemAsk(direction));
+        }
+        self.transferring
+            .store(self.zmodem.active(), Ordering::Release);
+    }
+
+    /// Output for the emulator, and for what reads it beside: 关键字高亮,
+    /// the programs' notifications and folders, an `exec --terminal` run.
+    fn output(&mut self, bytes: &[u8]) {
+        self.watcher.sync(current(&self.highlights));
+        // The lines are only read under the lock; the rules match them
+        // once it is let go.
+        let lines = {
+            let mut term = self.term.lock();
+            // Output that never pauses gives the wait no chance to see the
+            // time is up.
+            end_overdue_sync(&mut self.processor, &mut term);
+            let lines = advance_watching(
+                &mut self.processor,
+                &mut term,
+                bytes,
+                self.watcher.is_watching(),
+            );
+            self.proxy.answer(&term);
+            lines
+        };
+        if let Some(hit) = self.watcher.check(lines, Instant::now()) {
+            self.proxy.send(TerminalUiEventKind::Keyword(hit));
+        }
+        for notice in self.notices.scan(bytes) {
+            self.proxy.send(TerminalUiEventKind::Notice(notice));
+        }
+        if let Some(directory) = self.notices.take_directory() {
+            self.proxy.send(TerminalUiEventKind::Directory(directory));
+        }
+        feed_run(&self.run, bytes);
+    }
 }
 
 /// Hand output to the run the connection carries, and let it go once it
@@ -2049,26 +2213,226 @@ mod tests {
         assert_eq!(line_text(&term, 0), "frame more");
     }
 
+    /// A transport the test speaks through: what it sends comes out as
+    /// the transport's events, and the commands it gets go back to it.
+    struct PipedTransport {
+        events: mpsc::Receiver<TerminalTransportEvent>,
+        commands: mpsc::Sender<TerminalTransportCommand>,
+    }
+
+    impl super::super::TerminalTransport for PipedTransport {
+        fn run(
+            self: Box<Self>,
+            _: TerminalSize,
+            commands: mpsc::Receiver<TerminalTransportCommand>,
+            events: async_channel::Sender<TerminalTransportEvent>,
+        ) -> anyhow::Result<()> {
+            let incoming = self.events;
+            thread::spawn(move || {
+                while let Ok(event) = incoming.recv() {
+                    if events.send_blocking(event).is_err() {
+                        break;
+                    }
+                }
+            });
+            while let Ok(command) = commands.recv() {
+                let shutdown = matches!(command, TerminalTransportCommand::Shutdown);
+                let _ = self.commands.send(command);
+                if shutdown {
+                    break;
+                }
+            }
+            Ok(())
+        }
+    }
+
+    /// A terminal 60 by 6 on a [`PipedTransport`]: the runtime, what the
+    /// test sends as the transport, the commands the transport gets, and
+    /// what the parser thread tells the UI.
+    fn piped() -> (
+        TerminalRuntime,
+        mpsc::Sender<TerminalTransportEvent>,
+        mpsc::Receiver<TerminalTransportCommand>,
+        mpsc::Receiver<TerminalUiEvent>,
+    ) {
+        let (events, events_in) = mpsc::channel();
+        let (commands_out, commands) = mpsc::channel();
+        let (ui_events, ui) = mpsc::channel();
+        let runtime = TerminalRuntime::start(
+            1,
+            TerminalSize::new(60, 6, 8, 16),
+            Box::new(PipedTransport {
+                events: events_in,
+                commands: commands_out,
+            }),
+            ui_events,
+            Arc::default(),
+            Arc::new(Mutex::new(TerminalTheme::default_for(
+                gpui_kit::component::ThemeMode::Light,
+            ))),
+        );
+        events.send(TerminalTransportEvent::Started).unwrap();
+        (runtime, events, commands, ui)
+    }
+
+    fn screen_text(runtime: &TerminalRuntime) -> String {
+        let term = runtime.term.lock();
+        (0..term.screen_lines() as i32)
+            .map(|line| {
+                term.grid()[Line(line)]
+                    .into_iter()
+                    .filter(|cell| !cell.flags.contains(Flags::WIDE_CHAR_SPACER))
+                    .map(|cell| cell.c)
+                    .collect::<String>()
+                    .trim_end()
+                    .to_owned()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Wait for `done` to hold, two seconds at most.
+    fn eventually(mut done: impl FnMut() -> bool) -> bool {
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(2) {
+            if done() {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        false
+    }
+
+    /// The next command the transport got that is not a resize, if one
+    /// comes soon.
+    fn next_command(
+        commands: &mpsc::Receiver<TerminalTransportCommand>,
+    ) -> Option<TerminalTransportCommand> {
+        loop {
+            match commands.recv_timeout(Duration::from_millis(300)) {
+                Ok(TerminalTransportCommand::Resize(_)) => {}
+                Ok(command) => return Some(command),
+                Err(_) => return None,
+            }
+        }
+    }
+
+    const SZ_STARTS: &[u8] = b"rz\r**\x18B00000000000000\r\x8a\x11";
+
+    #[test]
+    fn sz_asks_for_a_folder_and_keeps_the_keys_but_ctrl_c() {
+        let (runtime, events, commands, ui) = piped();
+        events
+            .send(TerminalTransportEvent::Output(
+                [b"$ sz notes.txt\r\n".as_slice(), SZ_STARTS].concat(),
+            ))
+            .unwrap();
+        let asked = ui
+            .iter()
+            .find(|event| matches!(event.kind, TerminalUiEventKind::ZmodemAsk(_)));
+        assert!(matches!(
+            asked.map(|event| event.kind),
+            Some(TerminalUiEventKind::ZmodemAsk(ZmodemDirection::Download))
+        ));
+        assert!(runtime.transferring());
+        // The header is not for the screen.
+        assert_eq!(screen_text(&runtime).lines().next(), Some("$ sz notes.txt"));
+        assert!(!screen_text(&runtime).contains("B00"));
+
+        // Keys go nowhere meanwhile; Ctrl+C cancels.
+        runtime.write(b"ls".to_vec());
+        runtime.write(b"\x03".to_vec());
+        match next_command(&commands) {
+            Some(TerminalTransportCommand::WriteData(bytes)) => {
+                assert!(bytes.starts_with(&[0x18; 10]));
+            }
+            other => panic!("expected the cancel, got {other:?}"),
+        }
+        assert!(eventually(|| screen_text(&runtime).contains("已取消")));
+        assert!(eventually(|| !runtime.transferring()));
+        runtime.write(b"ls".to_vec());
+        assert!(matches!(
+            next_command(&commands),
+            Some(TerminalTransportCommand::Write(bytes)) if bytes == b"ls"
+        ));
+    }
+
+    #[test]
+    fn a_folder_chosen_starts_the_download_and_a_lost_connection_ends_it() {
+        let folder = tempfile::tempdir().unwrap();
+        let (runtime, events, commands, ui) = piped();
+        events
+            .send(TerminalTransportEvent::Output(SZ_STARTS.to_vec()))
+            .unwrap();
+        assert!(ui.iter().any(|event| matches!(
+            event.kind,
+            TerminalUiEventKind::ZmodemAsk(ZmodemDirection::Download)
+        )));
+        runtime
+            .zmodem
+            .try_send(ZmodemControl::Reply(ZmodemReply::Folder(
+                folder.path().to_path_buf(),
+            )))
+            .unwrap();
+        match next_command(&commands) {
+            // ZRINIT: ready to receive.
+            Some(TerminalTransportCommand::WriteData(bytes)) => {
+                assert!(bytes.starts_with(b"**\x18B01"));
+            }
+            other => panic!("expected ZRINIT, got {other:?}"),
+        }
+        assert!(eventually(
+            || screen_text(&runtime).contains("正在用 ZMODEM 下载到")
+        ));
+
+        events
+            .send(TerminalTransportEvent::Failed("断了".into()))
+            .unwrap();
+        assert!(eventually(
+            || screen_text(&runtime).contains("传输中断：连接已断开")
+        ));
+        assert!(eventually(|| !runtime.transferring()));
+    }
+
     #[test]
     fn waiting_stops_at_the_deadline_but_not_before_what_has_come() {
         // Something comes in the end, so a wait past the deadline fails the
         // test rather than hangs it.
         let (late, receiver) = async_channel::unbounded();
+        let (control, controls) = async_channel::unbounded();
         thread::spawn(move || {
             thread::sleep(Duration::from_secs(1));
             let _ = late.send_blocking(0);
         });
         let soon = Instant::now() + Duration::from_millis(20);
-        assert!(matches!(receive(&receiver, Some(soon)), Received::Overdue));
+        assert!(matches!(
+            receive(&receiver, &controls, Some(soon)),
+            Received::Overdue
+        ));
         assert!(Instant::now() >= soon);
 
         let (sender, receiver) = async_channel::unbounded();
         sender.send_blocking(1).unwrap();
         let past = Instant::now();
-        assert!(matches!(receive(&receiver, Some(past)), Received::Event(1)));
+        assert!(matches!(
+            receive(&receiver, &controls, Some(past)),
+            Received::Event(1)
+        ));
         sender.send_blocking(2).unwrap();
-        assert!(matches!(receive(&receiver, None), Received::Event(2)));
+        assert!(matches!(
+            receive(&receiver, &controls, None),
+            Received::Event(2)
+        ));
+        // What the UI thread tells a transfer comes between events.
+        control.send_blocking('c').unwrap();
+        assert!(matches!(
+            receive(&receiver, &controls, None),
+            Received::Control('c')
+        ));
         drop(sender);
-        assert!(matches!(receive(&receiver, None), Received::Closed));
+        assert!(matches!(
+            receive(&receiver, &controls, None),
+            Received::Closed
+        ));
     }
 }

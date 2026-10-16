@@ -78,6 +78,10 @@ pub(crate) struct TelnetSession {
     /// The last data byte in was CR: a NUL after it is the NVT's way of
     /// sending a bare CR, not data.
     cr_in: bool,
+    /// The server has sent a CR followed by something else than NUL or
+    /// LF: it does not add the NVT's NUL (busybox's telnetd), and a NUL
+    /// after a CR is data. Without this, a ZMODEM download loses them.
+    bare_cr: bool,
     /// The last byte out was a CR sent as CR LF: an LF or NUL right after
     /// it (a pasted CR LF) is not a second line.
     cr_out: bool,
@@ -103,6 +107,7 @@ impl TelnetSession {
             parse: Parse::Data,
             sb: Vec::new(),
             cr_in: false,
+            bare_cr: false,
             cr_out: false,
             columns,
             rows,
@@ -228,8 +233,11 @@ impl TelnetSession {
     }
 
     fn data(&mut self, byte: u8, data: &mut Vec<u8>) {
-        if std::mem::take(&mut self.cr_in) && byte == 0 && self.him[BINARY as usize] != Opt::Yes {
-            return;
+        if std::mem::take(&mut self.cr_in) {
+            if byte == 0 && !self.bare_cr && self.him[BINARY as usize] != Opt::Yes {
+                return;
+            }
+            self.bare_cr |= byte != 0 && byte != b'\n';
         }
         self.cr_in = byte == b'\r';
         data.push(byte);
@@ -474,6 +482,15 @@ mod tests {
         assert_eq!(session.receive(b"\0y").data, b"y");
         // In binary, a NUL is data.
         session.receive(&[IAC, WILL, BINARY]);
+        assert_eq!(session.receive(b"\r\0").data, b"\r\0");
+    }
+
+    #[test]
+    fn a_server_that_adds_no_nul_keeps_its_nuls() {
+        let mut session = started();
+        assert_eq!(session.receive(b"a\r\0b").data, b"a\rb");
+        // busybox's telnetd sends a CR as it is: a progress line, say.
+        assert_eq!(session.receive(b"\r50%").data, b"\r50%");
         assert_eq!(session.receive(b"\r\0").data, b"\r\0");
     }
 

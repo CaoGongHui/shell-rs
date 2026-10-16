@@ -19,7 +19,7 @@ use crate::shared::{ClosableTabTitle, close_tab_items};
 
 use super::{
     LocalTerminalId, SharedTerminalTransportFactory, TerminalEvent, TerminalLifecycle,
-    TerminalNotice, TerminalStatus, TerminalView,
+    TerminalNotice, TerminalStatus, TerminalView, ZmodemDirection, ZmodemReply,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,6 +28,9 @@ pub enum LocalTerminalPanelEvent {
     Closed(LocalTerminalId),
     StatusChanged(LocalTerminalId),
     Notice(LocalTerminalId, TerminalNotice),
+    /// `rz` or `sz` started (a shell of this computer can ssh on): the
+    /// user chooses, and the answer goes to [`LocalTerminalPanel::zmodem_reply`].
+    ZmodemAsk(LocalTerminalId, ZmodemDirection),
 }
 
 /// A local login-shell Dock tab backed by the shared terminal view.
@@ -59,11 +62,18 @@ impl LocalTerminalPanel {
                 cx.emit(LocalTerminalPanelEvent::StatusChanged(id));
                 cx.notify();
             }),
-            cx.subscribe(&terminal, move |_, _, event: &TerminalEvent, cx| {
-                if let TerminalEvent::Notice(notice) = event {
-                    cx.emit(LocalTerminalPanelEvent::Notice(id, notice.clone()));
-                }
-            }),
+            cx.subscribe(
+                &terminal,
+                move |_, _, event: &TerminalEvent, cx| match event {
+                    TerminalEvent::Notice(notice) => {
+                        cx.emit(LocalTerminalPanelEvent::Notice(id, notice.clone()));
+                    }
+                    TerminalEvent::ZmodemAsk(direction) => {
+                        cx.emit(LocalTerminalPanelEvent::ZmodemAsk(id, *direction));
+                    }
+                    _ => {}
+                },
+            ),
         ];
 
         Self {
@@ -86,6 +96,11 @@ impl LocalTerminalPanel {
 
     pub fn terminal(&self) -> &Entity<TerminalView> {
         &self.terminal
+    }
+
+    /// What the user chose for the transfer `rz` or `sz` started.
+    pub fn zmodem_reply(&self, reply: ZmodemReply, cx: &App) {
+        self.terminal.read(cx).zmodem_reply(reply, cx);
     }
 
     pub fn status(&self, cx: &App) -> TerminalStatus {

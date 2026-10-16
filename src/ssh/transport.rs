@@ -167,7 +167,7 @@ impl SshTerminalTransport {
             }
             tokio::select! {
                 command = io_rx.recv() => match command {
-                    Some(TerminalTransportCommand::Write(bytes)) => {
+                    Some(TerminalTransportCommand::Write(bytes) | TerminalTransportCommand::WriteData(bytes)) => {
                         channel.data_bytes(bytes).await.map_err(|_| anyhow!(t!("ssh.terminal.write_failed")))?;
                     }
                     Some(TerminalTransportCommand::Resize(size)) => {

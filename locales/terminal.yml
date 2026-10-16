@@ -208,3 +208,51 @@ terminal.pty.exit_status:
 terminal.notice.enter_reconnect:
   zh-CN: 按 Enter 重新连接
   en: Press Enter to reconnect
+terminal.zmodem.uploading:
+  zh-CN: 正在用 ZMODEM 上传，按 Ctrl+C 取消
+  en: Uploading with ZMODEM. Press Ctrl+C to cancel.
+terminal.zmodem.downloading:
+  zh-CN: 正在用 ZMODEM 下载到 %{folder}，按 Ctrl+C 取消
+  en: Downloading with ZMODEM to %{folder}. Press Ctrl+C to cancel.
+terminal.zmodem.uploaded:
+  zh-CN: "%{name}  100%  %{size}  %{rate}  已上传"
+  en: "%{name}  100%  %{size}  %{rate}  Uploaded"
+terminal.zmodem.downloaded:
+  zh-CN: "%{name}  100%  %{size}  %{rate}  已下载"
+  en: "%{name}  100%  %{size}  %{rate}  Downloaded"
+terminal.zmodem.skipped:
+  zh-CN: "%{name}  已跳过：远端已有同名文件"
+  en: "%{name}  Skipped: the other end already has a file with this name"
+terminal.zmodem.file_failed:
+  zh-CN: 无法上传 %{name}：%{error}
+  en: "Couldn’t upload %{name}: %{error}"
+terminal.zmodem.too_large:
+  zh-CN: 文件超过 4 GB，ZMODEM 传不了
+  en: The file is larger than 4 GB, more than ZMODEM can send
+terminal.zmodem.no_answer:
+  zh-CN: 传输失败：对方没有回应
+  en: "Transfer failed: the other end stopped answering."
+terminal.zmodem.peer_cancelled:
+  zh-CN: 对方取消了传输
+  en: The other end cancelled the transfer.
+terminal.zmodem.corrupt:
+  zh-CN: 传输失败：收到的数据有误
+  en: "Transfer failed: the data arrived corrupted."
+terminal.zmodem.read_failed:
+  zh-CN: 传输失败：无法读取 %{path}：%{error}
+  en: "Transfer failed: couldn’t read %{path}: %{error}"
+terminal.zmodem.write_failed:
+  zh-CN: 传输失败：无法写入 %{path}：%{error}
+  en: "Transfer failed: couldn’t write %{path}: %{error}"
+terminal.zmodem.disconnected:
+  zh-CN: 传输中断：连接已断开
+  en: "Transfer stopped: the connection was lost."
+terminal.zmodem.protocol:
+  zh-CN: 传输失败：%{error}
+  en: "Transfer failed: %{error}"
+terminal.zmodem.cancelled:
+  zh-CN: 已取消
+  en: Cancelled
+terminal.zmodem.busy:
+  zh-CN: 终端正在用 ZMODEM 传输文件
+  en: The terminal is transferring files with ZMODEM.

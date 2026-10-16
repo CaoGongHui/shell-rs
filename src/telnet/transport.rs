@@ -180,6 +180,11 @@ impl TelnetTransport {
                             break;
                         }
                     }
+                    // Neither auto login nor the line edited here: the
+                    // bytes are a file transfer's, not keys.
+                    Some(TerminalTransportCommand::WriteData(bytes)) => {
+                        send(&mut writer, &session.send(&bytes)).await?;
+                    }
                     Some(TerminalTransportCommand::Resize(size)) => {
                         let bytes = session.resize(dimension(size.columns()), dimension(size.rows()));
                         send(&mut writer, &bytes).await?;
@@ -448,6 +453,59 @@ mod tests {
                 TerminalTransportEvent::Output(bytes) if bytes.contains(&b'x')
             )),
             "no local echo once the server echoes"
+        );
+    }
+
+    #[test]
+    fn a_transfers_bytes_go_past_the_line_edited_here() {
+        let Some(listener) = listen() else { return };
+        let port = listener.local_addr().unwrap().port();
+        // What ZMODEM sends, with what the line editing would take: a
+        // backspace, DEL, ^U, and IAC, which Telnet doubles.
+        let data = [0x18, b'B', 0x08, 0x7f, 0x15, 0xff, b'*'];
+        let device = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut seen = Vec::new();
+            // No negotiation and no echo: the line is edited here.
+            socket.write_all(b"$ ").unwrap();
+            let mut buffer = [0; 1024];
+            while !seen.contains(&b'*') {
+                let count = socket.read(&mut buffer).unwrap();
+                assert!(count > 0, "closed; got {seen:?}");
+                seen.extend_from_slice(&buffer[..count]);
+            }
+            seen
+        });
+
+        let draft = HostDraft::telnet("device", "127.0.0.1", port, None);
+        let (commands, received, runner) = launch(draft, Arc::default());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut output = Vec::new();
+        while !output.ends_with(b"$ ") {
+            assert!(Instant::now() < deadline);
+            match received.try_recv() {
+                Ok(TerminalTransportEvent::Output(bytes)) => output.extend(bytes),
+                Ok(_) => {}
+                Err(_) => std::thread::sleep(Duration::from_millis(10)),
+            }
+        }
+        commands
+            .send(TerminalTransportCommand::WriteData(data.to_vec()))
+            .unwrap();
+        let seen = device.join().unwrap();
+        assert!(
+            seen.ends_with(&[0x18, b'B', 0x08, 0x7f, 0x15, 0xff, 0xff, b'*']),
+            "{seen:?}"
+        );
+        drop(commands);
+        runner.join().unwrap().unwrap();
+        // Nothing of it shown here.
+        assert!(
+            std::iter::from_fn(|| received.try_recv().ok())
+                .all(|event| !matches!(event, TerminalTransportEvent::Output(_))),
         );
     }
 }

@@ -91,6 +91,9 @@ semver = { version = "1", features = ["serde"] }
 # plugin reads them.
 os_info = { version = "3", default-features = false }
 serde_yaml_ng = "0.10.0"
+# ZMODEM (`rz` / `sz` in a terminal): the protocol only, driven by the
+# terminal's parser thread. Pinned: its 0.x API changes between releases.
+zmodem2 = "=0.7.3"
 
 [target.'cfg(unix)'.dependencies]
 # `access(2)`: whether the folder ShellRS runs from can take its update.

@@ -64,6 +64,10 @@ pub enum Counter {
     /// A batch of transfers queued in an SFTP tab.
     Upload,
     Download,
+    /// Files uploaded or downloaded in a terminal with ZMODEM (`rz` /
+    /// `sz`), files dropped on one included.
+    ZmodemUpload,
+    ZmodemDownload,
     /// A file opened in the editor.
     EditorLocal,
     EditorRemote,
@@ -106,7 +110,7 @@ pub enum Counter {
 }
 
 impl Counter {
-    pub const ALL: [Counter; 51] = [
+    pub const ALL: [Counter; 53] = [
         Self::Ssh,
         Self::SshJump,
         Self::SshProxy,
@@ -126,6 +130,8 @@ impl Counter {
         Self::ForwardDynamic,
         Self::Upload,
         Self::Download,
+        Self::ZmodemUpload,
+        Self::ZmodemDownload,
         Self::EditorLocal,
         Self::EditorRemote,
         Self::PreviewImage,
@@ -181,6 +187,8 @@ impl Counter {
             Self::ForwardDynamic => "forward_dynamic",
             Self::Upload => "upload",
             Self::Download => "download",
+            Self::ZmodemUpload => "zmodem_upload",
+            Self::ZmodemDownload => "zmodem_download",
             Self::EditorLocal => "editor_local",
             Self::EditorRemote => "editor_remote",
             Self::PreviewImage => "preview_image",

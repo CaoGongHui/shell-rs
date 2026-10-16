@@ -262,3 +262,12 @@ workspace.update.failed_title:
 workspace.update.failed:
   zh-CN: 没有装上 %{to}，ShellRS 仍是 %{from}。可以到官网下载安装。
   en: "%{to} wasn’t installed, so ShellRS is still %{from}. You can download it from the website."
+workspace.zmodem.choose_files:
+  zh-CN: 上传
+  en: Upload
+workspace.zmodem.choose_folder:
+  zh-CN: 保存到此处
+  en: Save here
+workspace.zmodem.files_only:
+  zh-CN: ZMODEM 只能上传文件，文件夹请用 SFTP 上传
+  en: ZMODEM uploads only files. Upload folders with SFTP.

@@ -42,7 +42,7 @@ ShellRS（crate 与二进制都叫 `shellrs`）是 Xshell / WinSCP 式的 SSH �
   - 对话框：地址加端口一行（默认 23；新建主机时端口没改过就随协议在 22 ↔ 23 间切换）、「Telnet 自动登录」复选框（默认关）。勾上后：认证方式「手动输入 / 使用凭据」；手动是用户名（可选）和密码（可选）一行；凭据只列密码凭据（加主机当前那条），用户名和密码都取自凭据，同 SSH（用户定的）；再下面用户名 / 密码提示文本一行，留空用常见提示。连接方式、分组、备注同 SSH。临时连接也能选 Telnet，密码只在内存。
   - 存法复用 SSH 的列：自动登录关 = `no-password`，手动 = `password`（用户名可空，密码在 `SecretRef::password(user, address, port)`），凭据 = `credential_id`。提示文本在 `Protocol::Telnet(TelnetSettings)` 和库里的 `telnet_user_prompt` / `telnet_pass_prompt`（NULL 是常见提示；列名避开 password，守卫测试要求）。凭据后来改成密钥 / Agent 时照旧挂着，只输入用户名（少见，不做释放或拒绝）。
   - 自动登录（`telnet/auto_login.rs`，纯逻辑）：只看光标所在行的结尾（去 ANSI、忽略行尾空白、不分大小写），输出停 100 ms 才答；默认提示 `login:`、`username:`、`user name:`、`password:`，填了就只认填的。先看密码提示（只问密码的设备直接给密码），每项最多一次；第二次出现用户名提示（登录失败）就停；用户敲了不以 ESC 开头的键就停（ESC 开头的是终端应答、方向键）。不弹框、不重试。
-  - 协议（`telnet/protocol.rs`，不碰 IO）：等服务器先协商（同 PuTTY 的被动模式：JPL Horizons 这类服务器收到抢先的选项字节会回显或出错；从不协商的服务器什么也收不到），再请求 WILL NAWS / TTYPE / SGA、DO SGA / ECHO（服务器已问过的不再问），BINARY 双向接受，其余拒绝，按简化的 RFC 1143 不回无变化的请求；TTYPE 报 `XTERM-256COLOR`；NAWS 随改大小发；回车 CR → CR LF（同 PuTTY 默认，粘贴的 `\r\n` 不翻倍）；收到 CR NUL → CR；「发送 Break」= `IAC BRK`；对方关闭算 `Exited{code: 0}`。
+  - 协议（`telnet/protocol.rs`，不碰 IO）：等服务器先协商（同 PuTTY 的被动模式：JPL Horizons 这类服务器收到抢先的选项字节会回显或出错；从不协商的服务器什么也收不到），再请求 WILL NAWS / TTYPE / SGA、DO SGA / ECHO（服务器已问过的不再问），BINARY 双向接受，其余拒绝，按简化的 RFC 1143 不回无变化的请求；TTYPE 报 `XTERM-256COLOR`；NAWS 随改大小发；回车 CR → CR LF（同 PuTTY 默认，粘贴的 `\r\n` 不翻倍）；收到 CR NUL → CR，但服务器发过 CR 后跟 NUL、LF 以外的字节就是不补 NUL 的（busybox 的 telnetd），从此 NUL 照收（`bare_cr`，否则 ZMODEM 下载丢字节）；「发送 Break」= `IAC BRK`；对方关闭算 `Exited{code: 0}`。
   - 本地回显（用户要的简单版，`telnet/local_line.rs`，纯逻辑）：服务器没答应回显（`WILL ECHO`）时同 PuTTY 的默认，在本地编辑一行：打的字显示出来，退格 / Ctrl+U 删（宽字符删两列），Enter 整行发出；Tab 算进行里，其余控制键（^C、^D）跟在这行后面立刻发；ESC 开头的写入（方向键、终端应答）原样发、不显示。服务器改成回显时，没发的那段立刻发出。自动登录输入的不显示。自己回显却不协商的设备会显示两遍，不做开关。
   - 连接方式同 SSH：路线走 `SshConnector::open_route`（直连 / 代理 / 跳板到任意 地址:端口，SSH 登录也从它开始），跳板用各自保存的登录、问答写明跳板名。Telnet 主机不能当跳板或转发的经由主机（`ssh_hosts` / `saved_ssh_host` 只认 SSH）。「测试连接」只走通路线（`ConnectionTester::test_telnet`），不试自动登录。
   - 终端是普通远程终端标签：回车重连、改设置下次连接时生效、「发送 Break」、复制 IP；没有 SFTP、「文件」、延迟、系统探测；右侧栏只有命令片段；图标是名称首字，悬停写「Telnet」。只按 UTF-8 显示。不做 `telnet://` 外部连接（用户定的）。
@@ -111,6 +111,14 @@ ShellRS（crate 与二进制都叫 `shellrs`）是 Xshell / WinSCP 式的 SSH �
 - **终端交互**：「选中复制」默认关；「右键行为」无动作 / 粘贴 / 显示菜单，默认显示菜单。
 - **标签连接状态**：远程终端和 SFTP 标签按自己的连接画图标：已连接是彩色的；连接中和断开时图标灰底灰图（`HostMark::connection_state`），标题文字也变灰（`ClosableTabTitle::connection_state`），图标的悬停说明加上状态（「Ubuntu · 未连接」）。原来图标右下角的黄 / 红小点已去掉（用户定的：彩色就是在线）。只在标签上变灰，主机列表、最近连接、快速连接、编辑器标签一律彩色。远程终端断开后（失败、退出、断开、取消认证）按无修饰的 Enter 在原标签按打开时的配置重连，本地终端不做。
 - **主机图标一律彩色**：没有品牌色的（未探测到系统的首字、macOS 和 AlmaLinux 的单色 logo）按地址（串口用设备路径）取色：`shared::mark_color`，FNV-1a 哈希对固定调色板取模，去掉首尾空白、不分大小写。调色板 13 色，都能放白字（对比度 ≥ 4.5），没有灰、红、黄（用户定的：绝不能灰，灰色留给离线）。哈希不能换成 std 的：颜色要跨版本不变。串口和 Telnet 主机不另画图标，同样是名称首字（用户定的），只是悬停说明写「串口」「Telnet」。
+- **ZMODEM（rz / sz）**（用户要的，同 Xshell、SecureCRT）：协议用 `zmodem2`（钉死版本，用户选的，不自己写），始终自动识别、不设开关。所有终端都识别（本地终端里 ssh 到别处也行，外部连接的堡垒机也行），`exec --terminal` 运行时不识别，传输时 `exec --terminal` 报 `terminal_busy`。
+  - 远端 `rz` 弹文件选择框（可多选），`sz` 每次弹文件夹选择框（用户定的；GPUI 的选择框给不了起始目录，打开在系统记住的位置），取消就发 CAN 终止远端。
+  - 进度写在终端里（用户定的，同 SecureCRT，不加界面元素）：一行进度原地刷新，每个文件传完留一行结果。传输时键只认 Ctrl+C（取消），其余不发给远端。
+  - 拖文件到远程终端（用户要的）：替用户输入 `rz` 并回车，10 秒内 rz 应答就传拖进来的文件、不弹框；文件夹跳过，只有文件夹时通知。
+  - 下载不覆盖，同名加「 (1)」，没收完的删掉；上传给 lrzsz 的 `rz` 时它不覆盖已有文件（ZSKIP），显示「已跳过」。
+  - lrzsz 的 `sz` 流式发送时隔一阵才读回传（几百毫秒），被取消后还会再发一会儿：本端停掉的下载进入「排空」，吞掉它的数据，输出静 0.5 秒结束，最后一个子包结尾和 CRC-32 之后的文字（常和数据同一块到的提示符）留给屏幕；再按 Ctrl+C 不等。CAN 只发一次：再发的会在 `sz` 退出后落到 shell 上，成了输入的 `^X`。在真 lrzsz 上验证过。
+  - Telnet 不协商 BINARY（简单优先）：zmodem2 发出的数据把 CR、0x7f、0xff 都转义了，只有 hex 帧尾的 CR 被改成 CR LF，接收方当垃圾跳过；收的方向上，按标准补 NUL 的服务器发 CR NUL，不补的（busybox 的 telnetd）由协议层认出来、不再去 NUL（见 Telnet 一条）。在 busybox telnetd 上双向验证过。
+  - 统计 `zmodem_upload` / `zmodem_download`（选好文件或文件夹、拖放成功时）。不做 XMODEM / YMODEM。
 - **终端通知**：只做程序请求的（OSC 9 / 777）和响铃，不做 OSC 133 长命令通知：那要每台服务器装 shell 集成，收益不抵成本。（OSC 7 目录报告是另一回事：只给「文件」跟随用，用户同意后才往服务器写配置。）不在前台发系统通知，在前台而终端在别的标签发应用内通知；响铃在终端就在眼前时不提醒。
 - **界面字号**（issue #24）：「外观 › 常规」第三项，下拉框 12–20 每 1 px 一档，默认 16，即 gpui-kit 的默认、原来的大小。它就是 gpui-kit 主题的 `font_size`，界面的 rem 随它缩放（`settings::apply` 在换主题之后设）；终端字号另设。终端外的 ⌘= / ⌘- / ⌘0 直接改这个设置（用户定的，以前是不保存的临时缩放）。
 - **主题**：「应用外观」（浅色 / 深色 / 跟随系统）决定深浅；「外观 › 主题」左右两栏里浅色、深色各选一套，按当前外观生效。组里第一项「界面跟随主题」默认关闭：界面是中性的灰（浅色是 gpui-kit 默认主题，深色见下条），只有终端按主题配色；打开后界面也按主题配色。用户试过默认跟随，觉得中性界面更合适，别改回去。
@@ -141,6 +149,7 @@ cargo test --test ui                        # 只跑 UI 集成测试
 cargo test --test ui new_host -- --nocapture   # 按名称片段跑单个 UI 测试
 cargo test --test cli_bin                   # 以子进程运行 shellrs-cli 的端到端测试（Windows CI 也跑）
 cargo test --lib terminal::run -- --include-ignored   # exec --terminal 对 Docker 里的真实 shell（CI：shells.yml）
+cargo test --lib terminal::zmodem -- --include-ignored   # ZMODEM 对 Docker 里的 lrzsz（debian:stable-slim，要联网装包；CI：shells.yml）
 cargo test --lib update::                   # 在线升级；装了 minisign 和 jq 时还验证发布脚本签出的清单客户端认
 cargo clippy --all-targets -- -D warnings   # 必须无警告
 cargo fmt --check
@@ -175,7 +184,7 @@ cargo test -- --ignored                     # 会读写真实钥匙串的测试�
   - 代理握手；外部 CLI 用的 `run_command`。
 - `telnet/`：Telnet 主机的终端传输（`TelnetTransportProvider`）、不碰 IO 的协议状态机（`protocol.rs`）、自动登录（`auto_login.rs`）和服务器不回显时的本地行编辑（`local_line.rs`）。
 - `serial/`：串口主机的终端传输（`SerialTransportProvider`，读线程加命令循环，同 `local_pty.rs`）和本机串口列表（`available_ports`）。
-- `terminal/`：本地 PTY 和它跑的 shell（`local_shell.rs`：命令行拆分、已安装的 shell、Windows 的默认 shell）、驱动 `alacritty_terminal` 的引擎、`TerminalView`（网格、选区、查找、清屏）、关键字高亮（`highlight.rs`）、终端字体全局量、右侧栏工具共用的 `ExecTarget`、目录报告（`directory.rs`：OSC 7 / 1337 的解析）和「文件」目录跟随的远端脚本（`directory_setup.rs`：检测、安装、bash / zsh 片段）。
+- `terminal/`：本地 PTY 和它跑的 shell（`local_shell.rs`：命令行拆分、已安装的 shell、Windows 的默认 shell）、驱动 `alacritty_terminal` 的引擎、`TerminalView`（网格、选区、查找、清屏）、关键字高亮（`highlight.rs`）、终端字体全局量、右侧栏工具共用的 `ExecTarget`、目录报告（`directory.rs`：OSC 7 / 1337 的解析）和「文件」目录跟随的远端脚本（`directory_setup.rs`：检测、安装、bash / zsh 片段），以及 ZMODEM（`zmodem.rs`：认出 rz / sz 的帧头、驱动 zmodem2、读写文件、进度行，纯逻辑，测试在 `zmodem_tests.rs`）。
 - `sftp/`：可注入的传输和本地目录接口、`RemotePath`、`RemoteFs` 协议适配、worker（批次、三次重连、空闲断网检测），以及：
   - `upload.rs` / `download.rs`：断点续传，续传记录由 `journal.rs` 管；
   - `operations.rs`：删除、重命名、新建、改权限；
@@ -423,6 +432,12 @@ cargo test -- --ignored                     # 会读写真实钥匙串的测试�
 
 ### 终端
 
+- **ZMODEM 先于 alacritty 拿到输出**：解析线程的 `Parser` 把每块输出交给 `Zmodem::feed`，它回的 `Fed` 里输出和进度行按顺序排（一块里可能有帧头前的文字和传完后的提示符），`Parser::transfer` 依次画出、把回给远端的发出去。
+  - 回给远端的是 `TerminalTransportCommand::WriteData`：SSH、串口、本地 PTY 同 `Write`，Telnet 绕过自动登录和本地行编辑（行编辑会吞掉退格、DEL、^U）。
+  - UI → 解析线程走 `ZmodemControl` 通道（选择的结果、Ctrl+C、拖放的文件），`receive` 同时等它、传输事件和截止时间（同步更新的和传输的超时，取早的）。
+  - 传输期间（含等用户选择、排空）`transferring` 置位，`TerminalRuntime::write` 只认里面的 0x03，其余丢掉。
+  - zmodem2 的坑：对方的 CAN×5 它不认（自己数）；Event 先于 WriteWire 弹出，会话结束后还要把 ZFIN / `OO` 写完；帧尾的 `\r\n` 不归它，别上屏；收到 `sz` 的帧头后只建 Receiver（它自己发 ZRINIT），别再喂那个帧头，否则 `sz` 把第一个文件报两次；坏的帧头只回 ZNAK（zmodem2 的发送方不理），子包溢出这类错误它恢复不了，所以收的一方除了帧头校验错一律立即失败。
+  - 真 lrzsz 的测试在 `zmodem_tests.rs` 的 `lrzsz`（`#[ignore]`）：Docker 里的 `debian:stable-slim` 装 lrzsz（Alpine 主仓库没有），Telnet 那个另装 `busybox-static` 起 telnetd（Debian 的 `busybox` 没有它）。容器起名、测试完删掉：杀掉 `docker run` 不会停容器。
 - **查找条必须是终端 `div` 的兄弟**，不能是子元素，否则输入会被发给 shell；它还要 `.occlude()`。
 - **清屏只在本地模拟器里做**，全屏程序运行时不做。终端里的 ⌘K 是清屏，比全局的 `FocusSearch` 深一层，所以优先。
 - **本地终端每次打开、重启都向 `LocalTerminalTransportProvider` 要新的 factory**（同远程的 `factory_for`），带上当时设置里的 `LocalShell`；UI 测试注入 `FixedLocalTerminalTransportProvider`，它记下每次要的 shell。命令行在传输线程上解析（要查文件系统），拆不开（引号没配对）或起不来都报在终端里，报错里写着用户写的命令。

@@ -1,7 +1,10 @@
 # `shellrs exec --terminal` against the shells it types into: bash 4.2 to
 # 5.2, dash, busybox ash and a bash started as sh, each in a container on a
-# real terminal (`terminal::run::tests::shells`). The Macs this is
-# developed on run it only with Docker Desktop up.
+# real terminal (`terminal::run::tests::shells`); and ZMODEM against
+# lrzsz's `sz` and `rz`, on a terminal and through busybox's telnetd
+# (`terminal::zmodem::tests::lrzsz`, which installs them from Debian's
+# packages). The Macs this is developed on run it only
+# with Docker Desktop up.
 #
 # A push runs it when the run's code, the test helpers or the dependencies
 # change; run it by hand otherwise (Actions › shells › Run workflow).
@@ -45,3 +48,4 @@ jobs:
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --lib terminal::run -- --include-ignored
+      - run: cargo test --lib terminal::zmodem -- --include-ignored
