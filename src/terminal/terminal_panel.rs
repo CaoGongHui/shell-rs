@@ -14,7 +14,7 @@ use crate::app::{
     DisconnectTerminal, EditHost, OpenExplorer, ReconnectTerminal, RenameTerminal, SendBreak,
 };
 use crate::connection::{ConnectionPrompt, ConnectionPromptReply};
-use crate::host::{ConnectionState, HostId, HostOs, HostStore, ProtocolKind};
+use crate::host::{ConnectionState, Host, HostConnection, HostId, HostOs, HostStore, ProtocolKind};
 use crate::i18n::t;
 use crate::shared::{ClosableTabTitle, HostMark, LatencyLabel, RenamableTab, close_tab_items};
 
@@ -38,18 +38,22 @@ pub enum TerminalPanelEvent {
 }
 
 /// A remote-host Dock panel backed by the shared terminal engine: an SSH
-/// host's, a Telnet host's or a serial host's. The transport is created from
-/// the latest saved host on every connection.
+/// host's, a Telnet host's or a serial host's.
 pub struct TerminalPanel {
     id: RemoteTerminalId,
     host_id: HostId,
     store: Entity<HostStore>,
     terminal: Entity<TerminalView>,
     transports: HostTerminalTransports,
-    /// What the host is: only SSH has SFTP, only a serial port has no
-    /// address to copy, and only SSH no break to send. A host's protocol
-    /// never changes.
-    protocol: ProtocolKind,
+    /// The host as it was when the tab opened: what the tab shows, what
+    /// it offers (only SSH has SFTP, only a serial port no address to copy)
+    /// and what it connects with, every reconnection included. Editing or
+    /// deleting the host leaves it alone: a new tab takes the new settings.
+    /// Only the system this tab's own connections find is written in.
+    host: Host,
+    connection: HostConnection,
+    /// Opened from a link (外部连接): nothing beside the terminal.
+    external: bool,
     tab_group: Option<WeakEntity<TabGroup>>,
     /// A title the user gave this tab, to tell apart several connections to
     /// the same host. Lives as long as the tab, like the rest of the layout.
@@ -66,14 +70,14 @@ impl TerminalPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let (host, connection) = {
+        let (host, connection, external) = {
             let store = store.read(cx);
             let host = store
                 .host(host_id)
                 .cloned()
                 .expect("terminal hosts must exist in the store");
             let connection = store.connection_of(&host);
-            (host, connection)
+            (host, connection, store.is_external(host_id))
         };
         let protocol = host.kind();
         let terminal = cx.new(|cx| {
@@ -85,7 +89,13 @@ impl TerminalPanel {
                 window,
                 cx,
             );
-            terminal.set_menu_items(remote_menu_items(id, host_id, protocol, store.clone()));
+            terminal.set_menu_items(remote_menu_items(
+                id,
+                host_id,
+                protocol,
+                host.address_is_ip(),
+                store.clone(),
+            ));
             terminal.set_reconnect_action(ReconnectTerminal(id), cx);
             terminal
         });
@@ -109,6 +119,7 @@ impl TerminalPanel {
                         ));
                     }
                     TerminalEvent::HostOsDetected(os) => {
+                        this.host.os = Some(*os);
                         cx.emit(TerminalPanelEvent::HostOsDetected(this.host_id, *os));
                     }
                     TerminalEvent::Notice(notice) => {
@@ -130,7 +141,9 @@ impl TerminalPanel {
             store,
             terminal,
             transports,
-            protocol,
+            host,
+            connection,
+            external,
             tab_group: None,
             custom_title: None,
             _subscriptions: subscriptions,
@@ -145,6 +158,21 @@ impl TerminalPanel {
         self.host_id
     }
 
+    /// The host as the tab took it (see the field).
+    pub fn host(&self) -> &Host {
+        &self.host
+    }
+
+    pub fn connection(&self) -> &HostConnection {
+        &self.connection
+    }
+
+    /// Whether only the terminal runs on its connection: a link's, a
+    /// Telnet host's or a serial host's.
+    pub fn shell_only(&self) -> bool {
+        self.external || !self.host.is_ssh()
+    }
+
     pub fn tab_group(&self) -> Option<WeakEntity<TabGroup>> {
         self.tab_group.clone()
     }
@@ -154,11 +182,11 @@ impl TerminalPanel {
         TabMenu {
             id: self.id,
             host_id: self.host_id,
-            host_is_ip: store
-                .host(self.host_id)
-                .is_some_and(|host| host.address_is_ip()),
-            protocol: self.protocol,
+            host_is_ip: self.host.address_is_ip(),
+            protocol: self.host.kind(),
             running: self.lifecycle(cx) == TerminalLifecycle::Running,
+            host_exists: store.host(self.host_id).is_some(),
+            host_is_ssh: store.host(self.host_id).is_some_and(|host| host.is_ssh()),
             editable: !store.is_temporary(self.host_id),
             group: self.tab_group.clone(),
             panel: cx.entity_id(),
@@ -173,16 +201,25 @@ impl TerminalPanel {
         self.terminal.read(cx).lifecycle(cx)
     }
 
+    /// Where this tab's own connection stands.
+    pub fn connection_state(&self, cx: &App) -> ConnectionState {
+        match self.lifecycle(cx) {
+            TerminalLifecycle::Starting => ConnectionState::Connecting,
+            TerminalLifecycle::Running => ConnectionState::Connected,
+            TerminalLifecycle::Exited { .. }
+            | TerminalLifecycle::Failed(_)
+            | TerminalLifecycle::Closing => ConnectionState::Disconnected,
+        }
+    }
+
     /// The terminal's state and size, for the window's status bar.
     pub fn status(&self, cx: &App) -> TerminalStatus {
         self.terminal.read(cx).status(cx)
     }
 
+    /// Connect again as the tab first did.
     pub fn reconnect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(connection) = self.store.read(cx).connection(self.host_id) else {
-            return;
-        };
-        let factory = self.transports.factory_for(&connection);
+        let factory = self.transports.factory_for(&self.connection);
         self.terminal.update(cx, |terminal, cx| {
             terminal.restart_with_factory(factory, cx)
         });
@@ -198,7 +235,7 @@ impl TerminalPanel {
 
     /// 发送 Break, for a Telnet or serial host's terminal.
     pub fn send_break(&self, cx: &App) {
-        if self.protocol.sends_break() {
+        if self.host.kind().sends_break() {
             self.terminal.read(cx).send_break(cx);
         }
     }
@@ -241,12 +278,9 @@ impl BasePanel for TerminalPanel {
         if !active {
             return;
         }
-        let id = self.host_id;
-        self.store
-            .update(cx, |store, cx| store.set_active(Some(id), cx));
         let focus = self.terminal.read(cx).focus_handle();
         window.focus(&focus, cx);
-        cx.emit(TerminalPanelEvent::Activated(self.id, id));
+        cx.emit(TerminalPanelEvent::Activated(self.id, self.host_id));
     }
 
     fn on_added_to(&mut self, group: WeakEntity<TabGroup>, _: &mut Window, _: &mut Context<Self>) {
@@ -265,26 +299,16 @@ impl BasePanel for TerminalPanel {
 impl Panel for TerminalPanel {
     fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let id = self.id;
-        let host = self.store.read(cx).host(self.host_id);
-        let (address, os) = (
-            host.map(|host| host.address.clone()).unwrap_or_default(),
-            host.and_then(|host| host.os),
-        );
+        let (address, os) = (self.host.address.clone(), self.host.os);
         let tab_menu = self.tab_menu(cx);
-        let state = match self.lifecycle(cx) {
-            TerminalLifecycle::Starting => ConnectionState::Connecting,
-            TerminalLifecycle::Running => ConnectionState::Connected,
-            TerminalLifecycle::Exited { .. }
-            | TerminalLifecycle::Failed(_)
-            | TerminalLifecycle::Closing => ConnectionState::Disconnected,
-        };
+        let state = self.connection_state(cx);
         let mark = HostMark::new(
             ("terminal-tab-os", id.0),
             self.default_title(cx),
             address,
             os,
         )
-        .protocol(self.protocol)
+        .protocol(self.host.kind())
         .connection_state(state)
         .small();
         ClosableTabTitle::new(("terminal-tab", id.0), mark, self.tab_title(cx))
@@ -308,7 +332,14 @@ impl Panel for TerminalPanel {
         let host_id = self.host_id;
         let terminal_id = self.id;
         let reconnect_dispatch = self.focus_handle(cx);
-        let sftp = self.protocol.is_ssh().then(|| {
+        // SFTP is a new connection to the host as it is now: none once it
+        // is gone or no longer an SSH host.
+        let offers_sftp = self
+            .store
+            .read(cx)
+            .host(self.host_id)
+            .is_some_and(|host| host.is_ssh());
+        let sftp = offers_sftp.then(|| {
             Button::new(("sftp", terminal_id.0))
                 .icon(Icon::new(CatalogIcon::FolderTree))
                 .label("SFTP")
@@ -342,25 +373,24 @@ impl Panel for TerminalPanel {
 
 /// What a remote terminal adds to its context menu: copying the host's
 /// address and ID below 复制, and the connection's commands at the bottom.
-/// Only an SSH host has SFTP to open, and a serial host no address to copy.
+/// Only an SSH host has SFTP to open, and a serial host no address to copy;
+/// a deleted host has neither.
 fn remote_menu_items(
     id: RemoteTerminalId,
     host_id: HostId,
     protocol: ProtocolKind,
+    address_is_ip: bool,
     store: Entity<HostStore>,
 ) -> TerminalMenuItems {
     let copy = Rc::new(move |menu: PopupMenu, cx: &App| {
         // Named after what the address is, as in the tab's menu.
-        let copy_host = if store
-            .read(cx)
-            .host(host_id)
-            .is_some_and(|host| host.address_is_ip())
-        {
+        let copy_host = if address_is_ip {
             t!("terminal.remote.copy_ip")
         } else {
             t!("terminal.remote.copy_host_name")
         };
-        menu.when(protocol.has_address(), |menu| {
+        let exists = store.read(cx).host(host_id).is_some();
+        menu.when(protocol.has_address() && exists, |menu| {
             menu.menu_with_icon(
                 copy_host,
                 Icon::new(CatalogIcon::ClipboardCopy),
@@ -413,6 +443,12 @@ struct TabMenu {
     protocol: ProtocolKind,
     /// Whether the terminal is connected, which a break needs.
     running: bool,
+    /// The host is still there: deleted, it has nothing to connect to,
+    /// open SFTP on, copy or edit.
+    host_exists: bool,
+    /// It is an SSH host now, which a new SFTP connection needs whatever
+    /// the tab's own protocol.
+    host_is_ssh: bool,
     /// A saved host; a temporary one has nothing to edit.
     editable: bool,
     group: Option<WeakEntity<TabGroup>>,
@@ -420,13 +456,10 @@ struct TabMenu {
 }
 
 impl RenamableTab for TerminalPanel {
-    /// The host's name, as the tab shows it without a title of its own.
-    fn default_title(&self, cx: &App) -> SharedString {
-        self.store
-            .read(cx)
-            .host(self.host_id)
-            .map(|host| host.name.clone())
-            .unwrap_or_else(|| t!("terminal.remote.fallback_title"))
+    /// The host's name when the tab opened, as the tab shows it without a
+    /// title of its own.
+    fn default_title(&self, _: &App) -> SharedString {
+        self.host.name.clone()
     }
     /// The tab's label: its own title when it has one, else the host name.
     fn tab_title(&self, cx: &App) -> SharedString {
@@ -448,17 +481,20 @@ impl TabMenu {
         } else {
             t!("terminal.remote.copy_host_name")
         };
+        let exists = self.host_exists;
         let mut menu = menu
             .menu_with_icon(
                 t!("terminal.remote.rename"),
                 Icon::new(CatalogIcon::Pencil),
                 Box::new(RenameTerminal(id)),
             )
-            .menu_with_icon(
-                t!("terminal.remote.connect_in_new_tab"),
-                Icon::new(CatalogIcon::Plug),
-                Box::new(ConnectHost(host_id)),
-            );
+            .when(exists, |menu| {
+                menu.menu_with_icon(
+                    t!("terminal.remote.connect_in_new_tab"),
+                    Icon::new(CatalogIcon::Plug),
+                    Box::new(ConnectHost(host_id)),
+                )
+            });
         let protocol = self.protocol;
         menu = menu
             .when(protocol.sends_break(), |menu| {
@@ -469,14 +505,14 @@ impl TabMenu {
                     !self.running,
                 )
             })
-            .when(protocol.is_ssh(), |menu| {
+            .when(self.host_is_ssh, |menu| {
                 menu.menu_with_icon(
                     t!("terminal.remote.open_sftp"),
                     Icon::new(CatalogIcon::FolderTree),
                     Box::new(OpenExplorer(host_id)),
                 )
             })
-            .when(protocol.has_address(), |menu| {
+            .when(protocol.has_address() && exists, |menu| {
                 menu.menu_with_icon(
                     copy_host,
                     Icon::new(IconName::Copy),
@@ -488,7 +524,7 @@ impl TabMenu {
             Icon::new(CatalogIcon::RefreshCw),
             Box::new(ReconnectTerminal(id)),
         );
-        if self.editable {
+        if self.editable && exists {
             menu = menu.menu_with_icon(
                 t!("terminal.remote.edit_host"),
                 Icon::new(CatalogIcon::Pencil),

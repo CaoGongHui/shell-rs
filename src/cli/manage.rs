@@ -12,7 +12,7 @@ use crate::host::{
     GroupId, Host, HostConnection, HostDraft, HostId, HostStore, Parity, PastedKey, Protocol,
     ProxyKind, ProxySettings, Route, SSH_PORT, SerialSettings, StopBits, TELNET_PORT,
 };
-use crate::i18n::t;
+use crate::i18n::{t, tn};
 use crate::secrets::SecretRef;
 
 use super::protocol::{
@@ -406,12 +406,28 @@ pub fn plan_host(
     store: &HostStore,
 ) -> Result<HostPlan, CliError> {
     let current = existing.and_then(|id| store.saved_host(id));
-    let protocol = match (current, fields.protocol) {
-        (Some(host), Some(asked)) if asked != protocol_choice(&host.protocol) => {
-            return Err(bad(t!("cli.host.protocol_fixed")));
+    let switching = current
+        .zip(fields.protocol)
+        .filter(|(host, asked)| *asked != protocol_choice(&host.protocol));
+    if let Some((host, _)) = switching
+        && host.is_ssh()
+    {
+        match store.ssh_dependents(host.id) {
+            (0, 0) => {}
+            (0, forwards) => return Err(bad(tn!("cli.host.protocol_forwards", forwards))),
+            (jumps, _) => return Err(bad(tn!("cli.host.protocol_jump_users", jumps))),
         }
-        (Some(host), _) => protocol_choice(&host.protocol),
-        (None, Some(asked)) => asked,
+    }
+    // Another protocol starts from its own defaults, with only what it
+    // shares with the old one: no password moves over.
+    let base = match switching {
+        Some((host, asked)) => Some(converted(host, asked)),
+        None => current.map(Host::draft),
+    };
+    let current = current.filter(|_| switching.is_none());
+    let protocol = match (current, fields.protocol) {
+        (_, Some(asked)) => asked,
+        (Some(host), None) => protocol_choice(&host.protocol),
         (None, None) if fields.serial.is_some() => ProtocolChoice::Serial,
         (None, None) if fields.telnet.is_some() => ProtocolChoice::Telnet,
         (None, None) => ProtocolChoice::Ssh,
@@ -421,12 +437,12 @@ pub fn plan_host(
         return Err(bad(t!("cli.host.telnet_on_other")));
     }
     if protocol == ProtocolChoice::Serial {
-        return plan_serial_host(fields, current, store);
+        return plan_serial_host(fields, base, store);
     }
     if fields.serial.is_some() {
         return Err(bad(t!("cli.host.serial_on_ssh")));
     }
-    let mut draft = current.map(Host::draft).unwrap_or_else(|| {
+    let mut draft = base.unwrap_or_else(|| {
         if telnet {
             HostDraft::telnet("", "", TELNET_PORT, None)
         } else {
@@ -571,11 +587,35 @@ pub fn plan_host(
     })
 }
 
+/// What a host turned into another protocol starts from: what every host
+/// has (its name, group and notes), and between SSH and Telnet also its
+/// address, its route, and its port unless that is one's default. The rest
+/// is the new protocol's defaults, as for a new host.
+fn converted(host: &Host, protocol: ProtocolChoice) -> HostDraft {
+    let old = host.draft();
+    let mut draft = match protocol {
+        ProtocolChoice::Ssh => HostDraft::new("", "", SSH_PORT, "", AuthKind::default(), None),
+        ProtocolChoice::Telnet => HostDraft::telnet("", "", TELNET_PORT, None),
+        ProtocolChoice::Serial => HostDraft::serial("", "", SerialSettings::default(), None),
+    };
+    draft.name = old.name;
+    draft.group = old.group;
+    draft.notes = old.notes;
+    if host.kind().has_address() && protocol != ProtocolChoice::Serial {
+        draft.address = old.address;
+        draft.route = old.route;
+        if ![SSH_PORT, TELNET_PORT].contains(&old.port) {
+            draft.port = old.port;
+        }
+    }
+    draft
+}
+
 /// [`plan_host`] for a serial host: its name, device, line, group and
-/// notes, and nothing of an SSH host's.
+/// notes, and nothing of an SSH host's. `base` is the host to change.
 fn plan_serial_host(
     fields: HostFields,
-    current: Option<&Host>,
+    base: Option<HostDraft>,
     store: &HostStore,
 ) -> Result<HostPlan, CliError> {
     let ssh_only = fields.host.is_some()
@@ -588,9 +628,8 @@ fn plan_serial_host(
     if ssh_only {
         return Err(bad(t!("cli.host.ssh_fields_on_serial")));
     }
-    let mut draft = current
-        .map(Host::draft)
-        .unwrap_or_else(|| HostDraft::serial("", "", SerialSettings::default(), None));
+    let mut draft =
+        base.unwrap_or_else(|| HostDraft::serial("", "", SerialSettings::default(), None));
     let mut line = draft.protocol.serial().unwrap_or_default();
     let SerialFields {
         device,
@@ -1290,9 +1329,23 @@ mod tests {
             )),
             bad("只有 Telnet 主机有 telnet")
         );
+        // As SSH it keeps what the protocols share, and nothing of 自动登录.
+        let ssh = plan(serde_json::json!({ "protocol": "ssh" }), Some(switch)).unwrap();
+        assert_eq!(ssh.draft.protocol, Protocol::Ssh);
         assert_eq!(
-            refused(plan(serde_json::json!({ "protocol": "ssh" }), Some(switch))),
-            bad("协议在创建后不能更改")
+            (
+                ssh.draft.address.as_ref(),
+                ssh.draft.port,
+                ssh.draft.user.as_ref()
+            ),
+            ("10.0.0.6", 22, "root")
+        );
+        assert_eq!(
+            ssh.password,
+            Some((
+                SecretRef::password("root", "10.0.0.6", 22),
+                SecretChange::Keep
+            ))
         );
         let id = store.host(switch).unwrap().public_id.to_string();
         assert_eq!(
@@ -1301,6 +1354,22 @@ mod tests {
                 Some(web)
             )),
             bad(&format!("跳板只能是 SSH 主机：{id} 是 Telnet 主机"))
+        );
+    }
+
+    #[test]
+    fn an_ssh_host_others_go_through_stays_one() {
+        let (mut store, web, _) = store();
+        let serial =
+            || fields(serde_json::json!({ "protocol": "serial", "serial": { "device": "COM3" } }));
+        assert!(plan_host(serial(), Some(web), &store).is_ok());
+        store.insert_unnotified(
+            HostDraft::new("db", "10.0.0.2", 22, "root", AuthKind::Password, None)
+                .with_route(Route::Jump(vec![Some(web)])),
+        );
+        assert_eq!(
+            refused(plan_host(serial(), Some(web), &store)),
+            bad("有 1 台主机把它当作跳板，只能是 SSH")
         );
     }
 
@@ -1360,12 +1429,22 @@ mod tests {
                 "串口主机没有 host、port、user、auth、credential、password 和 route，设备和参数写在 serial 里"
             )
         );
+        // As SSH it needs an address: its device is none.
         assert_eq!(
             refused(plan(
                 serde_json::json!({ "protocol": "ssh" }),
                 Some(console)
             )),
-            bad("协议在创建后不能更改")
+            bad("请输入地址")
+        );
+        let ssh = plan(
+            serde_json::json!({ "protocol": "ssh", "host": "10.0.0.9" }),
+            Some(console),
+        )
+        .unwrap();
+        assert_eq!(
+            (ssh.draft.protocol, ssh.draft.name.as_ref(), ssh.draft.port),
+            (Protocol::Ssh, "console", 22)
         );
         assert_eq!(
             refused(plan(

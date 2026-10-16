@@ -20,7 +20,7 @@ use crate::app::{
     EditorShortcut,
 };
 use crate::explorer::{ExplorerId, ExplorerPanel, FileLocation};
-use crate::host::{HostId, HostStore};
+use crate::host::{Host, HostId};
 use crate::i18n::t;
 use crate::sftp::{
     FileStamp, ReadFailure, SaveFailure, SharedLocalDirectoryProvider, TextFile, TextFormat,
@@ -35,7 +35,8 @@ pub enum EditorSource {
     Remote {
         explorer: WeakEntity<ExplorerPanel>,
         explorer_id: ExplorerId,
-        host: HostId,
+        /// The host as the SFTP tab took it, which the tab shows.
+        host: Box<Host>,
     },
     Local {
         provider: SharedLocalDirectoryProvider,
@@ -67,7 +68,6 @@ pub struct EditorPanel {
     id: EditorId,
     source: EditorSource,
     location: FileLocation,
-    store: Entity<HostStore>,
     state: Entity<EditorState>,
     /// The text as last read or saved, to tell whether there are changes.
     saved: Rope,
@@ -95,7 +95,6 @@ impl EditorPanel {
         source: EditorSource,
         location: FileLocation,
         file: TextFile,
-        store: Entity<HostStore>,
         dispatch: FocusHandle,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -124,13 +123,11 @@ impl EditorPanel {
                     cx.emit(EditorPanelEvent::Changed(this.id));
                 }
             }),
-            cx.observe(&store, |_, _, cx| cx.notify()),
         ];
         Self {
             id,
             source,
             location,
-            store,
             state,
             saved,
             format,
@@ -153,7 +150,7 @@ impl EditorPanel {
     pub fn key(&self) -> EditorKey {
         match (&self.source, &self.location) {
             (EditorSource::Remote { host, .. }, FileLocation::Remote(path)) => {
-                EditorKey::Remote(*host, path.clone())
+                EditorKey::Remote(host.id, path.clone())
             }
             _ => EditorKey::Local(PathBuf::from(self.location.path())),
         }
@@ -173,7 +170,7 @@ impl EditorPanel {
     }
     pub fn host_id(&self) -> Option<HostId> {
         match &self.source {
-            EditorSource::Remote { host, .. } => Some(*host),
+            EditorSource::Remote { host, .. } => Some(host.id),
             EditorSource::Local { .. } => None,
         }
     }
@@ -480,36 +477,25 @@ impl EditorPanel {
         });
     }
 
-    fn display_path(&self, cx: &App) -> String {
+    fn display_path(&self) -> String {
         match &self.source {
-            EditorSource::Remote { host, .. } => {
-                let host = self
-                    .store
-                    .read(cx)
-                    .host(*host)
-                    .map(|host| host.name.to_string())
-                    .unwrap_or_default();
-                format!("{host}:{}", self.location.path())
-            }
+            EditorSource::Remote { host, .. } => format!("{}:{}", host.name, self.location.path()),
             EditorSource::Local { .. } => self.location.path(),
         }
     }
 
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let id = self.id;
-        let path: SharedString = self.display_path(cx).into();
+        let path: SharedString = self.display_path().into();
         let leading = match &self.source {
-            EditorSource::Remote { host, .. } => {
-                let host = self.store.read(cx).host(*host);
-                HostMark::new(
-                    ("editor-host", id.0),
-                    host.map(|host| host.name.clone()).unwrap_or_default(),
-                    host.map(|host| host.address.clone()).unwrap_or_default(),
-                    host.and_then(|host| host.os),
-                )
-                .small()
-                .into_any_element()
-            }
+            EditorSource::Remote { host, .. } => HostMark::new(
+                ("editor-host", id.0),
+                host.name.clone(),
+                host.address.clone(),
+                host.os,
+            )
+            .small()
+            .into_any_element(),
             EditorSource::Local { .. } => Icon::new(CatalogIcon::Laptop)
                 .small()
                 .text_color(cx.theme().muted_foreground)

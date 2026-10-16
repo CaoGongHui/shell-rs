@@ -13,11 +13,11 @@ use crate::secrets::{NoSecretStore, SecretRef, SharedSecretStore, TemporarySecre
 use super::database::now_seconds;
 use super::private_key::{is_kept_in, write_key_file};
 use super::{
-    AuthKind, BookmarkSide, ConnectionState, Credential, CredentialDraft, CredentialId,
-    CredentialKind, ForwardDraft, ForwardId, ForwardRule, GroupDraft, GroupId, Host,
-    HostConnection, HostDatabase, HostDraft, HostGroup, HostId, HostLogin, HostNode, HostOs,
-    JumpLogin, LoginRoute, NodeDrop, Protocol, ProxyLogin, PublicId, Route, SerialLine, Snippet,
-    SnippetCategory, SnippetScope, SshLink, StoredData, TelnetLogin,
+    AuthKind, BookmarkSide, Credential, CredentialDraft, CredentialId, CredentialKind,
+    ForwardDraft, ForwardId, ForwardRule, GroupDraft, GroupId, Host, HostConnection, HostDatabase,
+    HostDraft, HostGroup, HostId, HostLogin, HostNode, HostOs, JumpLogin, LoginRoute, NodeDrop,
+    Protocol, ProxyLogin, PublicId, Route, SerialLine, Snippet, SnippetCategory, SnippetScope,
+    SshLink, StoredData, TelnetLogin,
 };
 
 mod snippets;
@@ -65,7 +65,9 @@ pub struct HostStore {
     external: HashSet<HostId>,
     next_host_id: u64,
     next_group_id: u64,
-    active: Option<HostId>,
+    /// A fixture's hosts whose terminals are open from the start: the
+    /// seed's web-01 and staging-api. Empty for a real database.
+    starting_terminals: Vec<HostId>,
     /// Hosts in the order they last connected, most recent first.
     recent: Vec<HostId>,
     /// SFTP bookmarks per host and pane, in the order they were added.
@@ -219,10 +221,6 @@ fn secret_failure(secret: &SecretRef, writing: bool) -> fn(&str) -> SharedString
 pub enum HostStoreEvent {
     /// A change was applied in memory but could not be written to disk.
     PersistFailed(SharedString),
-    /// A live terminal must reconnect because the way the host logs in
-    /// changed: its endpoint, its own authentication, the credential it
-    /// uses, or the way it is reached, a jump host's login included.
-    ConnectionSettingsChanged(HostId),
     /// A forwarding rule now listens or connects somewhere else, so a
     /// running forward has to restart to follow it.
     ForwardSettingsChanged(ForwardId),
@@ -240,7 +238,7 @@ impl HostStore {
             external: HashSet::new(),
             next_host_id: 1,
             next_group_id: 1,
-            active: None,
+            starting_terminals: Vec::new(),
             recent: Vec::new(),
             bookmarks: HashMap::new(),
             forwards: Vec::new(),
@@ -318,7 +316,7 @@ impl HostStore {
             hosts,
             temporary: Vec::new(),
             external: HashSet::new(),
-            active: None,
+            starting_terminals: Vec::new(),
             recent,
             bookmarks,
             database: Some(database),
@@ -392,10 +390,16 @@ impl HostStore {
         }
         for name in ["web-01", "staging-api"] {
             if let Some(id) = store.hosts.iter().find(|s| s.name == name).map(|s| s.id) {
-                store.set_state_unnotified(id, ConnectionState::Connected);
+                store.record_connection_unnotified(id);
+                store.starting_terminals.push(id);
             }
         }
         store
+    }
+
+    /// The hosts whose terminals a fixture opens from the start.
+    pub fn starting_terminals(&self) -> &[HostId] {
+        &self.starting_terminals
     }
 
     pub fn groups(&self) -> &[HostGroup] {
@@ -519,9 +523,6 @@ impl HostStore {
         self.external.remove(&id);
         self.secrets.forget(id.0);
         self.bookmarks.retain(|(host, _), _| *host != id);
-        if self.active == Some(id) {
-            self.active = None;
-        }
         true
     }
 
@@ -592,13 +593,9 @@ impl HostStore {
         parts
     }
 
-    /// The host whose tab is currently displayed, if any.
-    pub fn active(&self) -> Option<&Host> {
-        self.active.and_then(|id| self.host(id))
-    }
-
     /// Hosts in the order they last connected, most recent first. A
-    /// host joins (or moves to the front) each time it becomes connected.
+    /// host joins (or moves to the front) each time one of its terminals
+    /// or SFTP tabs connects.
     pub fn recent_hosts(&self) -> impl Iterator<Item = &Host> {
         self.recent.iter().filter_map(|id| self.host(*id))
     }
@@ -638,8 +635,9 @@ impl HostStore {
     /// Replace the editable fields of a host; connection state is kept.
     /// The host reconnects when its login changed, and so does every
     /// host using it as a jump host.
+    /// Change a host. What is connected stays connected as it was: a new
+    /// login is the next connection's, as in Xshell.
     pub fn update(&mut self, id: HostId, draft: HostDraft, cx: &mut Context<Self>) -> bool {
-        let logins = self.logins();
         let previous = self.connection(id);
         let updated = self.update_unnotified(id, draft);
         if updated {
@@ -652,19 +650,18 @@ impl HostStore {
                 // entry is an orphan unless another host still uses it.
                 self.forget_passwords_of(&previous, cx);
             }
-            self.emit_changed_logins(logins, cx);
             cx.notify();
         }
         updated
     }
 
-    /// The protocol is the host's for good: a draft of another one is
-    /// refused.
+    /// A draft of another protocol is taken, except that an SSH host other
+    /// hosts or port forwards go through stays one: they would be left
+    /// without a way through.
     pub fn update_unnotified(&mut self, id: HostId, draft: HostDraft) -> bool {
-        if self
-            .saved_host(id)
-            .is_some_and(|host| host.kind() != draft.protocol.kind())
-        {
+        if self.saved_host(id).is_some_and(|host| {
+            host.is_ssh() && !draft.protocol.kind().is_ssh() && self.ssh_dependents(id) != (0, 0)
+        }) {
             return false;
         }
         let mut draft = normalized(&self.credentials, draft);
@@ -675,14 +672,12 @@ impl HostStore {
         };
         // The form owns none of these, so rebuilding from the draft must not
         // drop them.
-        let state = host.state;
         let os = host.os;
         let sort_order = host.sort_order;
         let old_group = host.group;
         let public_id = host.public_id.clone();
         *host = Host::new(id, draft);
         host.public_id = public_id;
-        host.state = state;
         host.os = os;
         host.sort_order = if host.group == old_group {
             sort_order
@@ -725,9 +720,6 @@ impl HostStore {
         self.forwards.retain(|rule| rule.host != id);
         self.snippets
             .retain(|snippet| snippet.scope != SnippetScope::Host(id));
-        if self.active == Some(id) {
-            self.active = None;
-        }
         self.hosts.len() != before
     }
 
@@ -1148,24 +1140,20 @@ impl HostStore {
             .count()
     }
 
+    /// What keeps a host an SSH host: the hosts that go through it as a
+    /// jump host, and the port forwards that go via it.
+    pub fn ssh_dependents(&self, id: HostId) -> (usize, usize) {
+        (self.jump_users(&[id]), self.forwards_of(id).count())
+    }
+
     /// Every host's connection, temporary ones included, to tell afterwards
-    /// whose changed.
+    /// which passwords they read.
     fn logins(&self) -> Vec<(HostId, HostConnection)> {
         self.hosts
             .iter()
             .chain(&self.temporary)
             .map(|host| (host.id, self.connection_of(host)))
             .collect()
-    }
-
-    /// Tell the workspace about every host that connects differently than
-    /// it did in `before`, so its connections reconnect.
-    fn emit_changed_logins(&self, before: Vec<(HostId, HostConnection)>, cx: &mut Context<Self>) {
-        for (id, login) in before {
-            if self.connection(id).is_some_and(|now| now != login) {
-                cx.emit(HostStoreEvent::ConnectionSettingsChanged(id));
-            }
-        }
     }
 
     /// Add a credential at the end of the list.
@@ -1206,7 +1194,7 @@ impl HostStore {
     }
 
     /// Replace the editable fields of a credential. Every host using it
-    /// takes the new user name, and those whose login changed reconnect.
+    /// takes the new user name; what is connected stays as it was.
     pub fn update_credential(
         &mut self,
         id: CredentialId,
@@ -1244,7 +1232,6 @@ impl HostStore {
                 self.forget_passwords_of(before, cx);
             }
         }
-        self.emit_changed_logins(logins, cx);
         cx.notify();
         true
     }
@@ -1492,35 +1479,27 @@ impl HostStore {
         removed
     }
 
-    pub fn set_state(&mut self, id: HostId, state: ConnectionState, cx: &mut Context<Self>) {
-        if !self.set_state_unnotified(id, state) {
+    /// A terminal or SFTP tab of the host connected: a saved host goes to
+    /// the front of the recent list.
+    pub fn record_connection(&mut self, id: HostId, cx: &mut Context<Self>) {
+        if !self.record_connection_unnotified(id) {
             return;
         }
-        if state.is_connected() && !self.is_temporary(id) {
-            self.persist(Change::Recent, cx, |db| {
-                db.touch_connected(id, now_seconds())
-            });
-        }
+        self.persist(Change::Recent, cx, |db| {
+            db.touch_connected(id, now_seconds())
+        });
         cx.notify();
     }
 
-    /// Returns whether the state changed. Becoming connected also moves a
-    /// saved host to the front of the recent list; a link's host never
-    /// joins it.
-    pub fn set_state_unnotified(&mut self, id: HostId, state: ConnectionState) -> bool {
-        let temporary = self.is_temporary(id);
-        let Some(host) = self.host_mut(id) else {
-            return false;
-        };
-        if host.state == state {
+    /// Returns whether it was a saved host's: one not saved, a link's
+    /// included, never joins the recent list.
+    pub fn record_connection_unnotified(&mut self, id: HostId) -> bool {
+        if self.saved_host(id).is_none() {
             return false;
         }
-        host.state = state;
-        if state.is_connected() && !temporary {
-            self.recent.retain(|recent| *recent != id);
-            self.recent.insert(0, id);
-            self.recent.truncate(MAX_RECENT);
-        }
+        self.recent.retain(|recent| *recent != id);
+        self.recent.insert(0, id);
+        self.recent.truncate(MAX_RECENT);
         true
     }
 
@@ -1546,13 +1525,6 @@ impl HostStore {
         }
         host.os = os;
         true
-    }
-
-    pub fn set_active(&mut self, id: Option<HostId>, cx: &mut Context<Self>) {
-        if self.active != id {
-            self.active = id;
-            cx.notify();
-        }
     }
 
     /// Where passwords are read from. The host form uses this to pre-fill
@@ -1899,7 +1871,7 @@ mod tests {
     }
 
     #[test]
-    fn a_serial_host_is_no_way_through_and_keeps_its_protocol() {
+    fn a_serial_host_is_no_way_through() {
         let mut store = HostStore::empty();
         let web = store.insert_unnotified(draft("web", None));
         let console = store.insert_unnotified(HostDraft::serial(
@@ -1929,19 +1901,40 @@ mod tests {
             store.host(through).unwrap().route,
             Route::Jump(vec![None, Some(web)])
         );
-        // Nor does it ever become an SSH host, or the other way round.
-        assert!(!store.update_unnotified(console, draft("console", None)));
+        // It has no password to keep, nor to look for.
+        assert!(store.passwords_of(&[console]).is_empty());
+        // An SSH host a forward goes via stays one; the serial host may
+        // become one.
         assert!(!store.update_unnotified(
             web,
             HostDraft::serial("web", "COM4", super::super::SerialSettings::default(), None)
         ));
-        assert!(store.host(console).unwrap().is_serial());
-        // It has no password to keep, nor to look for.
-        assert!(store.passwords_of(&[console]).is_empty());
+        assert!(store.host(web).unwrap().is_ssh());
+        assert!(store.update_unnotified(console, draft("console", None)));
+        assert!(store.host(console).unwrap().is_ssh());
     }
 
     #[test]
-    fn a_telnet_host_is_no_way_through_and_keeps_its_protocol() {
+    fn an_ssh_host_changes_protocol_once_nothing_goes_through_it() {
+        let mut store = HostStore::empty();
+        let jump = store.insert_unnotified(draft("jump", None));
+        let behind =
+            store.insert_unnotified(draft("behind", None).with_route(jump_through(&[jump])));
+        let switch = HostDraft::telnet("jump", "10.0.0.1", 23, None);
+        assert_eq!(store.ssh_dependents(jump), (1, 0));
+        assert!(!store.update_unnotified(jump, switch.clone()));
+        // Through no other host any more, it may be another protocol, and
+        // back again.
+        store.update_unnotified(behind, draft("behind", None));
+        assert_eq!(store.ssh_dependents(jump), (0, 0));
+        assert!(store.update_unnotified(jump, switch));
+        assert!(store.host(jump).unwrap().protocol.telnet().is_some());
+        assert!(store.update_unnotified(jump, draft("jump", None)));
+        assert!(store.host(jump).unwrap().is_ssh());
+    }
+
+    #[test]
+    fn a_telnet_host_is_no_way_through() {
         let mut store = HostStore::empty();
         let web = store.insert_unnotified(draft("web", None));
         let switch = store.insert_unnotified(HostDraft::telnet("switch", "10.0.0.5", 23, None));
@@ -1969,17 +1962,17 @@ mod tests {
             store.host(behind).unwrap().route,
             Route::Jump(vec![Some(web)])
         );
-        // No protocol ever becomes another.
-        let serial = HostDraft::serial("x", "COM3", super::super::SerialSettings::default(), None);
-        assert!(!store.update_unnotified(switch, draft("switch", None)));
-        assert!(!store.update_unnotified(switch, serial.clone()));
-        assert!(!store.update_unnotified(web, HostDraft::telnet("web", "10.0.0.1", 23, None)));
         assert!(store.update_unnotified(
             switch,
             HostDraft::telnet("switch-2", "10.0.0.5", 2323, None)
         ));
         // Without 自动登录 it has no password to keep.
         assert!(store.passwords_of(&[switch]).is_empty());
+        // The jump host the Telnet host goes through stays an SSH host.
+        assert!(!store.update_unnotified(web, HostDraft::telnet("web", "10.0.0.1", 23, None)));
+        let serial = HostDraft::serial("x", "COM3", super::super::SerialSettings::default(), None);
+        assert!(store.update_unnotified(switch, serial));
+        assert!(store.host(switch).unwrap().is_serial());
     }
 
     #[test]
@@ -2626,50 +2619,6 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn editing_a_jump_host_reconnects_the_hosts_behind_it_but_renaming_does_not(
-        cx: &mut gpui_kit::TestAppContext,
-    ) {
-        use gpui_kit::AppContext as _;
-        use std::{cell::RefCell, rc::Rc};
-
-        let mut store = HostStore::empty();
-        let jump = store.insert_unnotified(draft("jump", None));
-        let behind = store.insert_unnotified(
-            HostDraft::new("db", "10.0.0.9", 22, "root", AuthKind::Password, None)
-                .with_route(jump_through(&[jump])),
-        );
-        let store = cx.new(|_| store);
-        let events = Rc::new(RefCell::new(Vec::new()));
-        let _subscription = cx.update(|cx| {
-            let events = events.clone();
-            cx.subscribe(&store, move |_, event: &HostStoreEvent, _| {
-                events.borrow_mut().push(event.clone());
-            })
-        });
-
-        store.update(cx, |store, cx| store.update(jump, draft("跳板", None), cx));
-        cx.run_until_parked();
-        assert!(events.borrow().is_empty(), "{:?}", events.borrow());
-
-        let moved = HostDraft::new("跳板", "10.0.0.2", 22, "root", AuthKind::Password, None);
-        store.update(cx, |store, cx| store.update(jump, moved, cx));
-        cx.run_until_parked();
-        assert_eq!(
-            *events.borrow(),
-            [
-                HostStoreEvent::ConnectionSettingsChanged(jump),
-                HostStoreEvent::ConnectionSettingsChanged(behind),
-            ]
-        );
-
-        // Deleting it does not drop the connection behind it.
-        events.borrow_mut().clear();
-        store.update(cx, |store, cx| store.remove(jump, cx));
-        cx.run_until_parked();
-        assert!(events.borrow().is_empty(), "{:?}", events.borrow());
-    }
-
-    #[gpui_kit::test]
     fn a_proxy_password_goes_when_no_host_uses_the_proxy(cx: &mut gpui_kit::TestAppContext) {
         use crate::secrets::SecretStore as _;
         use gpui_kit::AppContext as _;
@@ -2694,17 +2643,16 @@ mod tests {
     }
 
     #[test]
-    fn seed_has_three_groups_and_two_connected_hosts() {
+    fn seed_has_three_groups_and_two_hosts_with_terminals() {
         let store = HostStore::seed();
         assert_eq!(store.groups().len(), 3);
         assert_eq!(store.hosts().len(), 6);
-        let connected: Vec<_> = store
-            .hosts()
+        let open: Vec<_> = store
+            .starting_terminals()
             .iter()
-            .filter(|s| s.state.is_connected())
-            .map(|s| s.name.as_ref())
+            .map(|id| store.host(*id).unwrap().name.as_ref())
             .collect();
-        assert_eq!(connected, ["web-01", "staging-api"]);
+        assert_eq!(open, ["web-01", "staging-api"]);
     }
 
     #[test]
@@ -2741,7 +2689,6 @@ mod tests {
         assert_eq!(store.hosts()[1].id, copy);
         assert_eq!(store.hosts()[1].name.as_ref(), "web-01 副本");
         assert_eq!(store.hosts()[1].auth, AuthKind::NoPassword);
-        assert_eq!(store.hosts()[1].state, ConnectionState::Disconnected);
         assert_ne!(
             store.hosts()[1].public_id,
             store.host(web01).unwrap().public_id
@@ -2766,25 +2713,17 @@ mod tests {
     }
 
     #[test]
-    fn update_keeps_connection_state() {
+    fn update_keeps_the_system_found() {
         let mut store = HostStore::seed();
         let web01 = store.hosts()[0].id;
+        store.set_host_os_unnotified(web01, Some(HostOs::Ubuntu));
         let mut draft = store.host(web01).unwrap().draft();
         draft.port = 2200;
         assert!(store.update_unnotified(web01, draft));
         let host = store.host(web01).unwrap();
-        assert_eq!(host.port, 2200);
-        assert_eq!(host.state, ConnectionState::Connected);
+        assert_eq!((host.port, host.os), (2200, Some(HostOs::Ubuntu)));
         assert!(!store.update_unnotified(HostId(999), host.draft()));
-    }
-
-    #[test]
-    fn remove_clears_active_host() {
-        let mut store = HostStore::seed();
-        let web01 = store.hosts()[0].id;
-        store.active = Some(web01);
         assert!(store.remove_unnotified(web01));
-        assert!(store.active().is_none());
         assert!(!store.remove_unnotified(web01));
     }
 
@@ -2800,11 +2739,9 @@ mod tests {
         let mut store = HostStore::seed();
         let web01 = store.hosts()[0].id;
         let db01 = store.hosts()[2].id;
-        assert!(store.set_state_unnotified(db01, ConnectionState::Connected));
-        // Already connected: nothing changes, nothing moves.
-        assert!(!store.set_state_unnotified(db01, ConnectionState::Connected));
-        assert!(store.set_state_unnotified(web01, ConnectionState::Disconnected));
-        assert!(store.set_state_unnotified(web01, ConnectionState::Connected));
+        assert!(store.record_connection_unnotified(db01));
+        assert!(store.record_connection_unnotified(db01));
+        assert!(store.record_connection_unnotified(web01));
         let recent: Vec<_> = store.recent_hosts().map(|s| s.name.as_ref()).collect();
         assert_eq!(recent, ["web-01", "db-01", "staging-api"]);
     }
@@ -2823,7 +2760,7 @@ mod tests {
         let mut store = HostStore::empty();
         for ix in 0..(MAX_RECENT + 2) {
             let id = store.insert_unnotified(draft(&format!("s{ix}"), None));
-            store.set_state_unnotified(id, ConnectionState::Connected);
+            store.record_connection_unnotified(id);
         }
         assert_eq!(store.recent_hosts().count(), MAX_RECENT);
         let newest = store.recent_hosts().next().unwrap();
@@ -2857,8 +2794,7 @@ mod tests {
         let db = store.insert_unnotified(draft("db-01", Some(databases)));
         let qa = store.insert_unnotified(draft("qa", Some(staging)));
         let jump = store.insert_unnotified(draft("jump", None));
-        store.set_state_unnotified(db, ConnectionState::Connected);
-        store.active = Some(db);
+        store.record_connection_unnotified(db);
 
         let mut removed = store.remove_group_unnotified(production);
         removed.sort();
@@ -2873,7 +2809,6 @@ mod tests {
             [qa, jump]
         );
         assert_eq!(store.recent_hosts().count(), 0);
-        assert!(store.active().is_none());
         // Removing it a second time finds nothing left to do.
         assert!(store.remove_group_unnotified(production).is_empty());
     }
@@ -2973,8 +2908,8 @@ mod tests {
             store.recent_hosts().map(|s| s.id).collect::<Vec<_>>(),
             [HostId(9)]
         );
-        // Nothing is connected on load, however recently it last connected.
-        assert!(store.hosts().iter().all(|s| !s.state.is_connected()));
+        // No terminal opens on load, however recently it last connected.
+        assert!(store.starting_terminals().is_empty());
         assert_eq!(
             store.insert_group_unnotified(GroupDraft::new("测试", None)),
             GroupId(5)
@@ -3076,18 +3011,15 @@ mod tests {
         assert!(keychain.is_empty());
 
         // Connecting is not remembered as a recent connection.
-        assert!(store.set_state_unnotified(id, ConnectionState::Connected));
-        assert_eq!(store.host(id).unwrap().state, ConnectionState::Connected);
+        assert!(!store.record_connection_unnotified(id));
         assert!(store.recent_hosts().next().is_none());
         assert!(store.set_host_os_unnotified(id, Some(HostOs::Ubuntu)));
         assert!(store.add_bookmark_unnotified(id, BookmarkSide::Remote, "/tmp"));
-        store.active = Some(id);
 
         assert!(store.remove_temporary_unnotified(id));
         assert!(!store.remove_temporary_unnotified(id));
         assert!(store.host(id).is_none());
         assert!(!store.is_external(id));
-        assert!(store.active().is_none());
         assert!(store.bookmarks(id, BookmarkSide::Remote).is_empty());
         assert!(store.secrets().get(&login.password).unwrap().is_none());
         // Only memory gave it an id: the next one still moves on.
@@ -3132,7 +3064,7 @@ mod tests {
 
         let id = store.update(cx, |store, cx| {
             let id = store.insert_external(link("ssh://token@10.0.0.9"), cx);
-            store.set_state(id, ConnectionState::Connected, cx);
+            store.record_connection(id, cx);
             store.set_host_os(id, Some(HostOs::Debian), cx);
             store.add_bookmark(id, BookmarkSide::Remote, "/var/log", cx);
             store.add_bookmark(id, BookmarkSide::Remote, "/tmp", cx);

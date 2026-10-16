@@ -229,10 +229,11 @@ async fn files_go_down_and_come_back_with_their_terminal(cx: &mut TestAppContext
     wait_for_state(cx, &fixture, ConnectionState::Disconnected).await;
     // The host goes by its tabs, not by 文件.
     cx.update(|cx| {
-        let store = fixture.workspace.read(cx).store().read(cx);
-        assert_eq!(
-            store.host(HostId(WEB_01)).unwrap().state,
-            ConnectionState::Disconnected
+        assert!(
+            !fixture
+                .workspace
+                .read(cx)
+                .has_connection(HostId(WEB_01), cx)
         );
     });
 

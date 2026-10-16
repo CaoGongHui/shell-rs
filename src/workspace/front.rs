@@ -46,24 +46,15 @@ impl Workspace {
         if self.active_tab == Some(tab) {
             return;
         }
-        // The host list marks the host of the tab in front.
-        let host = match tab {
-            CenterTab::Terminal(id) => match self.terminals.get(&id) {
-                Some(panel) => Some(panel.read(cx).host_id()),
-                None => return,
-            },
-            CenterTab::Explorer(id) => match self.explorers.get(&id) {
-                Some(panel) => Some(panel.read(cx).host_id()),
-                None => return,
-            },
-            CenterTab::Editor(id) => match self.editors.get(&id) {
-                Some(editor) => editor.read(cx).host_id(),
-                None => return,
-            },
-            CenterTab::LocalTerminal(_) | CenterTab::Settings => None,
+        let open = match tab {
+            CenterTab::Terminal(id) => self.terminals.contains_key(&id),
+            CenterTab::Explorer(id) => self.explorers.contains_key(&id),
+            CenterTab::Editor(id) => self.editors.contains_key(&id),
+            CenterTab::LocalTerminal(_) | CenterTab::Settings => true,
         };
-        self.store
-            .update(cx, |store, cx| store.set_active(host, cx));
+        if !open {
+            return;
+        }
         self.set_active_tab(Some(tab), window, cx);
         cx.notify();
     }

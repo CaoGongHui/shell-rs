@@ -1908,7 +1908,8 @@ async fn the_sftp_tab_shows_the_host_mark_like_its_terminal_tabs(cx: &mut TestAp
         assert_eq!(window.find(mark).label(), Some("未探测到系统"));
     })
     .unwrap();
-    // A terminal of the same host finds the system; the SFTP tab follows.
+    // A terminal of the same host finds the system: the host list shows
+    // it, the open SFTP tab keeps what it took.
     cx.update(|cx| {
         let store = workspace.read(cx).store().clone();
         store.update(cx, |store, cx| {
@@ -1918,7 +1919,8 @@ async fn the_sftp_tab_shows_the_host_mark_like_its_terminal_tabs(cx: &mut TestAp
     cx.run_until_parked();
     cx.update_window(handle.into(), |_, window, cx| {
         window.render_frame(cx);
-        assert_eq!(window.find(mark).label(), Some("Ubuntu"));
+        assert_eq!(window.find(mark).label(), Some("未探测到系统"));
+        assert_eq!(window.find(("host-os", DB_01)).label(), Some("Ubuntu"));
     })
     .unwrap();
 }
@@ -2044,7 +2046,7 @@ async fn sftp_clicking_empty_list_space_makes_that_pane_current_at_once(cx: &mut
 
 #[gpui_kit::test]
 async fn opening_sftp_again_opens_another_tab_of_its_own(cx: &mut TestAppContext) {
-    use shellrs::app::{DisconnectHost, ExplorerAction, ExplorerCommand};
+    use shellrs::app::{ExplorerAction, ExplorerCommand};
     let provider = Arc::new(FakeSftpProvider::default());
     let (handle, workspace) = open_workspace_with_sftp(cx, provider);
     open_test_explorer(cx, handle).await;
@@ -2103,34 +2105,7 @@ async fn opening_sftp_again_opens_another_tab_of_its_own(cx: &mut TestAppContext
     .unwrap();
     cx.run_until_parked();
     assert_eq!(paths(cx), ["/home/tester"]);
-    cx.update(|cx| {
-        let store = workspace.read(cx).store().read(cx);
-        assert_eq!(
-            store.host(HostId(DB_01)).unwrap().state,
-            ConnectionState::Connected
-        );
-    });
-
-    // Disconnecting the host disconnects every SFTP tab of it.
-    cx.update_window(handle.into(), |_, window, cx| {
-        window.dispatch_action(Box::new(OpenExplorer(HostId(DB_01))), cx);
-    })
-    .unwrap();
-    cx.run_until_parked();
-    cx.update_window(handle.into(), |_, window, cx| {
-        window.dispatch_action(Box::new(DisconnectHost(HostId(DB_01))), cx);
-    })
-    .unwrap();
-    cx.run_until_parked();
-    cx.update(|cx| {
-        let explorers = workspace.read(cx).explorers_of(HostId(DB_01), cx);
-        assert_eq!(explorers.len(), 2);
-        assert!(
-            explorers
-                .iter()
-                .all(|panel| panel.read(cx).connection_state() == ConnectionState::Disconnected)
-        );
-    });
+    cx.update(|cx| assert!(workspace.read(cx).has_connection(HostId(DB_01), cx)));
 }
 
 #[gpui_kit::test]

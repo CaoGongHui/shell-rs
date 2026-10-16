@@ -117,7 +117,6 @@ async fn creates_independent_local_terminals_from_button_and_shortcut(cx: &mut T
         let workspace = workspace.read(cx);
         assert!(workspace.local_terminal(LocalTerminalId(1)).is_some());
         assert!(workspace.local_terminal(LocalTerminalId(2)).is_none());
-        assert!(workspace.store().read(cx).active().is_none());
         assert_eq!(factory.starts.load(Ordering::SeqCst), 2);
     });
 }

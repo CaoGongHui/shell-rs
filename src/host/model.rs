@@ -365,8 +365,8 @@ fn is_light(color: Rgba) -> bool {
     luminance > 0.5
 }
 
-/// Connection state of a host. Runtime only: it is never persisted, so a
-/// freshly loaded host always starts disconnected.
+/// Where a tab's connection stands: a terminal's or an SFTP tab's own,
+/// never a host's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ConnectionState {
     #[default]
@@ -423,7 +423,6 @@ pub struct Host {
     pub notes: SharedString,
     /// Order among hosts in the same group.
     pub sort_order: i64,
-    pub state: ConnectionState,
     /// Detected on every successful connection and persisted, so the tree can
     /// show the right mark before anyone connects. `None` until a probe
     /// succeeds, and the host tree falls back to the name's first letter.
@@ -448,7 +447,6 @@ impl Host {
             group: draft.group,
             notes: draft.notes,
             sort_order: 0,
-            state: ConnectionState::Disconnected,
             os: None,
         }
     }

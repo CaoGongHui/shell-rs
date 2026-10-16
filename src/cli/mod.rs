@@ -79,7 +79,10 @@ Reads one JSON object from stdin. Every field may be left out; `update` changes 
               {\"type\": \"proxy\", \"kind\": \"http\" | \"socks5\", \"host\": ..., \"port\": ...,
                \"user\": ..., \"password\": ...}
   notes       Free text.
-  protocol    \"ssh\" (the default), \"telnet\" or \"serial\", set when the host is created.
+  protocol    \"ssh\" (the default), \"telnet\" or \"serial\". Changed by update, the host keeps
+              its name, group and notes (between SSH and Telnet, its address and route too)
+              and takes the new protocol's defaults for the rest; not away from SSH while
+              hosts or port forwards go through it. Open tabs keep the protocol they had.
   telnet      A Telnet host's prompts for its automatic login (implies protocol \"telnet\"):
               {\"user_prompt\": ..., \"password_prompt\": ...}   (null or empty for the usual ones)
               Its auth \"password\" or \"credential\" (a password credential) logs in automatically with
@@ -246,12 +249,13 @@ enum HostsCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Delete a saved host, with its port forwarding rules.
+    /// Delete a saved host, with its port forwarding rules. Its open tabs
+    /// in ShellRS stay.
     Delete {
         /// Host ID, from `shellrs hosts list`.
         id: String,
-        /// Delete it even with its tabs open in ShellRS, closing them.
-        #[arg(long)]
+        /// Accepted and ignored: deleting once closed the host's tabs.
+        #[arg(long, hide = true)]
         force: bool,
         #[arg(long)]
         json: bool,

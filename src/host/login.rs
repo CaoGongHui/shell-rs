@@ -12,9 +12,8 @@ use super::{
     TelnetSettings,
 };
 
-/// How a host's terminal connects, looked up by the store. Two equal values
-/// connect the same way, which is how an edit tells whether the host's
-/// terminals have to reconnect.
+/// How a host's terminal connects, looked up by the store when it connects.
+/// Two equal values connect the same way.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HostConnection {
     Ssh(HostLogin),

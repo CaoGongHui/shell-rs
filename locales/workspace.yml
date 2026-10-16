@@ -103,9 +103,6 @@ workspace.recent.new_host:
 workspace.recent.empty:
   zh-CN: 还没有连接过的主机
   en: No hosts connected yet
-workspace.recent.connected:
-  zh-CN: 已连接
-  en: Connected
 
 workspace.copied:
   zh-CN: 已复制 %{text}

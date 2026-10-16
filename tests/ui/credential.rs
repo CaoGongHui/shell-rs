@@ -341,7 +341,7 @@ async fn a_terminal_logs_in_with_its_credentials_login(cx: &mut TestAppContext) 
 }
 
 #[gpui_kit::test]
-async fn editing_a_credentials_user_reconnects_the_hosts_using_it(cx: &mut TestAppContext) {
+async fn a_credentials_new_user_is_for_its_hosts_new_tabs(cx: &mut TestAppContext) {
     let secrets = Arc::new(InMemorySecretStore::default());
     let (mut store, credential, host) = store_with_credential(secrets);
     let other = store.insert_unnotified(HostDraft::new(
@@ -365,12 +365,7 @@ async fn editing_a_credentials_user_reconnects_the_hosts_using_it(cx: &mut TestA
         });
     }
     cx.wait_for(handle.into(), Duration::from_secs(2), |_, cx| {
-        workspace
-            .read(cx)
-            .store()
-            .read(cx)
-            .host(host)
-            .is_some_and(|host| host.state.is_connected())
+        workspace.read(cx).has_connection(host, cx)
     })
     .await;
     assert_eq!(remote.logins().len(), 2);
@@ -384,9 +379,7 @@ async fn editing_a_credentials_user_reconnects_the_hosts_using_it(cx: &mut TestA
     in_frame(cx, handle, |window, cx| {
         assert_eq!(
             window.find("credential-usage").label(),
-            Some(
-                "有 1 台主机使用此凭据。修改用户名、类型或私钥文件后，其中已连接的主机会重新连接。"
-            )
+            Some("有 1 台主机使用此凭据。")
         );
         window.click("credential-name", cx);
         window.press("secondary-a", cx);
@@ -408,14 +401,43 @@ async fn editing_a_credentials_user_reconnects_the_hosts_using_it(cx: &mut TestA
         window.click("commit", cx);
     });
     wait_for_dialog_to_close(cx, handle).await;
-    let logins = remote.logins();
-    assert_eq!(logins.len(), 3);
-    assert_eq!(logins[2].user, "admin");
+    cx.run_until_parked();
+    assert_eq!(
+        remote.logins().len(),
+        2,
+        "what is connected stays connected"
+    );
     cx.update(|cx| {
         let store = workspace.read(cx).store().read(cx);
         assert_eq!(store.host(host).unwrap().endpoint(), "admin@10.0.2.5:22");
         assert_eq!(store.host(other).unwrap().user.as_ref(), "root");
     });
+
+    // The open tab reconnects as it first logged in; a new tab, as the
+    // new user.
+    let before = remote.logins()[0].user.clone();
+    let terminal = cx.update(|cx| {
+        let workspace = workspace.read(cx);
+        workspace.terminal(host, cx).unwrap().read(cx).id()
+    });
+    in_frame(cx, handle, |window, cx| {
+        window.click(("credential-row", credential.0), cx);
+        window.dispatch_action(Box::new(ReconnectTerminal(terminal)), cx);
+    });
+    cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
+        remote.logins().len() == 3
+    })
+    .await;
+    assert_eq!(remote.logins()[2].user, before);
+    in_frame(cx, handle, |window, cx| {
+        window.click(("credential-row", credential.0), cx);
+        window.dispatch_action(Box::new(ConnectHost(host)), cx);
+    });
+    cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
+        remote.logins().len() == 4
+    })
+    .await;
+    assert_eq!(remote.logins()[3].user, "admin");
 }
 
 #[gpui_kit::test]

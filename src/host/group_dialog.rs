@@ -183,7 +183,6 @@ pub fn confirm_delete_group(
     name: &str,
     hosts: usize,
     subgroups: usize,
-    affected: (bool, usize),
     dependents: Dependents,
     on_delete: DeleteHandler,
     window: &mut Window,
@@ -193,11 +192,7 @@ pub fn confirm_delete_group(
         forwards,
         jump_users,
     } = dependents;
-    let (closes_tabs, uploads) = affected;
-    let mut description = contents_sentences(hosts, subgroups, closes_tabs);
-    if uploads > 0 {
-        description.push(tn!("host.delete.transfers", uploads));
-    }
+    let mut description = contents_sentences(hosts, subgroups);
     if forwards > 0 {
         description.push(tn!("host.delete_group.forwards", forwards));
     }
@@ -208,15 +203,15 @@ pub fn confirm_delete_group(
 }
 
 /// What the delete dialog says about everything that goes with the group.
-/// `None` for an empty group with nothing open.
+/// `None` for an empty group.
 #[cfg(test)]
-fn describe_contents(hosts: usize, subgroups: usize, closes_tabs: bool) -> Option<SharedString> {
-    join_sentences(contents_sentences(hosts, subgroups, closes_tabs))
+fn describe_contents(hosts: usize, subgroups: usize) -> Option<SharedString> {
+    join_sentences(contents_sentences(hosts, subgroups))
 }
 
 /// What the delete dialog says about everything that goes with the group,
 /// a sentence each.
-fn contents_sentences(hosts: usize, subgroups: usize, closes_tabs: bool) -> Vec<SharedString> {
+fn contents_sentences(hosts: usize, subgroups: usize) -> Vec<SharedString> {
     let mut contents = Vec::new();
     if hosts > 0 {
         contents.push(tn!("host.count.hosts", hosts));
@@ -231,9 +226,6 @@ fn contents_sentences(hosts: usize, subgroups: usize, closes_tabs: bool) -> Vec<
             items = join_list(&contents)
         ));
     }
-    if closes_tabs {
-        sentences.push(t!("host.delete_group.closes_tabs"));
-    }
     sentences
 }
 
@@ -245,22 +237,18 @@ mod tests {
 
     #[test]
     fn the_description_only_mentions_what_is_there() {
-        assert_eq!(describe_contents(0, 0, false), None);
+        assert_eq!(describe_contents(0, 0), None);
         assert_eq!(
-            describe_contents(3, 0, false).as_deref(),
+            describe_contents(3, 0).as_deref(),
             Some("将同时删除其中的 3 台主机。")
         );
         assert_eq!(
-            describe_contents(0, 2, false).as_deref(),
+            describe_contents(0, 2).as_deref(),
             Some("将同时删除其中的 2 个子分组。")
         );
         assert_eq!(
-            describe_contents(3, 2, true).as_deref(),
-            Some("将同时删除其中的 3 台主机和 2 个子分组。已打开的终端和 SFTP 标签会一并关闭。")
-        );
-        assert_eq!(
-            describe_contents(0, 0, true).as_deref(),
-            Some("已打开的终端和 SFTP 标签会一并关闭。")
+            describe_contents(3, 2).as_deref(),
+            Some("将同时删除其中的 3 台主机和 2 个子分组。")
         );
     }
 
@@ -269,14 +257,11 @@ mod tests {
         crate::i18n::isolate_thread();
         crate::i18n::set_locale("en");
         assert_eq!(
-            describe_contents(1, 2, true).as_deref(),
-            Some(
-                "This also deletes the group’s 1 host and 2 subgroups. \
-                 Open terminal and SFTP tabs will close."
-            )
+            describe_contents(1, 2).as_deref(),
+            Some("This also deletes the group’s 1 host and 2 subgroups.")
         );
         assert_eq!(
-            describe_contents(3, 0, false).as_deref(),
+            describe_contents(3, 0).as_deref(),
             Some("This also deletes the group’s 3 hosts.")
         );
     }

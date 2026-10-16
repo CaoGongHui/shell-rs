@@ -326,9 +326,16 @@ cli.host.jump_serial:
 cli.host.jump_telnet:
   zh-CN: 跳板只能是 SSH 主机：%{id} 是 Telnet 主机
   en: "Jump hosts must be SSH hosts: %{id} is a Telnet host."
-cli.host.protocol_fixed:
-  zh-CN: 协议在创建后不能更改
-  en: The protocol can’t be changed after the host is created.
+cli.host.protocol_jump_users.one:
+  en: "%{count} host uses it as a jump host, so it stays SSH."
+cli.host.protocol_jump_users.other:
+  zh-CN: 有 %{count} 台主机把它当作跳板，只能是 SSH
+  en: "%{count} hosts use it as a jump host, so it stays SSH."
+cli.host.protocol_forwards.one:
+  en: "%{count} port forward goes via it, so it stays SSH."
+cli.host.protocol_forwards.other:
+  zh-CN: 有 %{count} 条端口转发经由它，只能是 SSH
+  en: "%{count} port forwards go via it, so it stays SSH."
 cli.host.serial_on_ssh:
   zh-CN: 只有串口主机有 serial
   en: Only a serial host has serial settings.
@@ -390,9 +397,6 @@ cli.change.host_gone:
 cli.change.host_missing:
   zh-CN: 主机已不存在
   en: The host no longer exists.
-cli.change.host_in_use:
-  zh-CN: 主机「%{name}」有打开的标签：先关闭它们，或加 --force 连同标签一起关闭
-  en: 'Host "%{name}" has tabs open. Close them first, or add --force to close them along with it.'
 cli.change.credential_gone:
   zh-CN: 凭据保存后不见了
   en: The credential was gone after saving.

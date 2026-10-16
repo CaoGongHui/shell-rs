@@ -82,7 +82,7 @@ impl Workspace {
             FileLocation::Remote(_) => EditorSource::Remote {
                 explorer: panel.downgrade(),
                 explorer_id: explorer,
-                host: panel.read(cx).host_id(),
+                host: Box::new(panel.read(cx).host().clone()),
             },
             FileLocation::Local(_) => EditorSource::Local {
                 provider: self.local_directory_provider.clone(),
@@ -91,9 +91,9 @@ impl Workspace {
         let file = Rc::try_unwrap(file).unwrap_or_else(|file| (*file).clone());
         let id = EditorId(self.next_editor_id);
         self.next_editor_id += 1;
-        let (store, dispatch) = (self.store.clone(), self.focus_handle.clone());
+        let dispatch = self.focus_handle.clone();
         let editor =
-            cx.new(|cx| EditorPanel::new(id, source, location, file, store, dispatch, window, cx));
+            cx.new(|cx| EditorPanel::new(id, source, location, file, dispatch, window, cx));
         let subscription = cx.subscribe_in(&editor, window, Self::on_editor_event);
         self._subscriptions.push(subscription);
         let focus = editor.read(cx).focus_handle(cx);
@@ -120,9 +120,6 @@ impl Workspace {
     ) {
         match event {
             EditorPanelEvent::Activated(id) => {
-                let host = editor.read(cx).host_id();
-                self.store
-                    .update(cx, |store, cx| store.set_active(host, cx));
                 self.set_active_tab(Some(CenterTab::Editor(*id)), window, cx);
                 cx.notify();
             }

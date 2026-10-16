@@ -468,9 +468,7 @@ pub fn open_quick_connect_dialog(
 
 #[cfg(test)]
 mod tests {
-    use super::super::{
-        AuthKind, ConnectionState, GroupDraft, GroupId, HostDraft, HostId, HostStore,
-    };
+    use super::super::{AuthKind, GroupDraft, GroupId, HostDraft, HostId, HostStore};
     use super::{QuickChoice, QuickHost, quick_hosts};
 
     fn host(name: &str, address: &str, group: Option<GroupId>) -> HostDraft {
@@ -485,8 +483,8 @@ mod tests {
         let web = store.insert_unnotified(host("web", "10.0.0.1", Some(group)));
         let db = store.insert_unnotified(host("DB", "10.0.0.2", None));
         let api = store.insert_unnotified(host("api", "10.0.0.3", None));
-        store.set_state_unnotified(web, ConnectionState::Connected);
-        store.set_state_unnotified(zen, ConnectionState::Connected);
+        store.record_connection_unnotified(web);
+        store.record_connection_unnotified(zen);
 
         let hosts = quick_hosts(&store);
         let ids: Vec<HostId> = hosts.iter().map(|host| host.id).collect();

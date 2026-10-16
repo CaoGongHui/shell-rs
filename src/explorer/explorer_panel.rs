@@ -13,7 +13,7 @@ use crate::{
         OpenExplorer, RenameExplorer,
     },
     connection::{ConnectionPrompt, ConnectionPromptReply, Latency},
-    host::{BookmarkSide, ConnectionState, HostId, HostStore},
+    host::{BookmarkSide, ConnectionState, Host, HostId, HostLogin, HostStore},
     i18n::t,
     sftp::{
         DownloadRequest, RemotePath, SftpCommand, SftpEvent, SftpRoute,
@@ -32,6 +32,7 @@ use gpui_kit::component::{
     resizable::{ResizableState, h_resizable, resizable_panel, v_resizable},
     v_flex,
 };
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use std::{
     collections::{HashMap, HashSet},
@@ -55,6 +56,10 @@ pub enum ExplorerPanelEvent {
 pub struct ExplorerPanel {
     id: ExplorerId,
     host_id: HostId,
+    /// The host as it was when the tab opened, which it shows; the worker
+    /// logs in, and in again, as it was then too. Editing or deleting the
+    /// host leaves the tab alone.
+    host: Host,
     generation: u64,
     endpoint: String,
     pub(super) store: Entity<HostStore>,
@@ -117,7 +122,8 @@ impl ExplorerPanel {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: ExplorerId,
-        host_id: HostId,
+        host: Host,
+        login: HostLogin,
         store: Entity<HostStore>,
         provider: SharedSftpTransportProvider,
         route: SftpRoute,
@@ -126,10 +132,7 @@ impl ExplorerPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let login = store
-            .read(cx)
-            .login(host_id)
-            .expect("workspace checked host");
+        let host_id = host.id;
         let endpoint = login.endpoint();
         let sidebar = matches!(route, SftpRoute::Terminal(_));
         let home = if sidebar {
@@ -239,6 +242,7 @@ impl ExplorerPanel {
         Self {
             id,
             host_id,
+            host,
             generation: NEXT_GENERATION.fetch_add(1, Ordering::Relaxed),
             endpoint,
             store,
@@ -278,6 +282,10 @@ impl ExplorerPanel {
     }
     pub fn host_id(&self) -> HostId {
         self.host_id
+    }
+    /// The host as the tab took it (see the field).
+    pub fn host(&self) -> &Host {
+        &self.host
     }
     pub fn generation(&self) -> u64 {
         self.generation
@@ -360,10 +368,7 @@ impl ExplorerPanel {
         if window.has_active_dialog(cx) {
             return;
         }
-        let name = self.store.read(cx).host(self.host_id).map_or_else(
-            || t!("explorer.connection.server"),
-            |host| host.name.clone(),
-        );
+        let name = self.host.name.clone();
         let reason = self
             .remote
             .read(cx)
@@ -996,9 +1001,6 @@ impl BasePanel for ExplorerPanel {
     }
     fn set_active(&mut self, active: bool, window: &mut Window, cx: &mut Context<Self>) {
         if active {
-            let host_id = self.host_id;
-            self.store
-                .update(cx, |store, cx| store.set_active(Some(host_id), cx));
             // Focus a file list, not the panel root, so list shortcuts work
             // without a click first. Both stay inside this panel.
             let focus = self.pane(self.last_remote).read(cx).focus_handle(cx);
@@ -1016,12 +1018,11 @@ impl BasePanel for ExplorerPanel {
 }
 impl Panel for ExplorerPanel {
     fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let host = self.store.read(cx).host(self.host_id);
-        let name = host
-            .map(|s| s.name.clone())
-            .unwrap_or_else(|| "SFTP".into());
-        let address = host.map(|s| s.address.clone()).unwrap_or_default();
-        let os = host.and_then(|s| s.os);
+        let (name, address, os) = (
+            self.host.name.clone(),
+            self.host.address.clone(),
+            self.host.os,
+        );
         let id = self.id;
         let menu = self.tab_menu(cx);
         let state = self.connection_state();
@@ -1078,14 +1079,8 @@ impl Panel for ExplorerPanel {
     }
 }
 impl RenamableTab for ExplorerPanel {
-    fn default_title(&self, cx: &App) -> SharedString {
-        let name = self
-            .store
-            .read(cx)
-            .host(self.host_id)
-            .map(|s| s.name.clone())
-            .unwrap_or_else(|| "SFTP".into());
-        format!("{name} · SFTP").into()
+    fn default_title(&self, _: &App) -> SharedString {
+        format!("{} · SFTP", self.host.name).into()
     }
     fn tab_title(&self, cx: &App) -> SharedString {
         self.custom_title
@@ -1166,6 +1161,8 @@ struct TabMenu {
     id: ExplorerId,
     host_id: HostId,
     host_is_ip: bool,
+    /// The host is still there to open SFTP on and copy the address of.
+    host_exists: bool,
     can_reconnect: bool,
     group: Option<WeakEntity<TabGroup>>,
     panel: EntityId,
@@ -1176,11 +1173,8 @@ impl ExplorerPanel {
         TabMenu {
             id: self.id,
             host_id: self.host_id,
-            host_is_ip: self
-                .store
-                .read(cx)
-                .host(self.host_id)
-                .is_some_and(|host| host.address_is_ip()),
+            host_is_ip: self.host.address_is_ip(),
+            host_exists: self.store.read(cx).host(self.host_id).is_some(),
             can_reconnect: self.can_reconnect(),
             group: self.tab_group.clone(),
             panel: cx.entity_id(),
@@ -1203,16 +1197,18 @@ impl TabMenu {
                 Icon::new(CatalogIcon::Pencil),
                 Box::new(RenameExplorer(id)),
             )
-            .menu_with_icon(
-                t!("explorer.tab.open_sftp"),
-                Icon::new(CatalogIcon::FolderTree),
-                Box::new(OpenExplorer(host_id)),
-            )
-            .menu_with_icon(
-                copy_host,
-                Icon::new(IconName::Copy),
-                Box::new(CopyHostAddress(host_id)),
-            )
+            .when(self.host_exists, |menu| {
+                menu.menu_with_icon(
+                    t!("explorer.tab.open_sftp"),
+                    Icon::new(CatalogIcon::FolderTree),
+                    Box::new(OpenExplorer(host_id)),
+                )
+                .menu_with_icon(
+                    copy_host,
+                    Icon::new(IconName::Copy),
+                    Box::new(CopyHostAddress(host_id)),
+                )
+            })
             .menu_with_icon_and_disabled(
                 t!("explorer.connection.reconnect"),
                 Icon::new(CatalogIcon::RefreshCw),

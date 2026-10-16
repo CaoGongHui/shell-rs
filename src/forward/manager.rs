@@ -114,18 +114,6 @@ impl ForwardManager {
             cx.subscribe(&store, |this, _, event: &HostStoreEvent, cx| match event {
                 // The rule listens or connects somewhere else now.
                 HostStoreEvent::ForwardSettingsChanged(id) => this.restart(*id, cx),
-                // The server moved, or logs in differently.
-                HostStoreEvent::ConnectionSettingsChanged(host) => {
-                    let running: Vec<_> = this
-                        .links
-                        .iter()
-                        .filter(|(_, link)| link.host == *host)
-                        .map(|(id, _)| *id)
-                        .collect();
-                    for id in running {
-                        this.restart(id, cx);
-                    }
-                }
                 HostStoreEvent::PersistFailed(_) => {}
             }),
         ];

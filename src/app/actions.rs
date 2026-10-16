@@ -199,8 +199,6 @@ macro_rules! id_actions {
 id_actions! {
     /// Open a new terminal connection for a host.
     ConnectHost(HostId);
-    /// Mark a host disconnected.
-    DisconnectHost(HostId);
     /// Open a new SFTP tab for a host, like a new terminal connection.
     OpenExplorer(HostId);
     /// Open the edit-host dialog for a host.

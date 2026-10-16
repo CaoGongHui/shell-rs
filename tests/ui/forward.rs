@@ -122,7 +122,7 @@ async fn a_forward_is_created_edited_and_deleted_through_its_dialog(cx: &mut Tes
     let host = cx.update(|cx| {
         let store = workspace.read(cx).store().read(cx);
         let second = store.hosts()[1].clone();
-        assert_ne!(store.active().map(|active| active.id), Some(second.id));
+        assert_ne!(second.id, HostId(WEB_01));
         second
     });
 
@@ -348,16 +348,12 @@ async fn a_forward_starts_and_stops_from_its_row_and_from_the_keyboard(cx: &mut 
         .unwrap();
     wait_for_forward_status(cx, handle, first, "运行中，3 个连接").await;
 
-    // A forward is on its own: 断开连接 on its host leaves it running,
-    // and the host does not read as connected because of it.
-    in_frame(cx, handle, |window, cx| {
-        window.dispatch_action(Box::new(DisconnectHost(HostId(DB_01))), cx);
-    });
+    // A forward is on its own: the host does not read as connected
+    // because of it.
     cx.update(|cx| {
         let workspace = workspace.read(cx);
         assert!(workspace.forwards().read(cx).is_active(first));
-        let store = workspace.store().read(cx);
-        assert!(!store.host(HostId(DB_01)).unwrap().state.is_connected());
+        assert!(!workspace.has_connection(HostId(DB_01), cx));
     });
     assert_eq!(provider.stopped(), 0);
 
@@ -634,7 +630,7 @@ async fn deleting_a_host_or_its_group_takes_the_forwards_through_it(cx: &mut Tes
 }
 
 #[gpui_kit::test]
-async fn a_running_forward_restarts_when_what_it_does_changes(cx: &mut TestAppContext) {
+async fn a_running_forward_restarts_when_its_rule_changes(cx: &mut TestAppContext) {
     let (store, id) = store_with_forward();
     let provider = Arc::new(FakeForwardProvider::default());
     let (handle, workspace) = open_workspace_with_forwards(cx, store, provider.clone());
@@ -671,7 +667,8 @@ async fn a_running_forward_restarts_when_what_it_does_changes(cx: &mut TestAppCo
     assert_eq!(provider.runs()[1].rule.bind.port, 9090);
     wait_for_forward_status(cx, handle, id, "运行中").await;
 
-    // So does the server moving.
+    // The server moving is the next run's: an edit of the host leaves
+    // what is connected alone.
     cx.update(|cx| {
         store.update(cx, |store, cx| {
             let mut draft = store.host(HostId(DB_01)).unwrap().draft();
@@ -679,11 +676,9 @@ async fn a_running_forward_restarts_when_what_it_does_changes(cx: &mut TestAppCo
             store.update(HostId(DB_01), draft, cx)
         })
     });
-    cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
-        provider.runs().len() == 3
-    })
-    .await;
-    assert_eq!(provider.stopped(), 2);
+    cx.run_until_parked();
+    assert_eq!(provider.runs().len(), 2);
+    assert_eq!(provider.stopped(), 1);
     wait_for_forward_status(cx, handle, id, "运行中").await;
 
     // A stopped forward stays stopped through an edit.
@@ -698,7 +693,7 @@ async fn a_running_forward_restarts_when_what_it_does_changes(cx: &mut TestAppCo
     });
     cx.run_until_parked();
     wait_for_forward_status(cx, handle, id, "已停止").await;
-    assert_eq!(provider.runs().len(), 3);
+    assert_eq!(provider.runs().len(), 2);
 }
 
 #[gpui_kit::test]
@@ -964,11 +959,6 @@ async fn disconnecting_a_host_leaves_a_forward_question_open(cx: &mut TestAppCon
         window.try_find("cancel").is_some()
     })
     .await;
-    // 断开连接 is about the host's tabs; the forward goes on asking.
-    in_frame(cx, handle, |window, cx| {
-        // The dialog holds the focus, inside the workspace.
-        window.dispatch_action(Box::new(DisconnectHost(HostId(DB_01))), cx);
-    });
     in_frame(cx, handle, |window, cx| {
         assert!(window.try_find("cancel").is_some());
         assert!(window.notifications(cx).is_empty());

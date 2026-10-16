@@ -505,7 +505,7 @@ async fn renaming_a_group_keeps_the_hosts_under_it(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-async fn deleting_a_group_removes_its_hosts_and_closes_their_tabs(cx: &mut TestAppContext) {
+async fn deleting_a_group_removes_its_hosts_and_leaves_their_tabs(cx: &mut TestAppContext) {
     let (handle, workspace) = open_workspace(cx);
 
     // db-01 joins web-01, which starts connected, in having an open tab.
@@ -540,9 +540,10 @@ async fn deleting_a_group_removes_its_hosts_and_closes_their_tabs(cx: &mut TestA
 
     cx.update(|cx| {
         let workspace = workspace.read(cx);
-        assert!(workspace.terminal(HostId(WEB_01), cx).is_none());
-        assert!(workspace.terminal(HostId(DB_01), cx).is_none());
-        // staging-api is in another group and keeps its tab.
+        // Each tab has the host as it took it: the tabs stay, named so.
+        let web = workspace.terminal(HostId(WEB_01), cx).unwrap().read(cx);
+        assert_eq!(web.host().name.as_ref(), "web-01");
+        assert!(workspace.terminal(HostId(DB_01), cx).is_some());
         assert!(workspace.terminal(HostId(STAGING_API), cx).is_some());
 
         let store = workspace.store().read(cx);
@@ -555,6 +556,21 @@ async fn deleting_a_group_removes_its_hosts_and_closes_their_tabs(cx: &mut TestA
             .collect();
         assert_eq!(names, ["staging-api", "qa-runner", "dev-box"]);
     });
+
+    // A deleted host's tab still connects, as it took the host.
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx);
+        window.dispatch_action(
+            Box::new(ReconnectTerminal(RemoteTerminalId(INITIAL_WEB_TERMINAL))),
+            cx,
+        );
+    })
+    .unwrap();
+    cx.wait_for(handle.into(), Duration::from_secs(2), |_, cx| {
+        workspace.read(cx).has_connection(HostId(WEB_01), cx)
+    })
+    .await;
 }
 
 #[gpui_kit::test]
@@ -643,8 +659,7 @@ async fn groups_and_hosts_are_read_back_from_the_database(cx: &mut TestAppContex
     assert_eq!(saved.address.as_ref(), "10.0.1.12");
     assert_eq!(saved.port, 22);
     assert_eq!(saved.group, Some(group));
-    // Runtime state is not persisted, but the last connection time is.
-    assert!(!saved.state.is_connected());
+    // The last connection time is persisted.
     assert_eq!(
         reloaded.recent_hosts().map(|s| s.id).collect::<Vec<_>>(),
         [host]

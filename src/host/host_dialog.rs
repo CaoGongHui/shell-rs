@@ -46,6 +46,26 @@ use crate::shared::{
 const DIALOG_TOP: f32 = 0.05;
 const DIALOG_MAX_HEIGHT: f32 = 0.9;
 
+/// Why an edit keeps the host an SSH host: the other protocols' segments
+/// are disabled and say so.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProtocolLock {
+    /// These many hosts go through it as a jump host, which only an SSH
+    /// host can be.
+    JumpUsers(usize),
+    /// These many port forwards go via it.
+    Forwards(usize),
+}
+
+impl ProtocolLock {
+    fn reason(self) -> SharedString {
+        match self {
+            ProtocolLock::JumpUsers(count) => tn!("host.dialog.protocol_jump_users", count),
+            ProtocolLock::Forwards(count) => tn!("host.dialog.protocol_forwards", count),
+        }
+    }
+}
+
 /// Where a Telnet host's 自动登录 takes its user name and password, as the
 /// form's 「认证方式」 offers it when 自动登录 is on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -205,8 +225,9 @@ pub struct HostForm {
     /// and a commit that saves nothing.
     temporary: bool,
     name: Entity<InputState>,
-    /// Chosen when the host is created; an edit shows it but cannot change it.
     protocol: ProtocolKind,
+    /// Why an edit cannot change the protocol, if anything holds it.
+    protocol_lock: Option<ProtocolLock>,
     address: Entity<InputState>,
     port: Entity<InputState>,
     source: AuthSource,
@@ -264,13 +285,18 @@ pub struct HostForm {
     testing_connection: bool,
     /// Logs in with the form's current values for 「测试连接」.
     tester: SharedConnectionTester,
-    editing_connected: bool,
+    /// The host being edited has tabs open: the note says they stay as
+    /// they are.
+    has_tabs: bool,
     _subscriptions: Vec<Subscription>,
 }
 
 impl HostForm {
+    /// `tabs_open` says whether the host being edited has tabs open, which
+    /// an edit leaves as they are.
     pub fn new(
         editing: Option<HostId>,
+        tabs_open: bool,
         preselect_group: Option<GroupId>,
         store: Entity<HostStore>,
         tester: SharedConnectionTester,
@@ -278,23 +304,31 @@ impl HostForm {
         cx: &mut Context<Self>,
     ) -> Self {
         let secrets = store.read(cx).secrets();
-        let (draft, options, credentials, key_dir, editing_connected, jump_hosts) = {
+        let (draft, options, credentials, key_dir, jump_hosts) = {
             let read = store.read(cx);
             (
                 editing.and_then(|id| read.host(id)).map(Host::draft),
                 group_options(read.groups(), &[]),
                 read.credentials().to_vec(),
                 read.key_dir().map(Path::to_path_buf),
-                editing
-                    .and_then(|id| read.host(id))
-                    .is_some_and(|host| host.state != super::ConnectionState::Disconnected),
                 read.hosts()
                     .iter()
-                    .filter(|host| Some(host.id) != editing && !host.is_serial())
+                    .filter(|host| Some(host.id) != editing && host.is_ssh())
                     .map(JumpHost::of)
                     .collect::<Vec<_>>(),
             )
         };
+        let protocol_lock = editing.and_then(|id| {
+            let read = store.read(cx);
+            if !read.host(id)?.is_ssh() {
+                return None;
+            }
+            match read.ssh_dependents(id) {
+                (0, 0) => None,
+                (0, forwards) => Some(ProtocolLock::Forwards(forwards)),
+                (jumps, _) => Some(ProtocolLock::JumpUsers(jumps)),
+            }
+        });
         // A host with no group sits at the root of the tree, which is where
         // every host starts when the database is still empty.
         let mut group_ids: Vec<Option<GroupId>> = vec![None];
@@ -322,6 +356,9 @@ impl HostForm {
         };
         let line = draft.protocol.serial().unwrap_or_default();
         let telnet = draft.protocol.telnet().cloned();
+        // An SSH login starts as a new host's unless the host is SSH: a
+        // serial host keeps no login, and a Telnet host's is its 自动登录.
+        let ssh_login = protocol.is_ssh().then_some(&draft);
 
         let name = cx.new(|cx| {
             InputState::new(window, cx)
@@ -395,10 +432,10 @@ impl HostForm {
         let user = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(DEFAULT_USER)
-                .default_value(draft.user.clone())
+                .default_value(ssh_login.map_or(DEFAULT_USER.into(), |draft| draft.user.clone()))
         });
         let fields = cx.new(|cx| SecretFields::new(secrets.clone(), None, window, cx));
-        let credential_ix = draft.credential.and_then(|id| {
+        let credential_ix = ssh_login.and_then(|draft| draft.credential).and_then(|id| {
             credentials
                 .iter()
                 .position(|credential| credential.id == id)
@@ -608,9 +645,13 @@ impl HostForm {
             temporary: false,
             name,
             protocol,
+            protocol_lock,
             address,
             port,
-            source: match (credential_ix, draft.auth) {
+            source: match (
+                credential_ix,
+                ssh_login.map_or(AuthKind::default(), |draft| draft.auth),
+            ) {
                 (Some(_), _) => AuthSource::Credential,
                 (None, AuthKind::Password) => AuthSource::Password,
                 (None, AuthKind::NoPassword) => AuthSource::NoPassword,
@@ -655,7 +696,7 @@ impl HostForm {
             _looking_for_ports: Task::ready(()),
             testing_connection: false,
             tester,
-            editing_connected,
+            has_tabs: editing.is_some() && tabs_open,
             _subscriptions: subscriptions,
         };
         if protocol == ProtocolKind::Serial {
@@ -672,7 +713,7 @@ impl HostForm {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut form = Self::new(None, None, store, tester, window, cx);
+        let mut form = Self::new(None, false, None, store, tester, window, cx);
         form.temporary = true;
         form.name.update(cx, |input, cx| {
             input.set_placeholder(t!("host.dialog.temporary_name_placeholder"), window, cx)
@@ -680,15 +721,16 @@ impl HostForm {
         form
     }
 
-    /// Make the form one for an SSH, a Telnet or a serial host: a new host's
-    /// choice.
+    /// Make the form one for an SSH, a Telnet or a serial host. An edit's
+    /// other protocols take what they share (the name, the address, the
+    /// group, the route, the notes) and their own defaults for the rest.
     fn set_protocol(
         &mut self,
         protocol: ProtocolKind,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.protocol == protocol || self.editing.is_some() {
+        if self.protocol == protocol || self.protocol_lock.is_some() {
             return;
         }
         self.protocol = protocol;
@@ -1507,10 +1549,10 @@ impl HostForm {
 }
 
 impl HostForm {
-    /// 「协议」: a new host's choice, which an edit shows but cannot change.
+    /// 「协议」: an edit's too, unless something holds it.
     fn protocol_field(&self, cx: &mut Context<Self>) -> Field {
         let protocol = self.protocol;
-        let fixed = self.editing.is_some();
+        let lock = self.protocol_lock;
         Field::new()
             .label(t!("host.dialog.protocol"))
             .col_span(4)
@@ -1523,11 +1565,10 @@ impl HostForm {
                         }
                     }))
                     .segments(ProtocolKind::ALL.map(|each| {
-                        Segment::new(each.label()).when(fixed && each != protocol, |segment| {
-                            segment
-                                .disabled(true)
-                                .tooltip(t!("host.dialog.protocol_fixed"))
-                        })
+                        Segment::new(each.label())
+                            .when_some(lock.filter(|_| each != protocol), |segment, lock| {
+                                segment.disabled(true).tooltip(lock.reason())
+                            })
                     })),
             )
     }
@@ -2010,12 +2051,12 @@ impl Render for HostForm {
                         .child(secret_note),
                 )
             })
-            .when(self.editing_connected, |form| {
+            .when(self.has_tabs, |form| {
                 form.child(
                     div()
                         .text_sm()
                         .text_color(cx.theme().muted_foreground)
-                        .child(t!("host.dialog.reconnect_note")),
+                        .child(t!("host.dialog.next_connection_note")),
                 )
             })
     }
@@ -2282,13 +2323,24 @@ fn connection_test_notification(result: Result<(), String>) -> Notification {
 /// dialog's 「测试连接」 button.
 pub fn open_host_dialog(
     editing: Option<HostId>,
+    tabs_open: bool,
     preselect_group: Option<GroupId>,
     store: Entity<HostStore>,
     tester: SharedConnectionTester,
     window: &mut Window,
     cx: &mut App,
 ) {
-    let form = cx.new(|cx| HostForm::new(editing, preselect_group, store, tester, window, cx));
+    let form = cx.new(|cx| {
+        HostForm::new(
+            editing,
+            tabs_open,
+            preselect_group,
+            store,
+            tester,
+            window,
+            cx,
+        )
+    });
     let title = if editing.is_some() {
         t!("host.dialog.title_edit")
     } else {
@@ -2422,20 +2474,17 @@ pub struct Dependents {
 }
 
 /// Ask before deleting a host. `on_delete` runs when the user confirms.
-/// `affected` is whether tabs of the host are open and how many of them
-/// are transferring.
+/// Its open tabs are not its business: they stay.
 pub fn confirm_delete_host(
     host: &Host,
-    affected: (bool, usize),
     dependents: Dependents,
     on_delete: DeleteHandler,
     window: &mut Window,
     cx: &mut App,
 ) {
-    let (closes_tabs, uploads) = affected;
     confirm_delete(
         &host.name,
-        describe_host_delete(closes_tabs, uploads, dependents),
+        describe_host_delete(dependents),
         on_delete,
         window,
         cx,
@@ -2443,19 +2492,9 @@ pub fn confirm_delete_host(
 }
 
 /// What the delete dialog says goes with the host. `None` for a host
-/// with nothing open and nothing depending on it.
-fn describe_host_delete(
-    closes_tabs: bool,
-    uploads: usize,
-    dependents: Dependents,
-) -> Option<SharedString> {
+/// nothing depends on.
+fn describe_host_delete(dependents: Dependents) -> Option<SharedString> {
     let mut description = Vec::new();
-    if closes_tabs {
-        description.push(t!("host.delete.closes_tabs"));
-        if uploads > 0 {
-            description.push(tn!("host.delete.transfers", uploads));
-        }
-    }
     let Dependents {
         forwards,
         jump_users,
@@ -2496,22 +2535,10 @@ mod tests {
 
     #[test]
     fn deleting_a_host_says_what_goes_with_it() {
-        assert_eq!(describe_host_delete(false, 0, forwards(0)), None);
+        assert_eq!(describe_host_delete(forwards(0)), None);
         assert_eq!(
-            describe_host_delete(true, 0, forwards(0)).as_deref(),
-            Some("会一并关闭该主机已打开的终端和 SFTP 标签。")
-        );
-        assert_eq!(
-            describe_host_delete(true, 2, forwards(0)).as_deref(),
-            Some("会一并关闭该主机已打开的终端和 SFTP 标签。将停止 2 个传输批次并保留续传进度。")
-        );
-        assert_eq!(
-            describe_host_delete(false, 0, forwards(3)).as_deref(),
+            describe_host_delete(forwards(3)).as_deref(),
             Some("将同时删除经由该主机的 3 条端口转发。")
-        );
-        assert_eq!(
-            describe_host_delete(true, 0, forwards(1)).as_deref(),
-            Some("会一并关闭该主机已打开的终端和 SFTP 标签。将同时删除经由该主机的 1 条端口转发。")
         );
     }
 
@@ -2519,12 +2546,15 @@ mod tests {
     fn the_sentences_of_an_english_description_are_spaced() {
         crate::i18n::isolate_thread();
         crate::i18n::set_locale("en");
+        let dependents = Dependents {
+            forwards: 2,
+            jump_users: 1,
+        };
         assert_eq!(
-            describe_host_delete(true, 1, forwards(2)).as_deref(),
+            describe_host_delete(dependents).as_deref(),
             Some(
-                "Its open terminal and SFTP tabs will close. \
-                 1 transfer batch will stop, with its progress kept for resuming. \
-                 2 port forwards through this host will also be deleted."
+                "2 port forwards through this host will also be deleted. \
+                 1 host uses it as a jump host and will need another one to connect."
             )
         );
     }
@@ -2536,7 +2566,7 @@ mod tests {
             jump_users: 2,
         };
         assert_eq!(
-            describe_host_delete(false, 0, dependents).as_deref(),
+            describe_host_delete(dependents).as_deref(),
             Some(
                 "将同时删除经由该主机的 1 条端口转发。有 2 台主机把它用作跳板主机，删除后要重新选择跳板主机才能连接。"
             )

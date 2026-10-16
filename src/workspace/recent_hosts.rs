@@ -44,7 +44,6 @@ struct RecentRow {
     name: SharedString,
     address: String,
     group: Option<SharedString>,
-    connected: bool,
     os: Option<HostOs>,
     protocol: ProtocolKind,
     /// The host's own address, which colours a mark without a brand.
@@ -85,7 +84,6 @@ impl RecentHosts {
                 group: host
                     .group
                     .map(|id| SharedString::from(store.group_path(id))),
-                connected: host.state.is_connected(),
                 os: host.os,
                 protocol: host.kind(),
                 host_address: host.address.clone(),
@@ -232,20 +230,6 @@ impl RecentHosts {
                             ),
                     ),
             )
-            .when(row.connected, |item| {
-                item.suffix(|_, cx| {
-                    h_flex()
-                        .gap_1()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(
-                            Icon::new(IconName::CircleCheck)
-                                .xsmall()
-                                .text_color(cx.theme().success),
-                        )
-                        .child(t!("workspace.recent.connected"))
-                })
-            })
             // A right click selects the row, as in Finder and Explorer, so
             // the menu visibly belongs to it.
             .on_mouse_down(

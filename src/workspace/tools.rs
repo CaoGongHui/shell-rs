@@ -89,6 +89,9 @@ impl Workspace {
         Some(ToolTerminal {
             id,
             host: panel.host_id(),
+            name: panel.host().name.clone(),
+            os: panel.host().os,
+            shell_only: panel.shell_only(),
             view: panel.terminal().downgrade(),
         })
     }
@@ -102,10 +105,7 @@ impl Workspace {
         let Some(terminal) = self.tool_terminal(cx) else {
             return Vec::new();
         };
-        let store = self.store.read(cx);
-        let os = store.host(terminal.host).and_then(|host| host.os);
-        let shell_only = store.is_external(terminal.host)
-            || store.host(terminal.host).is_some_and(|host| !host.is_ssh());
+        let (os, shell_only) = (terminal.os, terminal.shell_only);
         let shown = self.settings().read(cx).settings().sidebar_tools;
         ToolKind::ALL
             .into_iter()
@@ -285,12 +285,7 @@ impl Workspace {
         let Some(view) = terminal.view.upgrade() else {
             return;
         };
-        let replace = self
-            .store
-            .read(cx)
-            .host(terminal.host)
-            .and_then(|host| host.os)
-            != Some(HostOs::Windows);
+        let replace = terminal.os != Some(HostOs::Windows);
         let EnterCommand { command, run } = action;
         match view.update(cx, |view, cx| {
             view.enter_command(command, *run, replace, cx)

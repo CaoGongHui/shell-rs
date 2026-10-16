@@ -48,8 +48,7 @@ fn tab_close_button_closes_the_terminal_and_disconnects(cx: &mut TestAppContext)
     cx.update(|cx| {
         let workspace = workspace.read(cx);
         assert!(workspace.terminal(HostId(DB_01), cx).is_none());
-        let store = workspace.store().read(cx);
-        assert!(!store.host(HostId(DB_01)).unwrap().state.is_connected());
+        assert!(!workspace.has_connection(HostId(DB_01), cx));
     });
 }
 
@@ -659,10 +658,9 @@ async fn the_start_page_marks_recent_hosts_with_their_operating_system(cx: &mut 
         AuthKind::Password,
         None,
     ));
-    // Connecting once puts it on the start page; disconnecting keeps it there
-    // and leaves the centre empty, which is when that page shows.
-    store.set_state_unnotified(id, ConnectionState::Connected);
-    store.set_state_unnotified(id, ConnectionState::Disconnected);
+    // Connecting once puts it on the start page, which shows while the
+    // centre is empty.
+    store.record_connection_unnotified(id);
     store.set_host_os_unnotified(id, Some(HostOs::Ubuntu));
     let (handle, _) = open_workspace_with_store(cx, store);
 

@@ -16,9 +16,10 @@ use crate::terminal::{TerminalLifecycle, TerminalStatus};
 /// no terminal in front there is no size to show.
 #[derive(IntoElement)]
 pub enum WorkspaceStatus {
-    /// The active host, with the terminal in front when that is one of
-    /// its terminals: the start page and the settings have none.
-    Host(Option<Host>, Option<TerminalStatus>),
+    /// The remote terminal in front: its host as it took it, its own
+    /// connection, and its state and size. The start page and the
+    /// settings have none.
+    Host(Option<(Host, ConnectionState)>, Option<TerminalStatus>),
     Local(TerminalStatus),
     /// An SFTP tab: its own connection and what went wrong in it.
     Explorer(Option<Host>, ExplorerStatus),
@@ -99,11 +100,11 @@ impl RenderOnce for WorkspaceStatus {
                 }
             }
             WorkspaceStatus::Host(active, terminal) => match active {
-                Some(host) => {
-                    alarming = host.state == ConnectionState::Disconnected;
+                Some((host, state)) => {
+                    alarming = state == ConnectionState::Disconnected;
                     (
-                        connection_text(host.state, &host.name),
-                        state_icon(host.state, cx),
+                        connection_text(state, &host.name),
+                        state_icon(state, cx),
                         Some(host.endpoint()),
                         terminal,
                     )

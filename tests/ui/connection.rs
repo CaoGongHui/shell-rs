@@ -176,15 +176,7 @@ async fn authentication_prompt_is_masked_and_drives_connected_state(cx: &mut Tes
     .await;
 
     assert_eq!(factory.accepted.load(Ordering::SeqCst), 1);
-    assert!(workspace.read_with(cx, |workspace, cx| {
-        workspace
-            .store()
-            .read(cx)
-            .host(id)
-            .unwrap()
-            .state
-            .is_connected()
-    }));
+    assert!(workspace.read_with(cx, |workspace, cx| { workspace.has_connection(id, cx) }));
 }
 
 #[gpui_kit::test]
@@ -271,15 +263,7 @@ async fn canceling_unknown_host_prompt_keeps_host_disconnected(cx: &mut TestAppC
 
     assert_eq!(factory.accepted.load(Ordering::SeqCst), 0);
     assert_eq!(factory.canceled.load(Ordering::SeqCst), 1);
-    assert!(!workspace.read_with(cx, |workspace, cx| {
-        workspace
-            .store()
-            .read(cx)
-            .host(id)
-            .unwrap()
-            .state
-            .is_connected()
-    }));
+    assert!(!workspace.read_with(cx, |workspace, cx| { workspace.has_connection(id, cx) }));
 
     // The failed terminal tab remains visible, but connecting the host
     // again must start a fresh transport instead of only activating that tab.
@@ -336,17 +320,14 @@ async fn opening_sftp_updates_connection_state_without_terminal(cx: &mut TestApp
     })
     .unwrap();
     cx.wait_for(handle.into(), Duration::from_secs(2), |_, cx| {
-        workspace.read(cx).store().read(cx).host(id).unwrap().state == ConnectionState::Connected
+        workspace.read(cx).has_connection(id, cx)
     })
     .await;
 
     cx.update(|cx| {
         let workspace = workspace.read(cx);
         assert_eq!(workspace.explorers_of(id, cx).len(), 1);
-        assert_eq!(
-            workspace.store().read(cx).host(id).unwrap().state,
-            shellrs::host::ConnectionState::Connected
-        );
+        assert!(workspace.has_connection(id, cx));
     });
 }
 
@@ -386,8 +367,7 @@ async fn double_click_on_host_opens_terminal_and_updates_status(cx: &mut TestApp
     cx.update(|cx| {
         let workspace = workspace.read(cx);
         assert!(workspace.terminal(HostId(DB_01), cx).is_some());
-        let store = workspace.store().read(cx);
-        assert!(store.host(HostId(DB_01)).unwrap().state.is_connected());
+        assert!(workspace.has_connection(HostId(DB_01), cx));
     });
 }
 
@@ -431,15 +411,7 @@ async fn connected_host_opens_an_independent_terminal_each_time(cx: &mut TestApp
     .unwrap();
     cx.wait_for(handle.into(), Duration::from_secs(2), |window, cx| {
         window.render_frame(cx);
-        factory.starts() == 3
-            && workspace
-                .read(cx)
-                .store()
-                .read(cx)
-                .host(id)
-                .unwrap()
-                .state
-                .is_connected()
+        factory.starts() == 3 && workspace.read(cx).has_connection(id, cx)
     })
     .await;
 
@@ -459,28 +431,13 @@ async fn connected_host_opens_an_independent_terminal_each_time(cx: &mut TestApp
     cx.wait_for(handle.into(), Duration::from_secs(2), |window, cx| {
         window.render_frame(cx);
         let workspace = workspace.read(cx);
-        workspace.terminal_count(id, cx) == 2
-            && workspace
-                .store()
-                .read(cx)
-                .host(id)
-                .unwrap()
-                .state
-                .is_connected()
+        workspace.terminal_count(id, cx) == 2 && workspace.has_connection(id, cx)
     })
     .await;
     cx.update(|cx| {
         let workspace = workspace.read(cx);
         assert_eq!(workspace.terminal_count(id, cx), 2);
-        assert!(
-            workspace
-                .store()
-                .read(cx)
-                .host(id)
-                .unwrap()
-                .state
-                .is_connected()
-        );
+        assert!(workspace.has_connection(id, cx));
     });
 }
 
@@ -516,11 +473,7 @@ async fn disconnecting_one_tab_leaves_the_other_tabs_of_its_host(cx: &mut TestAp
             TerminalLifecycle::Running
         );
         let workspace = workspace.read(cx);
-        let store = workspace.store().read(cx);
-        assert_eq!(
-            store.host(HostId(WEB_01)).unwrap().state,
-            ConnectionState::Connected
-        );
+        assert!(workspace.has_connection(HostId(WEB_01), cx));
         let screen = workspace
             .remote_terminal(second)
             .unwrap()

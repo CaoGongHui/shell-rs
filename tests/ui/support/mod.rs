@@ -13,8 +13,8 @@ pub use semver::Version;
 pub use shellrs::app::{
     CenterTab, CheckForUpdates, ClearTerminal, CloseScope, CloseTabs, CollapseAllGroups,
     ConnectGroup, ConnectHost, CopyCredentialPublicKey, CopyHostAddress, CopyHostId,
-    DeleteCredential, DeleteForward, DeleteGroup, DeleteHost, DisconnectHost, DisconnectTerminal,
-    EditCredential, EditForward, EditHost, ExpandAllGroups, FindInTerminal, FindNextInTerminal,
+    DeleteCredential, DeleteForward, DeleteGroup, DeleteHost, DisconnectTerminal, EditCredential,
+    EditForward, EditHost, ExpandAllGroups, FindInTerminal, FindNextInTerminal,
     FindPreviousInTerminal, FocusSearch, InstallCliCommand, NewHostInGroup, NewLocalTerminal,
     OpenExplorer, OpenSettings, ReconnectTerminal, RemoveAgentSkill, RenameGroup, RenameTerminal,
     StartForward, StopForward, ToggleHostPanel, ToggleToolSidebar,

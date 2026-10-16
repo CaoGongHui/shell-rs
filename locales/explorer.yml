@@ -418,9 +418,6 @@ explorer.queue.status.removed:
 explorer.connection.start_failed:
   zh-CN: 无法启动 SFTP：%{error}
   en: "Couldn’t start SFTP: %{error}"
-explorer.connection.server:
-  zh-CN: 服务器
-  en: the server
 explorer.connection.lost:
   zh-CN: SFTP 已断开
   en: SFTP disconnected

@@ -142,7 +142,9 @@ async fn a_serial_host_is_made_from_its_device_and_line(cx: &mut TestAppContext)
 }
 
 #[gpui_kit::test]
-async fn a_serial_host_keeps_its_protocol_and_reconnects_at_a_new_rate(cx: &mut TestAppContext) {
+async fn an_open_serial_terminal_keeps_its_line_and_a_new_one_takes_the_new_rate(
+    cx: &mut TestAppContext,
+) {
     let (store, id) = serial_store();
     let serial = fake_serial_terminals();
     let (handle, workspace) = open_workspace_with_terminals(
@@ -164,12 +166,6 @@ async fn a_serial_host_keeps_its_protocol_and_reconnects_at_a_new_rate(cx: &mut 
         window.dispatch_action(Box::new(EditHost(id)), cx)
     });
     in_frame(cx, handle, |window, cx| {
-        let mut protocols = window.within("host-protocol");
-        assert_eq!(protocols.find(2usize).selected(), Some(true));
-        // SSH cannot be chosen any more.
-        protocols.click(0usize, cx);
-    });
-    in_frame(cx, handle, |window, cx| {
         assert_eq!(
             window.within("host-protocol").find(2usize).selected(),
             Some(true)
@@ -182,23 +178,30 @@ async fn a_serial_host_keeps_its_protocol_and_reconnects_at_a_new_rate(cx: &mut 
         window.click("commit", cx);
     });
     wait_for_dialog_to_close(cx, handle).await;
+    cx.run_until_parked();
+    assert_eq!(serial.lines().len(), 1, "the open line stays as it is");
+
+    // Reconnecting opens the line the tab first did; a new tab, the new one.
+    in_frame(cx, handle, |window, cx| {
+        window.click(("reconnect", 1_u64), cx)
+    });
     cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
         serial.lines().len() == 2
     })
     .await;
-    assert_eq!(serial.lines()[1].settings.baud, 57600);
-
-    // A new name alone does not reconnect.
-    let store = cx.update(|cx| workspace.read(cx).store().clone());
-    cx.update(|cx| {
-        store.update(cx, |store, cx| {
-            let mut draft = store.host(id).unwrap().draft();
-            draft.name = "控制台".into();
-            assert!(store.update(id, draft, cx));
-        })
+    assert_eq!(
+        serial.lines()[1].settings.baud,
+        SerialSettings::default().baud
+    );
+    in_frame(cx, handle, |window, cx| {
+        window.dispatch_action(Box::new(ConnectHost(id)), cx)
     });
-    cx.run_until_parked();
-    assert_eq!(serial.lines().len(), 2);
+    cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
+        serial.lines().len() == 3
+    })
+    .await;
+    assert_eq!(serial.lines()[2].settings.baud, 57600);
+    cx.update(|cx| assert_eq!(workspace.read(cx).terminal_count(id, cx), 2));
 }
 
 #[gpui_kit::test]

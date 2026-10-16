@@ -168,9 +168,16 @@ host.dialog.name_placeholder_serial:
 host.dialog.protocol:
   zh-CN: 协议
   en: Protocol
-host.dialog.protocol_fixed:
-  zh-CN: 协议在创建后不能更改
-  en: The protocol can’t be changed after the host is created
+host.dialog.protocol_jump_users.one:
+  en: "%{count} host uses it as a jump host, so it stays SSH"
+host.dialog.protocol_jump_users.other:
+  zh-CN: 有 %{count} 台主机把它当作跳板，只能是 SSH
+  en: "%{count} hosts use it as a jump host, so it stays SSH"
+host.dialog.protocol_forwards.one:
+  en: "%{count} port forward goes via it, so it stays SSH"
+host.dialog.protocol_forwards.other:
+  zh-CN: 有 %{count} 条端口转发经由它，只能是 SSH
+  en: "%{count} port forwards go via it, so it stays SSH"
 host.dialog.serial_device:
   zh-CN: 串口设备
   en: Serial port
@@ -303,9 +310,9 @@ host.dialog.telnet_password_prompt:
 host.dialog.telnet_prompt_note:
   zh-CN: 留空使用常见提示，匹配时忽略大小写。用户名可留空以支持仅密码登录。
   en: Leave a prompt empty for the usual ones; matching ignores case. Leave the username empty for a device that asks only for a password.
-host.dialog.reconnect_note:
-  zh-CN: 保存后连接设置将立即生效并重连。
-  en: Saving applies the connection settings at once and reconnects.
+host.dialog.next_connection_note:
+  zh-CN: 已打开的连接不受影响，下次连接时使用新的设置。
+  en: Open connections stay as they are; the new settings apply the next time you connect.
 host.dialog.temporary_note:
   zh-CN: 仅当前使用的临时会话，不会保存到主机列表。
   en: For this connection only. It won’t be added to your hosts.
@@ -388,14 +395,6 @@ host.trust.trust:
   zh-CN: 信任并继续
   en: Trust and continue
 
-host.delete.closes_tabs:
-  zh-CN: 会一并关闭该主机已打开的终端和 SFTP 标签。
-  en: Its open terminal and SFTP tabs will close.
-host.delete.transfers.one:
-  en: "%{count} transfer batch will stop, with its progress kept for resuming."
-host.delete.transfers.other:
-  zh-CN: 将停止 %{count} 个传输批次并保留续传进度。
-  en: "%{count} transfer batches will stop, with their progress kept for resuming."
 host.delete.forwards.one:
   en: "%{count} port forward through this host will also be deleted."
 host.delete.forwards.other:
@@ -452,9 +451,6 @@ host.group_dialog.into_itself:
 host.delete_group.contents:
   zh-CN: 将同时删除其中的 %{items}。
   en: This also deletes the group’s %{items}.
-host.delete_group.closes_tabs:
-  zh-CN: 已打开的终端和 SFTP 标签会一并关闭。
-  en: Open terminal and SFTP tabs will close.
 host.delete_group.forwards.one:
   en: "%{count} port forward through these hosts will also be deleted."
 host.delete_group.forwards.other:

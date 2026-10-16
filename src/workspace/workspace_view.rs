@@ -27,15 +27,15 @@ use crate::app::{
     CenterTab, ClearTerminal, CloseActiveTab, CloseEditor, CloseExplorer, CloseLocalTerminal,
     CloseSettings, CloseTabs, CloseTerminal, CollapseAllGroups, ConnectGroup, ConnectHost,
     CopyAgentSkill, CopyHostAddress, CopyHostId, CopyTerminal, DeleteGroup, DeleteHost,
-    DisconnectHost, DisconnectTerminal, DismissTerminalFind, DuplicateHost, EditHost,
-    ExpandAllGroups, ExplorerAction, ExplorerCommand, ExplorerShortcut, FindInTerminal,
-    FindNextInTerminal, FindPreviousInTerminal, FocusSearch, InstallAgentSkill, InstallCliCommand,
-    MoveHostNode, NewChildGroup, NewGroup, NewHost, NewHostInGroup, NewLocalTerminal,
-    NewTemporaryConnection, OpenExplorer, OpenSettings, PasteTerminal, QuickConnect,
-    ReconnectTerminal, RefreshCliIntegration, RemoveAgentSkill, RemoveCliCommand, RenameExplorer,
-    RenameGroup, RenameTerminal, RestartLocalTerminal, SelectAllTerminal, SendBreak,
-    SetFileSizeFormat, ToggleHiddenFiles, ToggleHostPanel, ToggleTheme, ToolKind, ZoomIn, ZoomOut,
-    ZoomReset, ZoomTerminalIn, ZoomTerminalOut, ZoomTerminalReset,
+    DisconnectTerminal, DismissTerminalFind, DuplicateHost, EditHost, ExpandAllGroups,
+    ExplorerAction, ExplorerCommand, ExplorerShortcut, FindInTerminal, FindNextInTerminal,
+    FindPreviousInTerminal, FocusSearch, InstallAgentSkill, InstallCliCommand, MoveHostNode,
+    NewChildGroup, NewGroup, NewHost, NewHostInGroup, NewLocalTerminal, NewTemporaryConnection,
+    OpenExplorer, OpenSettings, PasteTerminal, QuickConnect, ReconnectTerminal,
+    RefreshCliIntegration, RemoveAgentSkill, RemoveCliCommand, RenameExplorer, RenameGroup,
+    RenameTerminal, RestartLocalTerminal, SelectAllTerminal, SendBreak, SetFileSizeFormat,
+    ToggleHiddenFiles, ToggleHostPanel, ToggleTheme, ToolKind, ZoomIn, ZoomOut, ZoomReset,
+    ZoomTerminalIn, ZoomTerminalOut, ZoomTerminalReset,
 };
 use crate::cli::{CliIntegration, CliServer, IntegrationPaths, SshCliBackend};
 use crate::connection::{
@@ -52,9 +52,10 @@ use crate::forward::{
     SshForwardTransportProvider,
 };
 use crate::host::{
-    ConnectionState, Dependents, ForwardId, GroupId, HostId, HostNode, HostPanel, HostStore,
-    HostStoreEvent, confirm_delete_group, confirm_delete_host, open_group_dialog, open_host_dialog,
-    open_quick_connect_dialog, open_temporary_connection_dialog,
+    ConnectionState, Dependents, ForwardId, GroupId, Host, HostConnection, HostId, HostLogin,
+    HostNode, HostPanel, HostStore, HostStoreEvent, confirm_delete_group, confirm_delete_host,
+    open_group_dialog, open_host_dialog, open_quick_connect_dialog,
+    open_temporary_connection_dialog,
 };
 use crate::i18n::t;
 use crate::settings::{
@@ -71,8 +72,7 @@ use crate::terminal::{
     LocalTerminalId, LocalTerminalPanel, LocalTerminalPanelEvent, RemoteTerminalId,
     SearchDirection, SharedLocalTerminalTransportProvider, SharedRemoteTerminalTransportProvider,
     SharedSerialTerminalTransportProvider, SharedTelnetTerminalTransportProvider,
-    SharedTerminalTransportFactory, TerminalLifecycle, TerminalPanel, TerminalPanelEvent,
-    TerminalView,
+    SharedTerminalTransportFactory, TerminalPanel, TerminalPanelEvent, TerminalView,
 };
 use crate::update::{UpdateServices, Updater, UpdaterEvent};
 
@@ -385,23 +385,9 @@ impl Workspace {
             cx.subscribe_in(
                 &store,
                 window,
-                |this, _, event: &HostStoreEvent, window, cx| match event {
+                |_, _, event: &HostStoreEvent, window, cx| match event {
                     HostStoreEvent::PersistFailed(message) => {
                         window.push_notification(Notification::error(message.clone()), cx);
-                    }
-                    HostStoreEvent::ConnectionSettingsChanged(id) => {
-                        let panels: Vec<_> = this.terminals_of(*id, cx).cloned().collect();
-                        if !panels.is_empty() {
-                            for panel in &panels {
-                                this.cancel_prompts_for_terminal(panel.read(cx).id(), window, cx);
-                            }
-                            this.store.update(cx, |store, cx| {
-                                store.set_state(*id, ConnectionState::Connecting, cx)
-                            });
-                            for panel in panels {
-                                panel.update(cx, |panel, cx| panel.reconnect(window, cx));
-                            }
-                        }
                     }
                     // The forward manager restarts the rule itself.
                     HostStoreEvent::ForwardSettingsChanged(_) => {}
@@ -464,14 +450,8 @@ impl Workspace {
             ),
         ];
 
-        // Hosts that start out connected get a terminal tab right away.
-        let connected: Vec<HostId> = store
-            .read(cx)
-            .hosts()
-            .iter()
-            .filter(|host| host.state.is_connected())
-            .map(|host| host.id)
-            .collect();
+        // A fixture's hosts start with a terminal tab each.
+        let connected: Vec<HostId> = store.read(cx).starting_terminals().to_vec();
         // A click on a terminal's system notification shows that terminal.
         let this = cx.weak_entity();
         let handle = window.window_handle();
@@ -656,16 +636,16 @@ impl Workspace {
         self.terminals_of(host, cx).next().is_some() || !self.explorers_of(host, cx).is_empty()
     }
 
-    /// How many of a host's SFTP tabs and terminals' 文件 are in the
-    /// middle of a transfer.
-    fn transfers_of(&self, host: HostId, cx: &App) -> usize {
-        self.explorers
-            .values()
-            .filter(|panel| {
-                let panel = panel.read(cx);
-                panel.host_id() == host && panel.is_transferring()
-            })
-            .count()
+    /// Whether one of the host's terminals or SFTP tabs is connected. Each
+    /// tab goes by its own connection; this is for whoever asks after the
+    /// host as a whole.
+    pub fn has_connection(&self, host: HostId, cx: &App) -> bool {
+        self.terminals_of(host, cx)
+            .any(|panel| panel.read(cx).connection_state(cx).is_connected())
+            || self
+                .explorers_of(host, cx)
+                .iter()
+                .any(|panel| panel.read(cx).connection_state().is_connected())
     }
 
     /// A remote terminal's 文件, once it has been shown.
@@ -692,13 +672,17 @@ impl Workspace {
         if let Some(panel) = self.file_sidebar(terminal) {
             return Some(panel.clone());
         }
+        // On the terminal's connection, so as the terminal took the host.
         let panel = self.terminals.get(&terminal)?.read(cx);
-        let host_id = panel.host_id();
+        let HostConnection::Ssh(login) = panel.connection().clone() else {
+            return None;
+        };
+        let host = panel.host().clone();
         let channels = panel.terminal().read(cx).channels(cx);
         let id = ExplorerId(self.next_explorer_id);
         self.next_explorer_id += 1;
-        let (panel, subscription) =
-            new_explorer_panel(self, id, host_id, SftpRoute::Terminal(channels), window, cx);
+        let route = SftpRoute::Terminal(channels);
+        let (panel, subscription) = new_explorer_panel(self, id, host, login, route, window, cx);
         self._subscriptions.push(subscription);
         self.explorers.insert(id, panel.clone());
         self.file_sidebars.insert(terminal, id);
@@ -1021,7 +1005,7 @@ impl Workspace {
         reply: ConnectionPromptReply,
         cx: &mut Context<Self>,
     ) {
-        let Some((active_terminal, host_id, active_request)) = self.active_prompt else {
+        let Some((active_terminal, _, active_request)) = self.active_prompt else {
             return;
         };
         if (active_terminal, active_request) != (terminal_id, request_id) {
@@ -1046,7 +1030,6 @@ impl Workspace {
                 PromptOwner::Sftp(..) => {}
             }
         }
-        self.refresh_host_connection_state(host_id, cx);
     }
 
     fn prompt_owner_is_live(&self, owner: PromptOwner, cx: &App) -> bool {
@@ -1135,36 +1118,6 @@ impl Workspace {
         }
     }
 
-    fn refresh_host_connection_state(&mut self, host_id: HostId, cx: &mut Context<Self>) {
-        let mut has_starting = false;
-        let mut has_running = false;
-        for panel in self.terminals_of(host_id, cx) {
-            match panel.read(cx).lifecycle(cx) {
-                TerminalLifecycle::Running => has_running = true,
-                TerminalLifecycle::Starting => has_starting = true,
-                TerminalLifecycle::Exited { .. }
-                | TerminalLifecycle::Failed(_)
-                | TerminalLifecycle::Closing => {}
-            }
-        }
-        for panel in self.explorers_of(host_id, cx) {
-            match panel.read(cx).connection_state() {
-                ConnectionState::Connected => has_running = true,
-                ConnectionState::Connecting => has_starting = true,
-                ConnectionState::Disconnected => {}
-            }
-        }
-        let state = if has_running {
-            ConnectionState::Connected
-        } else if has_starting {
-            ConnectionState::Connecting
-        } else {
-            ConnectionState::Disconnected
-        };
-        self.store
-            .update(cx, |store, cx| store.set_state(host_id, state, cx));
-    }
-
     fn on_connect_host(
         &mut self,
         action: &ConnectHost,
@@ -1214,7 +1167,6 @@ impl Workspace {
             cx,
         ));
         self.terminals.insert(terminal_id, panel.clone());
-        self.refresh_host_connection_state(host_id, cx);
         self.dock_area.update(cx, |area, cx| {
             area.add_panel_view(panel_handle(panel), DockPlacement::Center, None, window, cx);
         });
@@ -1236,20 +1188,21 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         // Only an SSH host has SFTP; nothing offers it another.
-        if self
-            .store
-            .read(cx)
+        let store = self.store.read(cx);
+        let Some((host, login)) = store
             .host(host_id)
-            .is_none_or(|host| !host.is_ssh())
-        {
+            .filter(|host| host.is_ssh())
+            .cloned()
+            .zip(store.login(host_id))
+        else {
             return;
-        }
+        };
         // Every request opens a tab of its own, as connecting does for
         // terminals: two directories of one host side by side.
         let id = ExplorerId(self.next_explorer_id);
         self.next_explorer_id += 1;
         let (panel, subscription) =
-            new_explorer_panel(self, id, host_id, SftpRoute::Login, window, cx);
+            new_explorer_panel(self, id, host, login, SftpRoute::Login, window, cx);
         self._subscriptions.push(subscription);
         let focus = panel.read(cx).focus_handle(cx);
         self._subscriptions
@@ -1308,8 +1261,6 @@ impl Workspace {
             |this, _, event: &SettingsPanelEvent, window, cx| {
                 match event {
                     SettingsPanelEvent::Activated => {
-                        this.store
-                            .update(cx, |store, cx| store.set_active(None, cx));
                         this.set_active_tab(Some(CenterTab::Settings), window, cx);
                     }
                     SettingsPanelEvent::Closed => {
@@ -2024,10 +1975,8 @@ impl Workspace {
         let id = action.0;
         self.cancel_prompts_for_terminal(id, window, cx);
         if let Some(terminal) = self.terminals.get(&id).cloned() {
-            let host_id = terminal.read(cx).host_id();
             terminal.update(cx, |terminal, cx| terminal.disconnect(cx));
             self.disconnect_file_sidebar(id, window, cx);
-            self.refresh_host_connection_state(host_id, cx);
         }
     }
 
@@ -2044,27 +1993,6 @@ impl Workspace {
         }
     }
 
-    fn on_disconnect_host(
-        &mut self,
-        action: &DisconnectHost,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let id = action.0;
-        self.cancel_prompts_for_host(id, window, cx);
-        self.store.update(cx, |store, cx| {
-            store.set_state(id, ConnectionState::Disconnected, cx);
-        });
-        let terminals: Vec<_> = self.terminals_of(id, cx).cloned().collect();
-        for terminal in terminals {
-            terminal.update(cx, |terminal, cx| terminal.disconnect(cx));
-            self.disconnect_file_sidebar(terminal.read(cx).id(), window, cx);
-        }
-        for panel in self.explorers_of(id, cx) {
-            panel.update(cx, |panel, cx| panel.disconnect(window, cx));
-        }
-    }
-
     fn on_reconnect_terminal(
         &mut self,
         action: &ReconnectTerminal,
@@ -2074,15 +2002,14 @@ impl Workspace {
         let id = action.0;
         self.cancel_prompts_for_terminal(id, window, cx);
         if let Some(terminal) = self.terminals.get(&id).cloned() {
-            let host_id = terminal.read(cx).host_id();
             terminal.update(cx, |terminal, cx| terminal.reconnect(window, cx));
-            self.refresh_host_connection_state(host_id, cx);
         }
     }
 
     fn on_new_host(&mut self, _: &NewHost, window: &mut Window, cx: &mut Context<Self>) {
         open_host_dialog(
             None,
+            false,
             None,
             self.store.clone(),
             self.connection_tester.clone(),
@@ -2122,6 +2049,7 @@ impl Workspace {
         {
             open_host_dialog(
                 Some(action.0),
+                self.has_tabs(action.0, cx),
                 None,
                 self.store.clone(),
                 self.connection_tester.clone(),
@@ -2177,11 +2105,10 @@ impl Workspace {
         };
         confirm_delete_host(
             &host,
-            (self.has_tabs(id, cx), self.transfers_of(id, cx)),
             dependents,
-            Rc::new(move |window, cx| {
+            Rc::new(move |_, cx| {
                 workspace
-                    .update(cx, |this, cx| this.remove_host(id, window, cx))
+                    .update(cx, |this, cx| this.remove_host(id, cx))
                     .ok();
             }),
             window,
@@ -2189,33 +2116,11 @@ impl Workspace {
         );
     }
 
-    fn remove_host(&mut self, id: HostId, window: &mut Window, cx: &mut Context<Self>) {
-        self.close_host_tabs(id, window, cx);
+    /// Its open tabs stay: each has the host as it took it.
+    fn remove_host(&mut self, id: HostId, cx: &mut Context<Self>) {
         self.store.update(cx, |store, cx| {
             store.remove(id, cx);
         });
-    }
-
-    /// Close whatever a host has open in the center, leaving the store
-    /// alone. Deleting a host and deleting the group around it both need
-    /// this, the latter for every host in the subtree.
-    pub(super) fn close_host_tabs(
-        &mut self,
-        id: HostId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.cancel_prompts_for_host(id, window, cx);
-        let terminals: Vec<_> = self.terminals_of(id, cx).cloned().collect();
-        for terminal in terminals {
-            self.dock_area
-                .update(cx, |area, cx| area.remove_panel(terminal, window, cx));
-        }
-        for explorer in self.explorers_of(id, cx) {
-            self.explorers.remove(&explorer.read(cx).id());
-            self.dock_area
-                .update(cx, |area, cx| area.remove_panel(explorer, window, cx));
-        }
     }
 
     fn on_new_host_in_group(
@@ -2226,6 +2131,7 @@ impl Workspace {
     ) {
         open_host_dialog(
             None,
+            false,
             Some(action.0),
             self.store.clone(),
             self.connection_tester.clone(),
@@ -2299,8 +2205,6 @@ impl Workspace {
         let name = group.name.to_string();
         let subgroups = store.descendant_groups(id).len();
         let doomed = store.hosts_under(id);
-        let closes_tabs = doomed.iter().any(|id| self.has_tabs(*id, cx));
-        let transfers = doomed.iter().map(|id| self.transfers_of(*id, cx)).sum();
         let dependents = Dependents {
             forwards: doomed.iter().map(|id| store.forwards_of(*id).count()).sum(),
             jump_users: store.jump_users(&doomed),
@@ -2310,11 +2214,10 @@ impl Workspace {
             &name,
             doomed.len(),
             subgroups,
-            (closes_tabs, transfers),
             dependents,
-            Rc::new(move |window, cx| {
+            Rc::new(move |_, cx| {
                 workspace
-                    .update(cx, |this, cx| this.remove_group(id, window, cx))
+                    .update(cx, |this, cx| this.remove_group(id, cx))
                     .ok();
             }),
             window,
@@ -2322,15 +2225,10 @@ impl Workspace {
         );
     }
 
-    /// The store cascades the delete; the workspace only has to close the
-    /// tabs of the hosts that went with the group.
-    fn remove_group(&mut self, id: GroupId, window: &mut Window, cx: &mut Context<Self>) {
-        let removed = self
-            .store
+    /// The store cascades the delete; the hosts' open tabs stay.
+    fn remove_group(&mut self, id: GroupId, cx: &mut Context<Self>) {
+        self.store
             .update(cx, |store, cx| store.remove_group(id, cx));
-        for host in removed {
-            self.close_host_tabs(host, window, cx);
-        }
     }
 
     fn on_toggle_host_panel(
@@ -2478,27 +2376,18 @@ fn new_terminal_panel(
                 if this.active_tab == Some(CenterTab::Terminal(*terminal_id)) {
                     this.set_active_tab(None, window, cx);
                 }
-                this.refresh_host_connection_state(*host_id, cx);
-                if !this.has_tabs(*host_id, cx)
-                    && this.store.read(cx).active().map(|host| host.id) == Some(*host_id)
-                {
-                    this.store
-                        .update(cx, |store, cx| store.set_active(None, cx));
-                }
                 this.forget_unused_temporary_host(*host_id, window, cx);
             }
-            TerminalPanelEvent::StatusChanged(_, host_id) => {
-                this.refresh_host_connection_state(*host_id, cx);
-                cx.notify();
-            }
+            TerminalPanelEvent::StatusChanged(..) => cx.notify(),
             TerminalPanelEvent::Connected(terminal_id, host_id) => {
                 this.count_connection(*host_id, false, cx);
+                this.store
+                    .update(cx, |store, cx| store.record_connection(*host_id, cx));
                 // A Telnet or serial terminal has no 文件 beside it.
                 if this
-                    .store
-                    .read(cx)
-                    .host(*host_id)
-                    .is_some_and(|host| !host.is_ssh())
+                    .terminals
+                    .get(terminal_id)
+                    .is_none_or(|panel| !panel.read(cx).host().is_ssh())
                 {
                     return;
                 }
@@ -2604,10 +2493,13 @@ impl Render for AuthenticationPromptForm {
     }
 }
 
+/// An SFTP tab, or a terminal's 文件, for `host` as it is now, logging in
+/// with `login`.
 fn new_explorer_panel(
     workspace: &Workspace,
     id: ExplorerId,
-    host_id: HostId,
+    host: Host,
+    login: HostLogin,
     route: SftpRoute,
     window: &mut Window,
     cx: &mut Context<Workspace>,
@@ -2615,7 +2507,8 @@ fn new_explorer_panel(
     let panel = cx.new(|cx| {
         ExplorerPanel::new(
             id,
-            host_id,
+            host,
+            login,
             workspace.store.clone(),
             workspace.sftp_provider.clone(),
             route,
@@ -2648,7 +2541,6 @@ fn new_explorer_panel(
                     // The right sidebar lets go of it.
                     this.sync_tool_sidebar(window, cx);
                 }
-                this.refresh_host_connection_state(*host_id, cx);
                 this.forget_unused_temporary_host(*host_id, window, cx);
             }
             ExplorerPanelEvent::StateChanged(id, host_id) => {
@@ -2666,8 +2558,9 @@ fn new_explorer_panel(
                     panel.connection_state() == ConnectionState::Connected && !panel.is_sidebar()
                 }) {
                     this.count_connection(*host_id, true, cx);
+                    this.store
+                        .update(cx, |store, cx| store.record_connection(*host_id, cx));
                 }
-                this.refresh_host_connection_state(*host_id, cx);
             },
             ExplorerPanelEvent::StatusChanged(id) => {
                 if this.active_tab == Some(CenterTab::Explorer(*id)) {
@@ -2701,8 +2594,6 @@ fn new_local_terminal_panel(
         window,
         |this, _, event: &LocalTerminalPanelEvent, window, cx| match event {
             LocalTerminalPanelEvent::Activated(id) => {
-                this.store
-                    .update(cx, |store, cx| store.set_active(None, cx));
                 this.set_active_tab(Some(CenterTab::LocalTerminal(*id)), window, cx);
                 cx.notify();
             }
@@ -2724,29 +2615,30 @@ fn new_local_terminal_panel(
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let active = self.store.read(cx).active().cloned();
         let status = match self.active_tab {
-            Some(CenterTab::Terminal(id)) => {
-                let terminal = self
-                    .terminals
-                    .get(&id)
-                    .map(|panel| panel.read(cx).status(cx));
-                WorkspaceStatus::Host(active, terminal)
-            }
+            // A terminal tells its own connection, to the host as it took it.
+            Some(CenterTab::Terminal(id)) => match self.terminals.get(&id) {
+                Some(panel) => {
+                    let panel = panel.read(cx);
+                    WorkspaceStatus::Host(
+                        Some((panel.host().clone(), panel.connection_state(cx))),
+                        Some(panel.status(cx)),
+                    )
+                }
+                None => WorkspaceStatus::Host(None, None),
+            },
             Some(CenterTab::LocalTerminal(id)) => self
                 .local_terminals
                 .get(&id)
                 .map(|panel| WorkspaceStatus::Local(panel.read(cx).status(cx)))
-                .unwrap_or_else(|| WorkspaceStatus::Host(active, None)),
-            // An SFTP tab tells its own connection, not the host's, and
-            // what went wrong in it.
+                .unwrap_or(WorkspaceStatus::Host(None, None)),
+            // An SFTP tab tells its own connection, and what went wrong in it.
             Some(CenterTab::Explorer(id)) => match self.explorers.get(&id) {
                 Some(panel) => {
                     let panel = panel.read(cx);
-                    let host = self.store.read(cx).host(panel.host_id()).cloned();
-                    WorkspaceStatus::Explorer(host, panel.status(cx))
+                    WorkspaceStatus::Explorer(Some(panel.host().clone()), panel.status(cx))
                 }
-                None => WorkspaceStatus::Host(active, None),
+                None => WorkspaceStatus::Host(None, None),
             },
             // An editor of a remote file tells the connection of the SFTP
             // tab its saves go through.
@@ -2754,16 +2646,13 @@ impl Render for Workspace {
                 Some(editor) => {
                     let editor = editor.read(cx);
                     let remote = editor.explorer_id().map(|explorer| {
-                        let host = editor
-                            .host_id()
-                            .and_then(|host| self.store.read(cx).host(host).cloned());
-                        let state = self
-                            .explorers
-                            .get(&explorer)
-                            .map_or(ConnectionState::Disconnected, |panel| {
-                                panel.read(cx).connection_state()
-                            });
-                        (host, state)
+                        let panel = self.explorers.get(&explorer).map(|panel| panel.read(cx));
+                        (
+                            panel.map(|panel| panel.host().clone()),
+                            panel.map_or(ConnectionState::Disconnected, |panel| {
+                                panel.connection_state()
+                            }),
+                        )
                     });
                     WorkspaceStatus::Editor {
                         remote,
@@ -2771,9 +2660,9 @@ impl Render for Workspace {
                         format: editor.format_label(),
                     }
                 }
-                None => WorkspaceStatus::Host(active, None),
+                None => WorkspaceStatus::Host(None, None),
             },
-            _ => WorkspaceStatus::Host(active, None),
+            _ => WorkspaceStatus::Host(None, None),
         };
         let sidebar = self.sidebar_showing(cx);
         let running_forwards = self.forwards.read(cx).active_count();
@@ -2801,7 +2690,6 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_delete_group))
             .on_action(cx.listener(Self::on_connect_host))
             .on_action(cx.listener(Self::on_connect_group))
-            .on_action(cx.listener(Self::on_disconnect_host))
             .on_action(cx.listener(Self::on_reconnect_terminal))
             .on_action(cx.listener(Self::on_disconnect_terminal))
             .on_action(cx.listener(Self::on_send_break))

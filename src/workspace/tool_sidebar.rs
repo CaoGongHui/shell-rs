@@ -69,11 +69,18 @@ impl ToolKind {
     }
 }
 
-/// The SSH terminal the right sidebar works on.
+/// The SSH terminal the right sidebar works on, and its host as the
+/// terminal took it.
 #[derive(Clone, PartialEq)]
 pub struct ToolTerminal {
     pub id: RemoteTerminalId,
     pub host: HostId,
+    pub name: SharedString,
+    /// What the terminal's connections found the host runs.
+    pub os: Option<HostOs>,
+    /// Nothing runs beside the terminal: a link's, a Telnet host's or a
+    /// serial host's.
+    pub shell_only: bool,
     /// Runs the tools' commands on the terminal's own connection.
     pub view: WeakEntity<TerminalView>,
 }
@@ -97,8 +104,6 @@ pub struct ToolSidebar {
     terminal: Option<ToolTerminal>,
     /// Whether the right dock is open.
     shown: bool,
-    /// For the name of the terminal's host, beside the tool's.
-    store: Entity<HostStore>,
     monitor: Entity<MonitorPanel>,
     snippets: Entity<SnippetPanel>,
     history: Entity<HistoryPanel>,
@@ -131,7 +136,6 @@ impl ToolSidebar {
             tool: ToolKind::default(),
             terminal: None,
             shown: false,
-            store: store.clone(),
             monitor: cx.new(|_| MonitorPanel::new(dispatch.clone())),
             snippets: cx.new(|cx| SnippetPanel::new(store, dispatch.clone(), window, cx)),
             history: cx.new(|cx| HistoryPanel::new(dispatch.clone(), window, cx)),
@@ -433,12 +437,7 @@ impl Panel for ToolSidebar {
     /// The tool, and the host it works on: with the center split, more than
     /// one SSH terminal may show.
     fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let host = self.terminal.as_ref().and_then(|terminal| {
-            self.store
-                .read(cx)
-                .host(terminal.host)
-                .map(|host| host.name.clone())
-        });
+        let host = self.terminal.as_ref().map(|terminal| terminal.name.clone());
         let muted = cx.theme().muted_foreground;
         h_flex()
             .id("tool-sidebar-title")

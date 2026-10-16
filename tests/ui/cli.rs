@@ -3,7 +3,9 @@
 //! The socket is not in it; `apply_cli_change` is where the server hands
 //! each change over.
 
-use shellrs::cli::{CliChange, CliError, CredentialFields, ErrorCode, HostFields, Reply, Secret};
+use shellrs::cli::{
+    CliChange, CliError, CredentialFields, ErrorCode, HostFields, ProtocolChoice, Reply, Secret,
+};
 use shellrs::terminal::{
     BusyReason, RunEvent, RunFailure, RunProgress, RunTiming, TerminalRun, TerminalView,
 };
@@ -171,50 +173,40 @@ fn a_host_moved_to_another_port_keeps_its_password_until_told_otherwise(cx: &mut
 }
 
 #[gpui_kit::test]
-fn a_host_with_tabs_open_goes_only_with_force_and_takes_them_along(cx: &mut TestAppContext) {
+fn a_host_deleted_from_the_cli_leaves_its_tabs_open(cx: &mut TestAppContext) {
     let (handle, workspace) = open_workspace(cx);
     let web = host_id(&workspace, WEB_01, cx);
-    let delete = |force| CliChange::DeleteHost {
-        host: web.clone(),
-        force,
-    };
-    let error = apply(cx, handle, &workspace, delete(false)).unwrap_err();
-    assert_eq!(error.code, ErrorCode::HostInUse);
-    let store = store(&workspace, cx);
-    assert!(cx.update(|cx| store.read(cx).host(HostId(WEB_01)).is_some()));
-    in_frame(cx, handle, |window, _| {
-        assert!(
-            window
-                .try_find(("terminal-tab", INITIAL_WEB_TERMINAL))
-                .is_some()
+    // `--force` is taken and changes nothing.
+    for force in [false, true] {
+        let db = host_id(&workspace, if force { DB_01 } else { WEB_02 }, cx);
+        let deleted = apply(
+            cx,
+            handle,
+            &workspace,
+            CliChange::DeleteHost { host: db, force },
         );
-    });
-
-    let Ok(Reply::HostDeleted(deleted)) = apply(cx, handle, &workspace, delete(true)) else {
-        panic!("not deleted");
-    };
-    assert_eq!(deleted.host.name, "web-01");
-    assert!(cx.update(|cx| store.read(cx).host(HostId(WEB_01)).is_none()));
-    in_frame(cx, handle, |window, _| {
-        assert!(
-            window
-                .try_find(("terminal-tab", INITIAL_WEB_TERMINAL))
-                .is_none()
-        );
-    });
-
-    // Nothing open, nothing to force.
-    let db = host_id(&workspace, DB_01, cx);
-    let deleted = apply(
+        assert!(matches!(deleted, Ok(Reply::HostDeleted(_))));
+    }
+    let Ok(Reply::HostDeleted(deleted)) = apply(
         cx,
         handle,
         &workspace,
         CliChange::DeleteHost {
-            host: db,
+            host: web,
             force: false,
         },
-    );
-    assert!(matches!(deleted, Ok(Reply::HostDeleted(_))));
+    ) else {
+        panic!("not deleted");
+    };
+    assert_eq!(deleted.host.name, "web-01");
+    let store = store(&workspace, cx);
+    assert!(cx.update(|cx| store.read(cx).host(HostId(WEB_01)).is_none()));
+    in_frame(cx, handle, |window, _| {
+        assert_eq!(
+            window.find(("terminal-tab", INITIAL_WEB_TERMINAL)).label(),
+            Some("web-01")
+        );
+    });
 }
 
 #[gpui_kit::test]
@@ -551,4 +543,30 @@ async fn a_cli_run_whose_terminal_goes_away_may_have_run(cx: &mut TestAppContext
     cx.run_until_parked();
     assert_eq!(driver.join().unwrap(), Err(RunFailure::Disconnected));
     assert!(factory.written_text().contains(" 'sleep 100'\r"));
+}
+
+#[gpui_kit::test]
+fn the_cli_changes_a_protocol_while_open_tabs_keep_theirs(cx: &mut TestAppContext) {
+    let (handle, workspace) = open_workspace(cx);
+    let web = host_id(&workspace, WEB_01, cx);
+    let to_telnet = CliChange::UpdateHost {
+        host: web,
+        fields: HostFields {
+            protocol: Some(ProtocolChoice::Telnet),
+            ..HostFields::default()
+        },
+    };
+    let Ok(Reply::Host(changed)) = apply(cx, handle, &workspace, to_telnet) else {
+        panic!("not changed");
+    };
+    assert_eq!(changed.protocol, ProtocolChoice::Telnet);
+    cx.update(|cx| {
+        let workspace = workspace.read(cx);
+        let host = workspace.store().read(cx).host(HostId(WEB_01)).unwrap();
+        assert!(host.protocol.telnet().is_some());
+        assert_eq!(host.port, 23);
+        // Its open terminal is still the SSH one it was.
+        let open = workspace.terminal(HostId(WEB_01), cx).unwrap().read(cx);
+        assert!(open.host().is_ssh());
+    });
 }

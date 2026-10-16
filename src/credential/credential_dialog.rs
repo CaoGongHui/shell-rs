@@ -116,10 +116,8 @@ pub struct CredentialForm {
     /// The key file of the credential being edited, when ShellRS keeps it:
     /// saving the credential with any other key deletes it.
     kept_key: Option<SharedString>,
-    /// How many hosts use the credential being edited, and how many of them
-    /// are connected right now.
+    /// How many hosts use the credential being edited.
     hosts: usize,
-    connected: usize,
     /// A commit is encrypting the new key with its passphrase.
     saving: bool,
     _subscriptions: Vec<Subscription>,
@@ -136,16 +134,12 @@ impl CredentialForm {
             CredentialDialog::Edit(id) => Some(id),
             CredentialDialog::New | CredentialDialog::GenerateKey => None,
         };
-        let (credential, secrets, key_dir, kept_key, hosts, connected) = {
+        let (credential, secrets, key_dir, kept_key, hosts) = {
             let read = store.read(cx);
             let credential = editing.and_then(|id| read.credential(id)).cloned();
             let using: Vec<_> = editing
                 .map(|id| read.hosts_using(id).collect())
                 .unwrap_or_default();
-            let connected = using
-                .iter()
-                .filter(|host| host.state.is_connected())
-                .count();
             let kept_key = credential
                 .as_ref()
                 .filter(|credential| credential.keeps_key_in(read.key_dir()))
@@ -156,7 +150,6 @@ impl CredentialForm {
                 read.key_dir().map(Path::to_path_buf),
                 kept_key,
                 using.len(),
-                connected,
             )
         };
         let draft = credential
@@ -244,7 +237,6 @@ impl CredentialForm {
             key_dir,
             kept_key,
             hosts,
-            connected,
             saving: false,
             _subscriptions: subscriptions,
         };
@@ -542,9 +534,6 @@ impl CredentialForm {
         // A new key is no use to them until their servers know it.
         if self.kind == CredentialKind::Key && self.source != KeySource::File {
             note.push(t!("credential.dialog.usage_new_key"));
-        }
-        if self.connected > 0 {
-            note.push(t!("credential.dialog.usage_reconnects"));
         }
         join_sentences(note)
     }

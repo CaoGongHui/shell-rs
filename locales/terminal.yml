@@ -4,9 +4,6 @@ _version: 2
 terminal.remote.label:
   zh-CN: "%{host} 的终端"
   en: "Terminal on %{host}"
-terminal.remote.fallback_title:
-  zh-CN: 终端
-  en: Terminal
 terminal.remote.sftp_tooltip:
   zh-CN: 打开 SFTP 文件浏览
   en: Browse files over SFTP

@@ -87,10 +87,11 @@ EOF
 - `group` is a path such as `生产/web`; groups that are not there are made.
 - A host logs in with `"auth": "password"` (its own password), `"credential"` (a saved credential, by its ID; the host takes the credential's user) or `"no_password"` (the SSH agent and the default keys).
 - `route` is `{"type": "direct"}`, `{"type": "jump", "hosts": ["<host-id>", ...]}` or `{"type": "proxy", "kind": "http", "host": "...", "port": 3128}`.
-- A host listed with `"protocol": "serial"` is a serial port of the user's computer, opened in a ShellRS terminal; it has `serial` (`device`, `baud`, `data_bits`, `parity`, `stop_bits`, `flow_control`) instead of `host`, `port`, `user`, `auth` and `route`. Create one with `{"name": "console", "serial": {"device": "/dev/ttyUSB0", "baud": 115200}}`. A host's protocol can't be changed. `exec`, `upload`, `download` and `sync` don't work on serial hosts.
+- A host listed with `"protocol": "serial"` is a serial port of the user's computer, opened in a ShellRS terminal; it has `serial` (`device`, `baud`, `data_bits`, `parity`, `stop_bits`, `flow_control`) instead of `host`, `port`, `user`, `auth` and `route`. Create one with `{"name": "console", "serial": {"device": "/dev/ttyUSB0", "baud": 115200}}`. `exec`, `upload`, `download` and `sync` don't work on serial hosts.
 - A host listed with `"protocol": "telnet"` is a Telnet server (switches, console servers, embedded devices), opened in a ShellRS terminal. It has `host`, `port` (23 by default), `route` and `telnet` (`user_prompt`, `password_prompt`); its `auth` is its automatic login: `password` types `user` and `password` at the device's prompts, `credential` a password credential's, `no_password` none. Create one with `{"name": "switch", "protocol": "telnet", "host": "10.0.0.5", "auth": "password", "user": "admin", "password": "…"}`. `exec`, `upload`, `download` and `sync` don't work on Telnet hosts either.
 - A credential is `"kind": "password"`, `"key"` (with `key_path`, a key file on this machine, or `private_key`, the key's text for ShellRS to keep) or `"agent"`.
-- `hosts delete` refuses a host whose tabs are open in ShellRS, with `host_in_use`; `--force` closes them.
+- `hosts update` can change `protocol`: the host keeps its name, group and notes (between SSH and Telnet, its address and route too) and takes the new protocol's defaults for everything else, so give its new fields in the same request (a serial host's `serial.device`). An SSH host that other hosts use as a jump host or port forwards go via stays SSH. Tabs already open in ShellRS keep the settings they opened with.
+- `hosts delete` leaves the host's open tabs in ShellRS as they are.
 
 ## Windows
 
@@ -131,7 +132,7 @@ To create or update a host or credential from Windows PowerShell 5.1, pipe the J
 
 - Do not ask the user for SSH passwords, private keys, or passphrases. ShellRS holds those credentials.
 - Only when the user gives you a password, key or passphrase to save in ShellRS, put it in the JSON on stdin (`password`, `private_key`, `passphrase`), never in a command argument. ShellRS keeps it in the system keychain and never prints it back: `show` only says whether one is saved.
-- Create, change or delete hosts and credentials only when the user asks you to. Ask before `hosts delete --force`: it closes the host's open tabs. Deleting a credential makes its hosts log in on their own.
+- Create, change or delete hosts and credentials only when the user asks you to. Deleting a credential makes its hosts log in on their own.
 - `shellrs exec` takes a host id and one complete remote shell command string, opens a temporary SSH connection, runs the command, and closes the connection. Its stdout and stderr are the remote command's, and its exit code is the remote command's exit code.
 - The remote command gets no stdin, so interactive programs (editors, pagers, password prompts) will not work. Use non-interactive flags such as `--yes`, `-y`, or `--no-pager`.
 - Long-running tasks should use tmux, nohup, or systemd on the remote host.
@@ -147,7 +148,6 @@ Errors are printed to stderr with a code in brackets, such as `[not_enabled]`. E
 - `not_enabled`: ask the user to turn on Enable external CLI (启用外部 CLI) in ShellRS under Settings → External CLI (设置 → 外部 CLI).
 - `host_not_found`: run `shellrs hosts list` again and use an `id` from its output. `credential_not_found`: the same with `shellrs credentials list`.
 - `bad_request` from `create` or `update`: the message says which field is wrong, in the words the ShellRS forms use.
-- `host_in_use`: the host's tabs are open in ShellRS. Ask the user whether to close them (`--force`).
 - `save_failed`: the change was made, but not all of it could be written to disk or the keychain. Tell the user the message.
 - `version_mismatch`: the `shellrs` command and the running ShellRS are different versions. Ask the user to restart or update ShellRS.
 - `host_key_unknown`, `missing_credential`: ShellRS has not connected to this host yet, or has no saved password. Ask the user to connect to the host once in ShellRS and save the password. For a host opened from a bastion host, use `--terminal` (see above).

@@ -2,6 +2,7 @@
 //! 备注, passwords in the keychain and 测试连接.
 
 use crate::support::*;
+use shellrs::host::SerialSettings;
 
 #[gpui_kit::test]
 async fn a_host_without_a_password_says_what_it_tries_and_is_saved_as_such(
@@ -418,7 +419,7 @@ async fn a_host_behind_a_proxy_keeps_the_proxys_password_in_the_keychain(cx: &mu
 }
 
 #[gpui_kit::test]
-async fn connection_edits_reconnect_once_but_display_edits_do_not(cx: &mut TestAppContext) {
+async fn an_edit_leaves_open_tabs_as_they_took_the_host(cx: &mut TestAppContext) {
     let (store, id) = one_host_store(AuthKind::Password);
     let factory = Arc::new(FakeTerminalFactory::default());
     let (handle, workspace) = open_workspace_with_remote_factory(cx, store, factory.clone());
@@ -442,27 +443,151 @@ async fn connection_edits_reconnect_once_but_display_edits_do_not(cx: &mut TestA
         store.update(cx, |store, cx| {
             let mut draft = store.host(id).unwrap().draft();
             draft.address = "new.example.test".into();
-            assert!(store.update(id, draft, cx));
-        });
-    });
-    cx.wait_for(handle.into(), Duration::from_secs(2), |window, cx| {
-        window.render_frame(cx);
-        factory.starts() == 2
-            && window.find("status-connection").label() == Some("已连接 prompt-host")
-    })
-    .await;
-    assert_eq!(factory.starts(), 2);
-
-    cx.update(|cx| {
-        let store = workspace.read(cx).store().clone();
-        store.update(cx, |store, cx| {
-            let mut draft = store.host(id).unwrap().draft();
             draft.name = "renamed".into();
             assert!(store.update(id, draft, cx));
         });
     });
     cx.run_until_parked();
-    assert_eq!(factory.starts(), 2);
+    // The tab keeps its name and connection; the host list has the new.
+    in_frame(cx, handle, |window, _| {
+        assert_eq!(factory.starts(), 1, "still the old connection");
+        assert_eq!(
+            window.find("status-connection").label(),
+            Some("已连接 prompt-host")
+        );
+        assert_eq!(
+            window.find(("terminal-tab", 1_u64)).label(),
+            Some("prompt-host")
+        );
+        assert!(
+            window
+                .within("host-tree")
+                .try_find(("host-row", id.0))
+                .is_some()
+        );
+    });
+
+    in_frame(cx, handle, |window, cx| {
+        window.click(("reconnect", 1_u64), cx)
+    });
+    cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
+        factory.starts() == 2
+    })
+    .await;
+    cx.update(|cx| {
+        let workspace = workspace.read(cx);
+        let tab = workspace.terminal(id, cx).unwrap().read(cx);
+        assert_eq!(tab.host().address.as_ref(), "example.test");
+    });
+}
+
+#[gpui_kit::test]
+async fn an_edit_changes_the_protocol_unless_something_holds_it(cx: &mut TestAppContext) {
+    let mut store = HostStore::empty();
+    let jump = store.insert_unnotified(HostDraft::new(
+        "jump",
+        "10.0.0.1",
+        22,
+        "root",
+        AuthKind::Password,
+        None,
+    ));
+    let behind = store.insert_unnotified(
+        HostDraft::new("db", "10.0.0.2", 22, "root", AuthKind::Password, None)
+            .with_route(Route::Jump(vec![Some(jump)])),
+    );
+    let (handle, workspace) = open_workspace_with_store(cx, store);
+
+    // Another host goes through the jump host: it stays SSH.
+    in_frame(cx, handle, |window, cx| {
+        window.dispatch_action(Box::new(EditHost(jump)), cx)
+    });
+    in_frame(cx, handle, |window, cx| {
+        window.within("host-protocol").click(1usize, cx)
+    });
+    in_frame(cx, handle, |window, cx| {
+        assert_eq!(
+            window.within("host-protocol").find(0usize).selected(),
+            Some(true)
+        );
+        window.click("cancel", cx);
+    });
+    wait_for_dialog_to_close(cx, handle).await;
+
+    // The host behind it is free: SSH to Telnet, the port following.
+    in_frame(cx, handle, |window, cx| {
+        window.click(("host-row", behind.0), cx);
+        window.dispatch_action(Box::new(EditHost(behind)), cx)
+    });
+    in_frame(cx, handle, |window, cx| {
+        window.within("host-protocol").click(1usize, cx)
+    });
+    in_frame(cx, handle, |window, cx| {
+        assert_eq!(window.find("host-port").value(), Some("23"));
+        assert_eq!(window.find("host-address").value(), Some("10.0.0.2"));
+        window.click("commit", cx);
+    });
+    wait_for_dialog_to_close(cx, handle).await;
+    cx.update(|cx| {
+        let store = workspace.read(cx).store().read(cx);
+        let host = store.host(behind).unwrap();
+        assert!(host.protocol.telnet().is_some());
+        assert_eq!((host.address.as_ref(), host.port), ("10.0.0.2", 23));
+        assert_eq!(host.route, Route::Jump(vec![Some(jump)]));
+    });
+}
+
+/// A serial or Telnet host made SSH starts with a new SSH host's login,
+/// a password as root: a serial host keeps none, and a Telnet host's
+/// 自动登录 (here with a credential) is not one.
+#[gpui_kit::test]
+async fn a_host_made_ssh_starts_with_a_new_hosts_login(cx: &mut TestAppContext) {
+    let mut store = HostStore::empty();
+    let credential = store.insert_credential_unnotified(CredentialDraft::new(
+        "交换机",
+        CredentialKind::Password,
+        "admin",
+    ));
+    let serial = store.insert_unnotified(HostDraft::serial(
+        "console",
+        "/dev/ttyUSB0",
+        SerialSettings::default(),
+        None,
+    ));
+    let telnet = store.insert_unnotified(
+        HostDraft::telnet("switch", "10.0.0.5", 23, None).with_credential(credential),
+    );
+    let (handle, workspace) = open_workspace_with_store(cx, store);
+
+    for id in [serial, telnet] {
+        in_frame(cx, handle, |window, cx| {
+            window.click(("host-row", id.0), cx);
+            window.dispatch_action(Box::new(EditHost(id)), cx)
+        });
+        in_frame(cx, handle, |window, cx| {
+            window.within("host-protocol").click(0usize, cx)
+        });
+        in_frame(cx, handle, |window, cx| {
+            let sources = window.within("host-auth-source");
+            assert_eq!(sources.find(0usize).selected(), Some(true));
+            assert_eq!(window.find("host-user").value(), Some("root"));
+            if id == serial {
+                window.click("host-address", cx);
+                window.input("10.0.0.9", cx);
+            }
+            window.click("commit", cx);
+        });
+        wait_for_dialog_to_close(cx, handle).await;
+        cx.update(|cx| {
+            let store = workspace.read(cx).store().read(cx);
+            let host = store.host(id).unwrap();
+            assert!(host.is_ssh());
+            assert_eq!(
+                (host.user.as_ref(), host.auth, host.credential),
+                ("root", AuthKind::Password, None)
+            );
+        });
+    }
 }
 
 /// The error is painted above the dialog and its backdrop, not under them:

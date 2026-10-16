@@ -773,7 +773,7 @@ impl HostDatabase {
              proxy_kind = ?11, proxy_host = ?12, proxy_port = ?13, proxy_username = ?14, \
              notes = ?15, serial_baud = ?16, serial_data_bits = ?17, serial_parity = ?18, \
              serial_stop_bits = ?19, serial_flow = ?20, telnet_user_prompt = ?21, \
-             telnet_pass_prompt = ?22 WHERE id = ?1",
+             telnet_pass_prompt = ?22, protocol = ?23 WHERE id = ?1",
             params![
                 to_sql(host.id.0),
                 host.group.map(|group| to_sql(group.0)),
@@ -797,6 +797,7 @@ impl HostDatabase {
                 row.serial.flow,
                 row.telnet_user_prompt,
                 row.telnet_password_prompt,
+                host.protocol.as_str(),
             ],
         )?;
         write_jumps(&transaction, host)?;
@@ -1911,6 +1912,40 @@ INSERT INTO snippets (id, category_id, name, command, scope_host_id)
     }
 
     #[test]
+    fn a_host_changes_protocol_and_its_columns_follow() {
+        let db = HostDatabase::in_memory().unwrap();
+        let line = SerialSettings::default();
+        let mut host = Host::new(
+            HostId(1),
+            HostDraft::serial("console", "/dev/ttyUSB0", line, None),
+        );
+        db.insert_host(&host).unwrap();
+        let prompts = TelnetSettings {
+            user_prompt: "账号：".into(),
+            password_prompt: "".into(),
+        };
+        for draft in [
+            HostDraft::telnet("console", "10.0.0.5", 23, None),
+            HostDraft::new("console", "10.0.0.5", 22, "root", AuthKind::Password, None),
+            HostDraft::serial("console", "COM3", line, None),
+        ] {
+            let mut next = Host::new(HostId(1), draft);
+            if next.protocol.telnet().is_some() {
+                next.protocol = Protocol::Telnet(prompts.clone());
+            }
+            next.public_id = host.public_id.clone();
+            db.update_host(&next).unwrap();
+            let loaded = &db.load().unwrap().hosts[0];
+            assert_eq!(loaded.protocol, next.protocol);
+            assert_eq!(
+                (loaded.address.as_ref(), loaded.port),
+                (next.address.as_ref(), next.port)
+            );
+            host = next;
+        }
+    }
+
+    #[test]
     fn a_serial_host_keeps_its_line_and_an_ssh_host_has_none() {
         let db = HostDatabase::in_memory().unwrap();
         let settings = SerialSettings {
@@ -2375,8 +2410,6 @@ INSERT INTO snippets (id, category_id, name, command, scope_host_id)
         assert_eq!(names, ["web-01", "db-01", "jump"]);
         assert_eq!(data.hosts[2].group, None);
         assert_eq!(data.hosts[0].auth, AuthKind::Password);
-        // Connection state is runtime only: everything loads disconnected.
-        assert!(data.hosts.iter().all(|s| !s.state.is_connected()));
     }
 
     #[test]

@@ -138,7 +138,7 @@ impl Workspace {
     pub fn apply_cli_change(
         &mut self,
         change: CliChange,
-        window: &mut Window,
+        _: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<Result<Reply, CliError>> {
         let store = self.store.read(cx);
@@ -148,9 +148,8 @@ impl Workspace {
                 Ok(id) => self.save_host_from_cli(Some(id), fields, cx),
                 Err(error) => Task::ready(Err(error)),
             },
-            CliChange::DeleteHost { host, force } => {
-                Task::ready(self.delete_host_from_cli(&host, force, window, cx))
-            }
+            // `--force` once closed the host's tabs; they stay now.
+            CliChange::DeleteHost { host, .. } => Task::ready(self.delete_host_from_cli(&host, cx)),
             CliChange::CreateCredential(fields) => self.save_credential_from_cli(None, fields, cx),
             CliChange::UpdateCredential { credential, fields } => {
                 match find_credential(store, &credential) {
@@ -230,13 +229,10 @@ impl Workspace {
         })
     }
 
-    /// Delete a saved host as the host list does, closing its tabs; a
-    /// host with tabs open only with `force`, since nobody is asked.
+    /// Delete a saved host as the host list does: its open tabs stay.
     fn delete_host_from_cli(
         &mut self,
         host: &str,
-        force: bool,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<Reply, CliError> {
         let store = self.store.read(cx);
@@ -252,13 +248,6 @@ impl Workspace {
             forwards: store.forwards_of(id).count() as u64,
             jump_users: store.jump_users(&[id]) as u64,
         };
-        if !force && self.has_tabs(id, cx) {
-            return Err(CliError::new(
-                ErrorCode::HostInUse,
-                t!("cli.change.host_in_use", name = deleted.host.name),
-            ));
-        }
-        self.close_host_tabs(id, window, cx);
         let (_, failures) = self.store.update(cx, |store, cx| {
             store.capture_failures(cx, |store, cx| store.remove(id, cx))
         });

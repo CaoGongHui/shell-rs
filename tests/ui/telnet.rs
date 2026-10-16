@@ -169,7 +169,9 @@ async fn a_telnet_host_logs_in_only_with_password_credentials(cx: &mut TestAppCo
 }
 
 #[gpui_kit::test]
-async fn a_telnet_host_keeps_its_protocol_and_reconnects_on_new_prompts(cx: &mut TestAppContext) {
+async fn an_open_telnet_terminal_keeps_its_prompts_and_a_new_one_takes_the_new_ones(
+    cx: &mut TestAppContext,
+) {
     let (store, id) = telnet_store();
     let telnet = fake_telnet_terminals();
     let (handle, workspace) = open_workspace_with_protocols(
@@ -189,12 +191,6 @@ async fn a_telnet_host_keeps_its_protocol_and_reconnects_on_new_prompts(cx: &mut
         window.dispatch_action(Box::new(EditHost(id)), cx)
     });
     in_frame(cx, handle, |window, cx| {
-        let mut protocols = window.within("host-protocol");
-        assert_eq!(protocols.find(1usize).selected(), Some(true));
-        // SSH cannot be chosen any more.
-        protocols.click(0usize, cx);
-    });
-    in_frame(cx, handle, |window, cx| {
         assert_eq!(
             window.within("host-protocol").find(1usize).selected(),
             Some(true)
@@ -205,30 +201,38 @@ async fn a_telnet_host_keeps_its_protocol_and_reconnects_on_new_prompts(cx: &mut
         window.click("commit", cx);
     });
     wait_for_dialog_to_close(cx, handle).await;
+    cx.run_until_parked();
+    assert_eq!(
+        telnet.logins().len(),
+        1,
+        "the open connection stays as it is"
+    );
+    cx.update(|cx| assert!(workspace.read(cx).has_connection(id, cx)));
+
+    // Reconnecting logs in as the tab first did; a new tab, as now.
+    in_frame(cx, handle, |window, cx| {
+        window.click(("reconnect", 1_u64), cx)
+    });
     cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
         telnet.logins().len() == 2
     })
     .await;
+    assert_eq!(telnet.logins()[1], telnet.logins()[0]);
+    in_frame(cx, handle, |window, cx| {
+        window.dispatch_action(Box::new(ConnectHost(id)), cx)
+    });
+    cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
+        telnet.logins().len() == 3
+    })
+    .await;
     assert_eq!(
-        telnet.logins()[1]
+        telnet.logins()[2]
             .auto_login
             .clone()
             .unwrap()
             .password_prompt,
         "口令："
     );
-
-    // A new name alone does not reconnect.
-    let store = cx.update(|cx| workspace.read(cx).store().clone());
-    cx.update(|cx| {
-        store.update(cx, |store, cx| {
-            let mut draft = store.host(id).unwrap().draft();
-            draft.name = "核心交换机".into();
-            assert!(store.update(id, draft, cx));
-        })
-    });
-    cx.run_until_parked();
-    assert_eq!(telnet.logins().len(), 2);
 }
 
 #[gpui_kit::test]
