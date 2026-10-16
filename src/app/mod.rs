@@ -12,8 +12,9 @@ pub use actions::*;
 pub use app_icon::show_logo_when_unbundled;
 pub use assets::{AppAssets, CatalogIcon, DOCKER_ICON};
 pub use paths::{
-    analytics_path, cli_endpoint, cli_socket_path, data_dir, database_path, keys_dir,
-    settings_path, updates_dir, window_state_path,
+    PORTABLE_BIN, PORTABLE_DATA, SETUP_UNINSTALLER, analytics_path, cli_endpoint, cli_socket_path,
+    data_dir, database_path, keys_dir, portable_root, settings_path, updates_dir,
+    window_state_path,
 };
 pub use quit::{quit_held_back, set_quit_guard};
 pub use shortcuts::{
@@ -43,6 +44,18 @@ pub const LOCAL_FILE_LIST_CONTEXT: &str = "LocalFileList";
 pub const REMOTE_FILE_LIST_CONTEXT: &str = "RemoteFileList";
 /// The 查找文件 window of an SFTP tab.
 pub const FIND_FILES_CONTEXT: &str = "FindFiles";
+
+/// The identity the system shows ShellRS's notifications and taskbar button
+/// under: the macOS bundle's, which the Windows setup gives its shortcuts
+/// too. A portable copy has one of its own, so that next to an installed
+/// copy it gets its own taskbar button and pinning it pins this copy.
+pub fn app_identity() -> &'static str {
+    if portable_root().is_some() {
+        "com.shellrs.ShellRS.Portable"
+    } else {
+        "com.shellrs.ShellRS"
+    }
+}
 
 /// What the window says when the local database cannot be opened: the run
 /// goes on, keeping its changes in memory only.

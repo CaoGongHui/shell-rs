@@ -32,6 +32,14 @@
       "size": 18234567,
       "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
     },
+    "windows-x86_64-portable": {
+      "urls": [
+        "https://dl.shellrs.com/releases/0.2.0/ShellRS-0.2.0-windows-x86_64-portable.zip",
+        "https://github.com/since2006/shell-rs/releases/download/v0.2.0/ShellRS-0.2.0-windows-x86_64-portable.zip"
+      ],
+      "size": 19234567,
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
+    },
     "linux-x86_64": {
       "urls": [
         "https://dl.shellrs.com/releases/0.2.0/ShellRS-0.2.0-linux-x86_64.AppImage",
@@ -45,6 +53,7 @@
     "macos-aarch64": "https://dl.shellrs.com/releases/0.2.0/ShellRS-0.2.0-macos-aarch64.dmg",
     "macos-x86_64": "https://dl.shellrs.com/releases/0.2.0/ShellRS-0.2.0-macos-x86_64.dmg",
     "windows-x86_64": "https://dl.shellrs.com/releases/0.2.0/ShellRS-0.2.0-windows-x86_64-setup.exe",
+    "windows-x86_64-portable": "https://dl.shellrs.com/releases/0.2.0/ShellRS-0.2.0-windows-x86_64-portable.zip",
     "linux-x86_64": "https://dl.shellrs.com/releases/0.2.0/ShellRS-0.2.0-linux-x86_64.AppImage"
   }
 }

@@ -17,6 +17,8 @@ pub mod install_linux;
 #[cfg(any(target_os = "macos", test))]
 pub mod install_macos;
 #[cfg(any(windows, test))]
+pub mod install_portable;
+#[cfg(any(windows, test))]
 pub mod install_windows;
 pub mod manifest;
 pub mod platform;

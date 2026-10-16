@@ -251,6 +251,9 @@ pub struct Snapshot {
     pub custom_shortcuts: bool,
     /// The SFTP lists' 图标风格: `monochrome` or `color`.
     pub file_icons: &'static str,
+    /// How this copy was installed: `setup`, `portable`, `bundle`,
+    /// `appimage` or `other` (`InstallKind::install_type`).
+    pub install: &'static str,
     /// How many are saved; only their band goes out.
     pub hosts: usize,
     pub credentials: usize,
@@ -277,6 +280,7 @@ impl Snapshot {
                 if self.custom_shortcuts { "yes" } else { "no" },
             ),
             ("file_icons", self.file_icons),
+            ("install", self.install),
             ("hosts", band(self.hosts)),
             ("credentials", band(self.credentials)),
             ("forwards", band(self.forwards)),
@@ -734,6 +738,7 @@ mod tests {
             dark_theme: "shellrs-dark",
             update_channel: "stable",
             file_icons: "monochrome",
+            install: "portable",
             hosts: 7,
             ..Snapshot::default()
         }
@@ -828,6 +833,7 @@ mod tests {
         assert_eq!(props["highlight"], "off");
         assert_eq!(props["custom_shortcuts"], "no");
         assert_eq!(props["file_icons"], "monochrome");
+        assert_eq!(props["install"], "portable");
         assert!(props.values().all(Value::is_string));
         assert_eq!(band(5), "1-5");
         assert_eq!(band(100), "21-100");

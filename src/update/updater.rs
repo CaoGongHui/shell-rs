@@ -49,6 +49,8 @@ pub struct UpdateServices {
     /// `false` for a development build, which never looks.
     pub release_build: bool,
     pub current: Version,
+    /// The manifest's key for this copy's package (`platform::package_key`).
+    pub platform: &'static str,
     /// Downloads, and the note the next start reads.
     pub folder: PathBuf,
     /// This machine's own number for staged rollouts, in `0..1`.
@@ -65,6 +67,7 @@ impl UpdateServices {
             keys: TrustedKeys::builtin(),
             release_build: Channel::of_this_build().is_some(),
             current: build_info::version(),
+            platform: super::platform::package_key(crate::app::portable_root().is_some()),
             draw: rollout_draw(&folder),
             folder,
         }
@@ -287,6 +290,17 @@ impl Updater {
         match services.installer.kind() {
             super::install::InstallKind::Unsupported(reason) => Some(reason.clone()),
             _ => None,
+        }
+    }
+
+    /// How this copy was installed, for 匿名使用统计: what its installer is,
+    /// except that a portable copy counts as one even where it cannot
+    /// update itself.
+    pub fn install_type(&self) -> &'static str {
+        match &self.services {
+            Some(services) if services.platform == super::platform::WINDOWS_PORTABLE => "portable",
+            Some(services) => services.installer.kind().install_type(),
+            None => "other",
         }
     }
 
@@ -632,11 +646,9 @@ impl Updater {
             return;
         };
         let offer = match result {
-            Ok(Opened::Manifest(manifest)) => manifest.offer(
-                &services.current,
-                super::platform::platform_key(),
-                services.draw,
-            ),
+            Ok(Opened::Manifest(manifest)) => {
+                manifest.offer(&services.current, services.platform, services.draw)
+            }
             Ok(Opened::NewerFormat { version }) if version > services.current => Offer::Manual {
                 version,
                 installer: None,

@@ -1,8 +1,9 @@
 //! Putting a new version in place.
 //!
 //! Who replaces ShellRS depends on how it was installed: a macOS bundle is
-//! swapped whole, the Windows setup program updates its own install, an
-//! AppImage is one file renamed over. Anything else (a development build, a
+//! swapped whole, the Windows setup program updates its own install, a
+//! Windows portable folder has its program files swapped, an AppImage is
+//! one file renamed over. Anything else (a development build, a
 //! copy still on its disk image, a distribution package) still hears about
 //! new versions but is sent to the download page.
 //!
@@ -31,11 +32,30 @@ pub enum InstallKind {
     WindowsSetup {
         exe: PathBuf,
     },
+    /// A portable copy on Windows: the folder holding `shellrs.exe` and its
+    /// `data`, in a place the user can write to.
+    WindowsPortable {
+        root: PathBuf,
+    },
     /// An AppImage file in a folder the user can write to.
     AppImage {
         file: PathBuf,
     },
     Unsupported(Unsupported),
+}
+
+impl InstallKind {
+    /// How this copy was installed, as 匿名使用统计 reports it. Published:
+    /// the values never change.
+    pub fn install_type(&self) -> &'static str {
+        match self {
+            Self::MacBundle { .. } => "bundle",
+            Self::WindowsSetup { .. } => "setup",
+            Self::WindowsPortable { .. } => "portable",
+            Self::AppImage { .. } => "appimage",
+            Self::Unsupported(_) => "other",
+        }
+    }
 }
 
 /// Why this copy of ShellRS cannot replace itself.
@@ -52,7 +72,7 @@ pub enum Unsupported {
     ReadOnly(PathBuf),
     /// macOS, not from an app bundle.
     NotBundled,
-    /// Windows, not installed by the setup program.
+    /// Windows, neither installed by the setup program nor portable.
     NotInstalled,
     /// Linux, not an AppImage: a distribution package or a build of its own.
     NotAppImage,
@@ -90,6 +110,9 @@ pub struct Surroundings<'a> {
     pub bundle: Option<&'a Path>,
     /// Linux: `$APPIMAGE`, set by the AppImage runtime.
     pub appimage: Option<&'a Path>,
+    /// Windows: the portable folder this copy runs from
+    /// (`crate::app::portable_root`).
+    pub portable: Option<&'a Path>,
     pub writable: &'a dyn Fn(&Path) -> bool,
     pub exists: &'a dyn Fn(&Path) -> bool,
 }
@@ -125,9 +148,17 @@ pub fn detect(at: &Surroundings) -> InstallKind {
         }
         "windows" => {
             let folder = at.exe.parent().unwrap_or(Path::new("."));
-            if (at.exists)(&folder.join("unins000.exe")) {
+            if (at.exists)(&folder.join(crate::app::SETUP_UNINSTALLER)) {
                 InstallKind::WindowsSetup {
                     exe: at.exe.to_path_buf(),
+                }
+            } else if let Some(root) = at.portable {
+                if (at.writable)(root) {
+                    InstallKind::WindowsPortable {
+                        root: root.to_path_buf(),
+                    }
+                } else {
+                    InstallKind::Unsupported(Unsupported::ReadOnly(root.to_path_buf()))
                 }
             } else {
                 InstallKind::Unsupported(Unsupported::NotInstalled)
@@ -250,6 +281,7 @@ pub fn system_installer(bundle: Option<PathBuf>) -> Arc<dyn Installer> {
         exe: &exe,
         bundle: bundle.as_deref(),
         appimage: appimage.as_deref(),
+        portable: crate::app::portable_root(),
         writable: &is_writable,
         exists: &|path| path.exists(),
     });
@@ -262,6 +294,10 @@ pub fn system_installer(bundle: Option<PathBuf>) -> Arc<dyn Installer> {
         #[cfg(windows)]
         InstallKind::WindowsSetup { exe } => {
             Arc::new(super::install_windows::SetupInstaller::new(exe))
+        }
+        #[cfg(windows)]
+        InstallKind::WindowsPortable { root } => {
+            Arc::new(super::install_portable::PortableInstaller::new(root))
         }
         #[cfg(target_os = "linux")]
         InstallKind::AppImage { file } => {
@@ -284,9 +320,20 @@ fn is_writable(path: &Path) -> bool {
         // SAFETY: a valid C string; `access` only reads it.
         unsafe { libc::access(path.as_ptr(), libc::W_OK) == 0 }
     }
+    // A folder's read-only attribute means nothing on Windows: whether
+    // `Program Files` takes a file is only known by trying.
     #[cfg(not(unix))]
     {
-        std::fs::metadata(path).is_ok_and(|meta| !meta.permissions().readonly())
+        let probe = path.join(format!(".shellrs-write-{}", uuid::Uuid::new_v4().simple()));
+        let created = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&probe)
+            .is_ok();
+        if created {
+            let _ = std::fs::remove_file(&probe);
+        }
+        created
     }
 }
 
@@ -315,6 +362,7 @@ mod tests {
             exe,
             bundle: None,
             appimage: None,
+            portable: None,
             writable: &|_| true,
             exists: &|_| false,
         }
@@ -398,6 +446,54 @@ mod tests {
         assert_eq!(
             detect(&at("windows", exe)),
             InstallKind::Unsupported(Unsupported::NotInstalled)
+        );
+    }
+
+    #[test]
+    fn a_portable_folder_updates_itself_on_windows() {
+        let root = Path::new(r"D:\Tools\ShellRS");
+        let exe = Path::new(r"D:\Tools\ShellRS\shellrs.exe");
+        let portable = Surroundings {
+            portable: Some(root),
+            ..at("windows", exe)
+        };
+        assert_eq!(
+            detect(&portable),
+            InstallKind::WindowsPortable { root: root.into() }
+        );
+        assert_eq!(
+            detect(&Surroundings {
+                writable: &|_| false,
+                ..portable
+            }),
+            InstallKind::Unsupported(Unsupported::ReadOnly(root.into()))
+        );
+        // What the setup program installed it updates, whatever is beside.
+        assert_eq!(
+            detect(&Surroundings {
+                portable: Some(root),
+                exists: &|path| path.ends_with("unins000.exe"),
+                ..at("windows", exe)
+            }),
+            InstallKind::WindowsSetup { exe: exe.into() }
+        );
+    }
+
+    #[test]
+    fn the_install_type_is_one_of_a_fixed_few() {
+        let path = PathBuf::from("x");
+        let kinds = [
+            InstallKind::MacBundle {
+                bundle: path.clone(),
+            },
+            InstallKind::WindowsSetup { exe: path.clone() },
+            InstallKind::WindowsPortable { root: path.clone() },
+            InstallKind::AppImage { file: path },
+            InstallKind::Unsupported(Unsupported::NotInstalled),
+        ];
+        assert_eq!(
+            kinds.map(|kind| kind.install_type()),
+            ["bundle", "setup", "portable", "appimage", "other"]
         );
     }
 

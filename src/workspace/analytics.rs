@@ -200,6 +200,7 @@ impl Workspace {
             update_channel: settings.update.channel.key(),
             custom_shortcuts: settings.shortcuts != ShortcutOverrides::default(),
             file_icons: settings.file_icon_style.key(),
+            install: self.updater().read(cx).install_type(),
             hosts: store.hosts().len(),
             credentials: store.credentials().len(),
             forwards: store.forwards().len(),

@@ -76,6 +76,9 @@ update.install.no_app:
 update.install.wrong_version:
   zh-CN: 更新包的版本与更新清单不符
   en: the update package’s version doesn’t match the update manifest
+update.install.bad_package:
+  zh-CN: 更新包无法解压：%{error}
+  en: "couldn’t unpack the update package: %{error}"
 
 # Why this copy cannot replace itself: on 设置 › 关于 (with a full stop
 # added) and in the update dialog.
@@ -95,8 +98,8 @@ update.unsupported.not_bundled:
   zh-CN: ShellRS 不是从应用程序包运行的，无法自动更新
   en: ShellRS isn’t running from an app bundle, so it can’t update itself
 update.unsupported.not_installed:
-  zh-CN: 这份 ShellRS 不是用安装程序安装的，无法自动更新
-  en: This copy of ShellRS wasn’t installed by the setup program, so it can’t update itself
+  zh-CN: 这份 ShellRS 不是用安装程序安装的，也不是便携版（shellrs.exe 旁边没有 data 文件夹），无法自动更新
+  en: This copy of ShellRS wasn’t installed by the setup program and isn’t portable (there’s no data folder next to shellrs.exe), so it can’t update itself
 update.unsupported.not_appimage:
   zh-CN: 这份 ShellRS 不是 AppImage，请用安装它的方式更新
   en: This copy of ShellRS isn’t an AppImage. Update it the way you installed it
@@ -255,3 +258,8 @@ update.restart.unsaved_files.other:
 update.restart.and_unsaved_files:
   zh-CN: "%{note}%{unsaved}"
   en: "%{note} %{unsaved}"
+
+# The system in the version's tooltip on 设置 › 关于, for a portable copy.
+update.platform.windows_portable:
+  zh-CN: Windows · x64 · 便携版
+  en: Windows · x64 · portable

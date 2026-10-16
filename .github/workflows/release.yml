@@ -2,7 +2,7 @@
 #
 #   verify   the tag, the CHANGELOG sections (English and Chinese), the update keys
 #   macos    per-architecture apps: signed, notarized, stapled; update zip and DMG
-#   windows  per-user Inno Setup installer (unsigned for now)
+#   windows  per-user Inno Setup installer (unsigned for now) and portable zip
 #   linux    AppImage
 #   publish  (environment `release`, approved by hand) uploads to R2 behind
 #            dl.shellrs.com, creates the GitHub release, and only then
@@ -212,6 +212,28 @@ jobs:
           & $iscc "/DAppVersion=$env:VERSION" "/DBuildDir=$env:GITHUB_WORKSPACE\target\release" `
             "/O$env:GITHUB_WORKSPACE\dist" packaging\windows\shellrs.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Portable
+        shell: pwsh
+        run: |
+          # The portable zip, also what a portable copy updates from: both
+          # programs at its root beside an empty data folder, which is what
+          # makes a copy portable. 7-Zip keeps the empty folder;
+          # Compress-Archive would drop it.
+          $folder = Join-Path $env:RUNNER_TEMP "portable"
+          New-Item -ItemType Directory -Force -Path (Join-Path $folder "data") | Out-Null
+          Copy-Item "target\release\shellrs.exe", "target\release\shellrs-cli.exe" $folder
+          $zip = "$env:GITHUB_WORKSPACE\dist\ShellRS-$env:VERSION-windows-x86_64-portable.zip"
+          Push-Location $folder
+          7z a -tzip -mx=9 $zip shellrs.exe shellrs-cli.exe data
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Pop-Location
+          # The first path listed is the archive itself.
+          $entries = 7z l -slt $zip | Select-String '^Path = ' |
+            ForEach-Object { $_.Line.Substring(7) } | Select-Object -Skip 1
+          if (Compare-Object @($entries) @('data', 'shellrs-cli.exe', 'shellrs.exe')) {
+            Write-Error "The portable zip holds: $($entries -join ', ')"
+            exit 1
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: windows

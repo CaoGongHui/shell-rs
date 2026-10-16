@@ -231,6 +231,22 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_portable_copy_is_offered_its_own_package() {
+        let text = include_str!("../../packaging/manifest.example.json");
+        let manifest = parse(text).unwrap().unwrap();
+        let Offer::Update(release) = manifest.offer(&v("0.1.0"), "windows-x86_64-portable", 0.5)
+        else {
+            panic!("an update for the portable copy");
+        };
+        assert!(release.asset.urls[0].ends_with("-portable.zip"));
+        assert!(release.installer.unwrap().ends_with("-portable.zip"));
+        let Offer::Update(release) = manifest.offer(&v("0.1.0"), "windows-x86_64", 0.5) else {
+            panic!("an update for the installed copy");
+        };
+        assert!(release.asset.urls[0].ends_with("-setup.exe"));
+    }
+
+    #[test]
     fn a_draw_above_the_rollout_waits() {
         let mut manifest = manifest("0.2.0");
         manifest.rollout = 0.25;
@@ -288,6 +304,7 @@ pub(crate) mod tests {
             "macos-aarch64",
             "macos-x86_64",
             "windows-x86_64",
+            "windows-x86_64-portable",
             "linux-x86_64",
         ] {
             assert!(manifest.assets.contains_key(platform), "{platform}");

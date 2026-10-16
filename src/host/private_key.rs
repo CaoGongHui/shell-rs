@@ -278,6 +278,25 @@ pub fn is_kept_in(dir: &Path, path: &Path) -> bool {
     path.parent() == Some(dir)
 }
 
+/// Where a key file ShellRS kept in another key folder is now: the file of
+/// that name in `dir`. Credentials name their key file by its full path, so
+/// when the data folder moves (a portable copy on another drive letter) or
+/// another copy's data is copied in, they still name the old folder; the
+/// file came along under its random name.
+pub fn moved_key(dir: &Path, path: &Path) -> Option<PathBuf> {
+    let folder = path.parent()?;
+    let name = path.file_name()?.to_str()?;
+    let same_kind = folder
+        .file_name()
+        .zip(dir.file_name())
+        .is_some_and(|(old, new)| old.eq_ignore_ascii_case(new));
+    if folder == dir || !same_kind || !PublicId::has_shape(name) {
+        return None;
+    }
+    let moved = dir.join(name);
+    moved.is_file().then_some(moved)
+}
+
 fn unused_name(dir: &Path) -> PathBuf {
     loop {
         let path = dir.join(PublicId::generate().as_str());
@@ -324,6 +343,29 @@ fn create_private_file(path: &Path) -> io::Result<File> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_moved_key_is_found_in_the_new_key_folder() {
+        let data = tempfile::tempdir().unwrap();
+        let dir = data.path().join("keys");
+        std::fs::create_dir(&dir).unwrap();
+        let name = PublicId::generate();
+        std::fs::write(dir.join(name.as_str()), "kept").unwrap();
+        let old = Path::new("/Volumes/OLD/ShellRS/data/keys");
+        assert_eq!(
+            moved_key(&dir, &old.join(name.as_str())),
+            Some(dir.join(name.as_str()))
+        );
+        // Already here, or not one ShellRS keeps.
+        assert_eq!(moved_key(&dir, &dir.join(name.as_str())), None);
+        let other = Path::new("/Volumes/OLD/ShellRS/data/other");
+        assert_eq!(moved_key(&dir, &other.join(name.as_str())), None);
+        std::fs::write(dir.join("id_rsa"), "mine").unwrap();
+        assert_eq!(moved_key(&dir, &old.join("id_rsa")), None);
+        // Not here.
+        let missing = PublicId::generate();
+        assert_eq!(moved_key(&dir, &old.join(missing.as_str())), None);
+    }
 
     fn ed25519() -> GeneratedKey {
         GeneratedKey::generate(KeyAlgorithm::Ed25519).unwrap()

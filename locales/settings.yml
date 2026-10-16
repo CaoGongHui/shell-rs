@@ -357,6 +357,9 @@ settings.cli.binary_description:
 settings.cli.binary_description_windows:
   zh-CN: 把 shellrs 命令加入当前用户的 PATH，方便在终端和 Agent 中直接调用。重新打开的终端和 Agent 才能找到它。
   en: Puts the shellrs command on your user PATH so terminals and agents can call it directly. Terminals and agents find it once reopened.
+settings.cli.binary_description_portable:
+  zh-CN: 把 shellrs 命令复制到 ShellRS 文件夹里的 bin，并把它加入当前用户的 PATH，方便在终端和 Agent 中直接调用。重新打开的终端和 Agent 才能找到它。移动 ShellRS 文件夹或盘符变了以后，要再安装一次。
+  en: Copies the shellrs command into the bin folder inside the ShellRS folder and puts it on your user PATH so terminals and agents can call it directly. Terminals and agents find it once reopened. After moving the ShellRS folder or a change of drive letter, install it again.
 settings.cli.skills_description:
   zh-CN: 安装 shellrs skill，让外部 Agent 在连接服务器、执行远程命令和传输文件时使用 shellrs CLI。可安装到通用目录或指定 Agent 的专用目录。
   en: Install the shellrs skill so agents use the shellrs CLI to connect to servers, run remote commands and transfer files. Install it to the shared folder or to a particular agent’s own folder.

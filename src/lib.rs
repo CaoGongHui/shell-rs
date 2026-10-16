@@ -49,8 +49,7 @@ rust_i18n::i18n!("locales", fallback = "zh-CN");
 /// inside `Application::run` before creating any view.
 pub fn init(cx: &mut gpui_kit::App) {
     // The identity the system shows notifications under, set before any
-    // window opens: on Windows the AppUserModelID, the same as the macOS
-    // bundle's.
-    cx.set_app_identity("com.shellrs.ShellRS", "ShellRS");
+    // window opens: on Windows the AppUserModelID.
+    cx.set_app_identity(app::app_identity(), "ShellRS");
     app::init(cx);
 }

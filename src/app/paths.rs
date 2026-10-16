@@ -1,16 +1,38 @@
 //! Where ShellRS keeps its data on disk.
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// Overrides the data directory. Set by tests and handy during development.
 const DATA_DIR_ENV: &str = "SHELLRS_DATA_DIR";
 
+/// The folder beside `shellrs.exe` that makes a Windows copy portable: its
+/// data lives there instead of in the user's profile.
+pub const PORTABLE_DATA: &str = "data";
+
+/// The folder of a portable copy that its `shellrs` command is copied into,
+/// for the PATH (设置 › 外部 CLI).
+pub const PORTABLE_BIN: &str = "bin";
+
+/// The program a portable copy is started as.
+const PROGRAM: &str = "shellrs.exe";
+
+/// What the Windows setup program leaves beside the copy it installed. Its
+/// uninstaller deletes the whole folder, so a `data` folder there must not
+/// hold anything.
+pub const SETUP_UNINSTALLER: &str = "unins000.exe";
+
 /// The directory holding ShellRS's own files, e.g.
-/// `~/Library/Application Support/shellrs` on macOS. Falls back to the
-/// current directory on the platforms where `dirs` has nothing to offer.
+/// `~/Library/Application Support/shellrs` on macOS: `SHELLRS_DATA_DIR`,
+/// else a portable copy's `data` folder, else the system's place for
+/// application data. Falls back to the current directory on the platforms
+/// where `dirs` has nothing to offer.
 pub fn data_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os(DATA_DIR_ENV) {
         return PathBuf::from(dir);
+    }
+    if let Some(root) = portable_root() {
+        return root.join(PORTABLE_DATA);
     }
     dirs::data_dir()
         .map(|dir| dir.join("shellrs"))
@@ -33,9 +55,11 @@ pub fn keys_dir() -> PathBuf {
 
 /// Where updates are downloaded to: the user's cache folder. With
 /// `SHELLRS_DATA_DIR` set it is beside the data instead, so a test or
-/// development instance never shares downloads with the installed app.
+/// development instance never shares downloads with the installed app; so
+/// it is for a portable copy, which then leaves nothing in the profile and
+/// unpacks its update on the volume it runs from.
 pub fn updates_dir() -> PathBuf {
-    if std::env::var_os(DATA_DIR_ENV).is_some() {
+    if std::env::var_os(DATA_DIR_ENV).is_some() || portable_root().is_some() {
         return data_dir().join("updates");
     }
     dirs::cache_dir()
@@ -74,14 +98,52 @@ pub fn cli_socket_path() -> PathBuf {
 /// command: a socket in that directory, or on Windows a named pipe.
 ///
 /// Pipe names are one namespace for the whole machine, so the name is made
-/// from the data directory. That lives in the user's profile, so each user,
-/// and each `SHELLRS_DATA_DIR`, gets a pipe of its own.
+/// from the data directory. That usually lives in the user's profile, so
+/// each user, each `SHELLRS_DATA_DIR` and each portable folder gets a pipe
+/// of its own; two users running one portable folder would share it.
 pub fn cli_endpoint(dir: &Path) -> PathBuf {
     if cfg!(windows) {
         PathBuf::from(pipe_name(dir))
     } else {
         dir.join("cli.sock")
     }
+}
+
+/// The folder a portable copy of ShellRS runs from, on Windows: the one
+/// holding `shellrs.exe` and a `data` folder. Looked up once; `None` for an
+/// installed copy and on every other system.
+pub fn portable_root() -> Option<&'static Path> {
+    static ROOT: OnceLock<Option<PathBuf>> = OnceLock::new();
+    ROOT.get_or_init(|| {
+        if !cfg!(windows) {
+            return None;
+        }
+        // The path as the system spells it: a short 8.3 name or another
+        // letter case would give the command on the PATH another pipe.
+        let exe = std::env::current_exe().ok()?;
+        let exe = dunce::canonicalize(&exe).unwrap_or(exe);
+        portable_root_of(&exe)
+    })
+    .as_deref()
+}
+
+/// The portable folder `exe` belongs to: its own folder when that has a
+/// `data` folder, or, for the `shellrs` command copied into a portable
+/// copy's `bin`, the folder above. Never a folder the setup program
+/// installed into.
+pub(crate) fn portable_root_of(exe: &Path) -> Option<PathBuf> {
+    let folder = exe.parent()?;
+    let above = folder
+        .file_name()
+        .is_some_and(|name| name.eq_ignore_ascii_case(PORTABLE_BIN))
+        .then(|| folder.parent())
+        .flatten()
+        .filter(|above| above.join(PROGRAM).is_file());
+    [Some(folder), above]
+        .into_iter()
+        .flatten()
+        .find(|root| root.join(PORTABLE_DATA).is_dir() && !root.join(SETUP_UNINSTALLER).exists())
+        .map(Path::to_path_buf)
 }
 
 /// `\\.\pipe\shellrs-cli-` and a hash of the directory. Windows paths
@@ -100,9 +162,55 @@ fn pipe_name(dir: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::Path;
 
-    use super::pipe_name;
+    use super::{PORTABLE_DATA, SETUP_UNINSTALLER, pipe_name, portable_root_of};
+
+    #[test]
+    fn a_data_folder_beside_the_program_makes_it_portable() {
+        let root = tempfile::tempdir().unwrap();
+        let exe = root.path().join("shellrs.exe");
+        fs::write(&exe, "").unwrap();
+        assert_eq!(portable_root_of(&exe), None);
+        fs::create_dir(root.path().join(PORTABLE_DATA)).unwrap();
+        assert_eq!(portable_root_of(&exe).as_deref(), Some(root.path()));
+        // Its console program finds the same folder.
+        let cli = root.path().join("shellrs-cli.exe");
+        assert_eq!(portable_root_of(&cli).as_deref(), Some(root.path()));
+    }
+
+    #[test]
+    fn a_file_named_data_is_not_a_data_folder() {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join(PORTABLE_DATA), "").unwrap();
+        assert_eq!(portable_root_of(&root.path().join("shellrs.exe")), None);
+    }
+
+    #[test]
+    fn an_installed_copy_never_turns_portable() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join(PORTABLE_DATA)).unwrap();
+        fs::write(root.path().join(SETUP_UNINSTALLER), "").unwrap();
+        assert_eq!(portable_root_of(&root.path().join("shellrs.exe")), None);
+    }
+
+    #[test]
+    fn the_command_copied_into_bin_finds_the_portable_data() {
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join("BIN");
+        fs::create_dir(&bin).unwrap();
+        fs::create_dir(root.path().join(PORTABLE_DATA)).unwrap();
+        let command = bin.join("shellrs.exe");
+        // Only beside the program it belongs to.
+        assert_eq!(portable_root_of(&command), None);
+        fs::write(root.path().join("shellrs.exe"), "").unwrap();
+        assert_eq!(portable_root_of(&command).as_deref(), Some(root.path()));
+        // Any other folder above is not looked at.
+        let other = root.path().join("tools");
+        fs::create_dir(&other).unwrap();
+        assert_eq!(portable_root_of(&other.join("shellrs.exe")), None);
+    }
 
     #[test]
     fn each_data_directory_gets_a_pipe_of_its_own() {

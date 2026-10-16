@@ -123,6 +123,9 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_WindowsProgramming",
     "Win32_UI_WindowsAndMessaging",
 ] }
+# The Windows portable package updates itself from a zip. Deflate through
+# flate2, which keeps its default Rust backend: our own `flate2` asks for it.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 
 # The icon in the Windows executables (build.rs).
 [target.'cfg(windows)'.build-dependencies]
@@ -133,6 +136,8 @@ tokio = { version = "1", features = ["process", "test-util"] }
 gpui-kit = { version = "0.6.1", features = ["test-support"] }
 tempfile = "3"
 minisign = "0.7"
+# The portable installer's tests build and unpack zips on every platform.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 
 # What the release workflow ships: smaller and faster than the default, at
 # the cost of a longer build.

@@ -8,7 +8,7 @@ ShellRS（crate 与二进制都叫 `shellrs`）是 Xshell / WinSCP 式的 SSH �
 
 - **术语。** 保存的一项叫「主机」（量词「台」），代码和库里叫 host（`Host`、`HostId`、`HostStore`、`hosts` 表）。它以前叫「会话」/ `Session`，已全部改掉，新代码和文案别再用。填 IP / 域名的字段叫「地址」（`Host.address`）。SSH 协议层的 session（「SSH 会话通道」、russh 的 `Session`、SFTP 会话）照旧。英文用词见「多语言」的用词表。
 - **两种不保存的连接。** 「外部连接」：堡垒机像调 Xshell（`ssh://`、`-url`）或 WinSCP（`sftp://`）一样拉起 ShellRS，只开一个终端或 SFTP 标签（`HostStore::is_external`）。「临时连接」：标题栏「临时连接…」打开，功能齐全。两者共同的「不保存」在代码里叫 temporary（`HostInfo::temporary`）。
-- **全是真的。** SQLite（`~/Library/Application Support/shellrs/shellrs.db`，`SHELLRS_DATA_DIR` 可覆盖目录）、本地终端（`portable-pty` + `alacritty_terminal`）、SSH（`russh`）、Telnet（协议自己写）、串口（`serial2`，`portable-pty` 本来就带着它）、SFTP（双栏、传输队列、断点续传）、端口转发（`-L` / `-R` / `-D`）、凭据、连接方式（直连、多级跳板、HTTP / SOCKS5 代理）、右侧栏十一个工具、内置编辑器和预览、外部 CLI、在线升级、匿名使用统计（Aptabase）。密码和口令只进系统钥匙串（`keyring`），**数据库里永远不出现秘密**。
+- **全是真的。** SQLite（`~/Library/Application Support/shellrs/shellrs.db`，`SHELLRS_DATA_DIR` 可覆盖目录，Windows 便携版在 `shellrs.exe` 旁边的 `data`）、本地终端（`portable-pty` + `alacritty_terminal`）、SSH（`russh`）、Telnet（协议自己写）、串口（`serial2`，`portable-pty` 本来就带着它）、SFTP（双栏、传输队列、断点续传）、端口转发（`-L` / `-R` / `-D`）、凭据、连接方式（直连、多级跳板、HTTP / SOCKS5 代理）、右侧栏十一个工具、内置编辑器和预览、外部 CLI、在线升级、匿名使用统计（Aptabase）。密码和口令只进系统钥匙串（`keyring`），**数据库里永远不出现秘密**。
 
 做 UI 之前先读 `gpui-kit` 与 `gpui-kit-design-guides` 两个技能（其中的 Coding Guides 和 Design Guides 在本仓库是规范，不是参考）。不要凭记忆臆造 gpui-kit API：以 `~/.cargo/registry/src/*/gpui-component-0.6.1/`、`gpui-base-0.6.1/` 的源码或 `https://gpui-kit.com/component/<name>.md` 为准。
 
@@ -93,11 +93,19 @@ ShellRS（crate 与二进制都叫 `shellrs`）是 Xshell / WinSCP 式的 SSH �
     - 跟随只在目录变了时跳（引擎去重），手动浏览不被拉回；侧栏没连上时记下、连上再跳，不为跟随重连。报告带的主机名要等于检测到的 `uname -n`（不分大小写），终端里 ssh 到别的机器报的目录不跟；OSC 1337 `CurrentDir=` 没有主机名，照收。状态栏右边的「目录跟随」开关只管这个侧栏、不保存，初值是设置；打开它不会因为取消过而再问。
     - 标记文本 `ShellRS directory follow` 和检测输出的 `@@` 行发布后不能改：检测和安装都靠它认出已配置的文件。
 - **在线升级**：
-  - 清单地址 `https://dl.shellrs.com/update/v1/{channel}.json`、平台 key 的名字和公钥槽位一经发布就不能改。
+  - 清单地址 `https://dl.shellrs.com/update/v1/{channel}.json`、平台 key 的名字（含便携版的 `windows-x86_64-portable`）和公钥槽位一经发布就不能改。
   - 默认在后台检查并下载，下好、校验完才在标题栏亮按钮（`success` 色，出错时 `warning` 色）。
   - 更新对话框不列更新内容：「查看更新内容」打开整页的 `https://shellrs.com/changelog`（中文界面打开 `/zh/changelog`，那里是中文的更新日志），另一个按钮是「重启并安装」，没有「稍后」。不点也在退出时装好。
   - 「设置 › 关于」三组：「应用更新」三行（当前版本、更新渠道（稳定版 / Beta，运行时切换）、自动升级），「隐私」一行（见下条），「ShellRS」一行「官网」（打开 `https://shellrs.com`）。
   - 检查只发 User-Agent，不发安装标识。
+- **Windows 便携版**（多位用户要的）：zip `ShellRS-<版本>-windows-x86_64-portable.zip`，根上是 `shellrs.exe`、`shellrs-cli.exe` 和空的 `data`（7-Zip 打包，`Compress-Archive` 会丢掉空文件夹），同一个 zip 既是首次下载也是升级包。
+  - 认法（`app::portable_root`，只在 Windows）：exe 所在文件夹有 `data` 文件夹、**没有** `unins000.exe`（安装目录里建 `data` 不算：卸载删整个 `{app}`）；`bin` 里的 CLI 副本认上一级（上一级要有 `shellrs.exe`）。路径先 `dunce::canonicalize`，否则 8.3 短名、大小写会让管道名对不上。顺序是 `SHELLRS_DATA_DIR` → 便携版的 `data` → 默认；更新的下载也在 `data\updates`。
+  - 密码、口令照旧进 Windows 凭据管理器、和安装版共用（用户定的：不改 secrets，手册写明不随文件夹走、一边删主机可能清掉另一边的密码），不做随文件夹走的加密存储。
+  - 外部 CLI 的「安装」拷到 `<便携版>\bin\shellrs.exe` 并把这个 `bin` 加进用户 PATH（用户定的），不碰 `%LOCALAPPDATA%\ShellRS\bin`。
+  - 单独的 AppUserModelID `com.shellrs.ShellRS.Portable`（`app::app_identity`）：和安装版同时开时各一个任务栏按钮。
+  - 升级（`update/install_portable.rs`）：平台 key `windows-x86_64-portable`（`UpdateServices::platform`，只读的便携版「前往下载页」也给 zip）；zip 解到下载旁的 `unpacked`，跳过 `data`、`bin` 和 `.` 开头的；换文件只改名：旧文件改名成 `.<名字>.old-<uuid>`（Windows 允许改名正在运行的 exe）、新的改名进来，失败全部还原；重启走 GPUI 的 `restart`，新版本启动后删掉改名下来的。
+  - 搬家：凭据记的是私钥的绝对路径，`HostStore::adopt_moved_keys` 在启动时把父目录同名（`keys`）、文件名是 PublicId 形状、当前 `keys` 里有同名文件的改指向当前那份（换盘符、从安装版拷数据都靠它）；口令按路径记，会再问一次。
+  - 统计快照的 `install`：`setup` / `portable` / `bundle` / `appimage` / `other`（`InstallKind::install_type`，取值发布后不改）。
 - **匿名使用统计**：发给 Aptabase（没有 Rust SDK，自己调 `POST /api/v0/events`；App Key 是 `analytics::APP_KEY`，不是秘密）。「设置 › 关于 › 隐私 › 发送匿名使用统计」默认开，关掉就清空本机攒下的计数。
   - 只发版本、系统名和版本、CPU 架构、设置快照（取值固定，主机等数量只报档位）和功能使用次数。不发主机、凭据、命令、文件名、路径、语言，也没有任何标识（Aptabase 用 IP + UA 加每日的盐算日活）。
   - 四种事件：`app_installed`（`analytics.json` 记着已报过，送达后才记）、`app_started`、`app_active`（窗口到前台且当天 UTC 还没报过，macOS 藏在后台不算）、`usage`（功能次数，从第一次使用起满 4 小时汇总一条，不是每次使用一条：免费额度每月 2 万个事件）。
@@ -420,6 +428,7 @@ cargo test -- --ignored                     # 会读写真实钥匙串的测试�
   - 发布版是 GUI 子系统，命令改由 `shellrs-cli.exe` 承担；PATH 里放的是副本，加进用户 PATH。
   - `main` 先用 `link_arguments` 认堡垒机的链接参数，认出来就不走 CLI。
   - Windows 只在 CI 上编译和测试：`windows.yml` 按 `paths` 触发，新加 `cfg(windows)` 代码的文件要加进那个列表。
+  - 便携版的判断用 `cfg!(windows)`（不是 `#[cfg]`），Mac 上照样编译、测试；`install_portable.rs` 是 `cfg(any(windows, test))`，`zip` 只是 Windows 依赖加 dev 依赖。运行中的 exe 能改名这件事只有 `windows.yml` 上的 `a_running_program_is_moved_aside_and_replaced` 验证。
 - **在线升级**：
   - `new_with_services` 建的 `Updater` 没有服务（测试从不联网），生产路径再 `set_services` 加 `start`。
   - 重启走 `set_restart_path` 加 `restart`。Windows 不在退出过程中起进程，交给 `run` 返回之后的 `start_handed_over`。

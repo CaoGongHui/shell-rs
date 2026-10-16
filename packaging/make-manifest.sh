@@ -28,6 +28,8 @@ mac_intel="ShellRS-$version-macos-x86_64.app.zip"
 dmg_arm="ShellRS-$version-macos-aarch64.dmg"
 dmg_intel="ShellRS-$version-macos-x86_64.dmg"
 win="ShellRS-$version-windows-x86_64-setup.exe"
+# A portable copy updates from the same zip a person downloads.
+win_portable="ShellRS-$version-windows-x86_64-portable.zip"
 linux="ShellRS-$version-linux-x86_64.AppImage"
 
 sha256() {
@@ -63,10 +65,12 @@ jq -n -j \
     --argjson mac_arm "$(asset "$mac_arm")" \
     --argjson mac_intel "$(asset "$mac_intel")" \
     --argjson win "$(asset "$win")" \
+    --argjson win_portable "$(asset "$win_portable")" \
     --argjson linux "$(asset "$linux")" \
     --arg dmg_arm "$base/$dmg_arm" \
     --arg dmg_intel "$base/$dmg_intel" \
     --arg win_url "$base/$win" \
+    --arg win_portable_url "$base/$win_portable" \
     --arg linux_url "$base/$linux" \
     '{
         schema: 1,
@@ -81,12 +85,14 @@ jq -n -j \
             "macos-aarch64": $mac_arm,
             "macos-x86_64": $mac_intel,
             "windows-x86_64": $win,
+            "windows-x86_64-portable": $win_portable,
             "linux-x86_64": $linux
         },
         installers: {
             "macos-aarch64": $dmg_arm,
             "macos-x86_64": $dmg_intel,
             "windows-x86_64": $win_url,
+            "windows-x86_64-portable": $win_portable_url,
             "linux-x86_64": $linux_url
         }
     }' >"$work/manifest.json"

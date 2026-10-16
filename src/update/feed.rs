@@ -250,7 +250,8 @@ fn read_error(error: io::Error) -> UpdateError {
     }
 }
 
-fn write_error(error: io::Error) -> UpdateError {
+/// A failed write, telling a full disk apart.
+pub(super) fn write_error(error: io::Error) -> UpdateError {
     if error.kind() == io::ErrorKind::StorageFull {
         UpdateError::NoSpace
     } else {

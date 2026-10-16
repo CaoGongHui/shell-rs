@@ -3,7 +3,16 @@
 //! The keys are part of the manifest format, so they never change. macOS
 //! packages match the running binary's architecture. Existing universal
 //! builds select their native half's package; an Intel build under Rosetta
-//! keeps receiving Intel packages until the user installs the ARM build.
+//! keeps receiving Intel packages until the user installs the ARM build. A
+//! portable copy on Windows has a key of its own: its package is a zip, not
+//! the setup program.
+
+use gpui_kit::SharedString;
+
+use crate::i18n::t;
+
+/// The manifest's key for the Windows portable zip.
+pub const WINDOWS_PORTABLE: &str = "windows-x86_64-portable";
 
 /// The manifest's key for this build's platform.
 pub fn platform_key() -> &'static str {
@@ -20,14 +29,24 @@ pub fn platform_key() -> &'static str {
     }
 }
 
-/// The platform as 设置 › 关于 names it.
-pub fn platform_label() -> &'static str {
+/// The manifest's key for the package this copy updates with: this
+/// build's, or the portable zip's for a portable copy on Windows.
+pub fn package_key(portable: bool) -> &'static str {
     match platform_key() {
-        "macos-aarch64" => "macOS · Apple Silicon",
-        "macos-x86_64" => "macOS · Intel",
-        "windows-x86_64" => "Windows · x64",
-        "linux-x86_64" => "Linux · x64",
-        _ => std::env::consts::OS,
+        "windows-x86_64" if portable => WINDOWS_PORTABLE,
+        key => key,
+    }
+}
+
+/// The platform as 设置 › 关于 names it.
+pub fn platform_label(portable: bool) -> SharedString {
+    match package_key(portable) {
+        "macos-aarch64" => "macOS · Apple Silicon".into(),
+        "macos-x86_64" => "macOS · Intel".into(),
+        "windows-x86_64" => "Windows · x64".into(),
+        WINDOWS_PORTABLE => t!("update.platform.windows_portable"),
+        "linux-x86_64" => "Linux · x64".into(),
+        _ => std::env::consts::OS.into(),
     }
 }
 
@@ -59,6 +78,17 @@ mod tests {
     #[test]
     fn this_machine_has_a_package() {
         assert_ne!(platform_key(), "unsupported");
-        assert!(!platform_label().is_empty());
+        assert!(!platform_label(false).is_empty());
+    }
+
+    #[test]
+    fn only_windows_has_a_portable_package() {
+        assert_eq!(package_key(false), platform_key());
+        if platform_key() == "windows-x86_64" {
+            assert_eq!(package_key(true), WINDOWS_PORTABLE);
+            assert_eq!(platform_label(true), "Windows · x64 · 便携版");
+        } else {
+            assert_eq!(package_key(true), platform_key());
+        }
     }
 }

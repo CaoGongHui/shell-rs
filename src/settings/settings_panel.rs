@@ -818,7 +818,9 @@ fn external_cli_groups(panel: &SettingsPanel, cx: &App) -> Vec<SettingGroup> {
             .description(t!("settings.cli.enabled_description"))]),
         SettingGroup::new()
             .title(t!("settings.cli.binary"))
-            .description(if cfg!(windows) {
+            .description(if crate::app::portable_root().is_some() {
+                t!("settings.cli.binary_description_portable")
+            } else if cfg!(windows) {
                 t!("settings.cli.binary_description_windows")
             } else {
                 t!("settings.cli.binary_description")
@@ -1019,7 +1021,7 @@ fn build_description() -> String {
     t!(
         "settings.about.build",
         build = build,
-        platform = platform::platform_label()
+        platform = platform::platform_label(crate::app::portable_root().is_some())
     )
     .to_string()
 }

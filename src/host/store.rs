@@ -11,7 +11,7 @@ use crate::i18n::t;
 use crate::secrets::{NoSecretStore, SecretRef, SharedSecretStore, TemporarySecretStore};
 
 use super::database::now_seconds;
-use super::private_key::{is_kept_in, write_key_file};
+use super::private_key::{is_kept_in, moved_key, write_key_file};
 use super::{
     AuthKind, BookmarkSide, Credential, CredentialDraft, CredentialId, CredentialKind,
     ForwardDraft, ForwardId, ForwardRule, GroupDraft, GroupId, Host, HostConnection, HostDatabase,
@@ -268,6 +268,33 @@ impl HostStore {
     pub fn with_key_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.key_dir = Some(dir.into());
         self
+    }
+
+    /// Point the key credentials whose file ShellRS kept in another key
+    /// folder at that file in this one (see `moved_key`): a portable copy
+    /// moved to another drive letter, or another copy's data copied in.
+    /// Writes straight to the database, before the store is in use, and
+    /// says what could not be saved. The new path asks for the key's
+    /// passphrase once more: the keychain knows it by the old one.
+    pub fn adopt_moved_keys(&mut self) -> Option<SharedString> {
+        let dir = self.key_dir.clone()?;
+        let mut problem = None;
+        for credential in &mut self.credentials {
+            let Some(moved) = credential
+                .key_path
+                .as_deref()
+                .and_then(|path| moved_key(&dir, Path::new(path)))
+            else {
+                continue;
+            };
+            credential.key_path = Some(moved.display().to_string().into());
+            if let Some(database) = &self.database
+                && let Err(error) = database.update_credential(credential)
+            {
+                problem.get_or_insert_with(|| Change::SaveCredential.not_saved(&error));
+            }
+        }
+        problem
     }
 
     /// Read everything back from `database` and keep writing to it. Ids carry
@@ -3043,6 +3070,44 @@ mod tests {
         );
         // Nor is it moved into the tree.
         assert!(!store.move_node_unnotified(HostNode::Host(id), NodeDrop::Root));
+    }
+
+    #[test]
+    fn a_moved_data_folder_finds_its_keys_again() {
+        let data = tempfile::tempdir().unwrap();
+        let keys = data.path().join("keys");
+        std::fs::create_dir(&keys).unwrap();
+        let name = PublicId::generate();
+        std::fs::write(keys.join(name.as_str()), "kept").unwrap();
+        let path = data.path().join("shellrs.db");
+        // Saved while the folder was on another drive; and a key of the
+        // user's own, which stays where it is.
+        let before = format!("/Volumes/OLD/ShellRS/data/keys/{name}");
+        let mine = "/Users/me/.ssh/keys/id_rsa";
+        let database = HostDatabase::open(&path).unwrap();
+        for (id, key) in [(1, before.as_str()), (2, mine)] {
+            let draft =
+                CredentialDraft::new("部署", CredentialKind::Key, "deploy").with_key_path(key);
+            database
+                .insert_credential(&Credential::new(CredentialId(id), draft))
+                .unwrap();
+        }
+        drop(database);
+
+        let mut store = HostStore::load(HostDatabase::open(&path).unwrap())
+            .unwrap()
+            .with_key_dir(&keys);
+        assert_eq!(store.adopt_moved_keys(), None);
+        let moved = keys.join(name.as_str()).display().to_string();
+        let key_of = |store: &HostStore, id| {
+            store
+                .credential(CredentialId(id))
+                .and_then(|credential| credential.key_path.clone())
+        };
+        assert_eq!(key_of(&store, 1).as_deref(), Some(moved.as_str()));
+        let reopened = HostStore::load(HostDatabase::open(&path).unwrap()).unwrap();
+        assert_eq!(key_of(&reopened, 1).as_deref(), Some(moved.as_str()));
+        assert_eq!(key_of(&reopened, 2).as_deref(), Some(mine));
     }
 
     #[gpui_kit::test]

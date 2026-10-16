@@ -101,18 +101,20 @@ fn main() {
 /// Either way the store gets the system keychain, which is where passwords
 /// live. A machine without one still runs; the host form says so and
 /// disables its password field. Pasted and generated private keys go
-/// beside the database.
+/// beside the database; the credentials follow them when the data folder
+/// has moved.
 fn open_store() -> (HostStore, Option<SharedString>) {
     let secrets = shellrs::secrets::system_secret_store();
     match load_store() {
         // Keys are kept only with a database to remember them: a store
         // that forgets everything would leave them behind unused.
-        Ok(store) => (
-            store
+        Ok(store) => {
+            let mut store = store
                 .with_secrets(secrets)
-                .with_key_dir(shellrs::app::keys_dir()),
-            None,
-        ),
+                .with_key_dir(shellrs::app::keys_dir());
+            let problem = store.adopt_moved_keys();
+            (store, problem)
+        }
         Err(error) => {
             eprintln!("shellrs: cannot open the local database: {error}");
             (

@@ -1,6 +1,8 @@
 //! 在线升级: checking, downloading, the update dialog, restarting and
 //! 设置 › 关于.
 
+use shellrs::update::platform::WINDOWS_PORTABLE;
+
 use crate::support::*;
 
 /// The version the update tests run as, whatever `Cargo.toml` says.
@@ -21,6 +23,8 @@ struct FakeUpdateFeed {
     /// The channels asked for, in order.
     channels: Mutex<Vec<Channel>>,
     downloads: AtomicUsize,
+    /// The addresses of each download, in order.
+    downloaded: Mutex<Vec<Vec<String>>>,
 }
 
 impl UpdateFeed for FakeUpdateFeed {
@@ -39,13 +43,14 @@ impl UpdateFeed for FakeUpdateFeed {
 
     fn download(
         &self,
-        _: &[String],
+        urls: &[String],
         size: u64,
         dest: &std::path::Path,
         progress: &mut dyn FnMut(u64),
         cancel: &std::sync::atomic::AtomicBool,
     ) -> Result<(), UpdateError> {
         self.downloads.fetch_add(1, Ordering::SeqCst);
+        self.downloaded.lock().unwrap().push(urls.to_vec());
         if cancel.load(Ordering::SeqCst) {
             return Err(UpdateError::Cancelled);
         }
@@ -130,6 +135,10 @@ impl UpdateFixture {
         self.feed.channels.lock().unwrap().clone()
     }
 
+    fn downloaded(&self) -> Vec<Vec<String>> {
+        self.feed.downloaded.lock().unwrap().clone()
+    }
+
     /// Have `channel` offer `version` from now on.
     fn offer(&self, channel: Channel, version: &str) {
         let mut offers = self.feed.offers.lock().unwrap();
@@ -138,8 +147,13 @@ impl UpdateFixture {
     }
 }
 
-/// `channel`'s manifest offering `version` for this platform, signed by
-/// `pair`.
+/// What the fake manifests offer a Windows portable copy, beside this
+/// platform's package.
+const PORTABLE_PACKAGE: &str = "https://dl.shellrs.com/releases/portable.zip";
+const PORTABLE_INSTALLER: &str = "https://dl.shellrs.com/releases/portable-installer.zip";
+
+/// `channel`'s manifest offering `version` for this platform and for the
+/// Windows portable copy, signed by `pair`.
 fn signed_manifest(
     pair: &minisign::KeyPair,
     channel: Channel,
@@ -163,9 +177,17 @@ fn signed_manifest(
                 "urls": ["https://dl.shellrs.com/releases/package"],
                 "size": package.len(),
                 "sha256": sha256,
+            },
+            WINDOWS_PORTABLE: {
+                "urls": [PORTABLE_PACKAGE],
+                "size": package.len(),
+                "sha256": sha256,
             }
         },
-        "installers": { platform: "https://dl.shellrs.com/releases/installer" },
+        "installers": {
+            platform: "https://dl.shellrs.com/releases/installer",
+            WINDOWS_PORTABLE: PORTABLE_INSTALLER,
+        },
     })
     .to_string();
     let signature = minisign::sign(
@@ -190,6 +212,18 @@ fn serve_updates(
     offered: Result<&str, UpdateError>,
     kind: InstallKind,
 ) -> UpdateFixture {
+    let platform = shellrs::update::platform::platform_key();
+    serve_updates_as(cx, workspace, offered, kind, platform)
+}
+
+/// [`serve_updates`] for a copy that updates with `platform`'s package.
+fn serve_updates_as(
+    cx: &mut TestAppContext,
+    workspace: &Entity<Workspace>,
+    offered: Result<&str, UpdateError>,
+    kind: InstallKind,
+    platform: &'static str,
+) -> UpdateFixture {
     let pair = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
     let keys = TrustedKeys::new([pair.pk.to_base64().as_str()]);
     let feed = Arc::new(FakeUpdateFeed {
@@ -202,6 +236,7 @@ fn serve_updates(
         fetches: AtomicUsize::new(0),
         channels: Mutex::default(),
         downloads: AtomicUsize::new(0),
+        downloaded: Mutex::default(),
     });
     let installer = FakeInstaller::new(kind);
     let folder = tempfile::tempdir().unwrap();
@@ -211,6 +246,7 @@ fn serve_updates(
         keys,
         release_build: true,
         current: Version::parse(RUNNING_VERSION).unwrap(),
+        platform,
         folder: folder.path().to_path_buf(),
         draw: 0.5,
     };
@@ -533,6 +569,59 @@ async fn an_unsupported_install_offers_the_download_page(cx: &mut TestAppContext
             Some("新版本 0.2.0 可用")
         );
     });
+}
+
+#[gpui_kit::test]
+async fn a_portable_copy_downloads_the_portable_zip(cx: &mut TestAppContext) {
+    let (handle, workspace) = open_workspace(cx);
+    let fixture = serve_updates_as(
+        cx,
+        &workspace,
+        Ok("0.2.0"),
+        InstallKind::WindowsPortable {
+            root: r"D:\Tools\ShellRS".into(),
+        },
+        WINDOWS_PORTABLE,
+    );
+    open_about_settings(cx, handle);
+    in_frame(cx, handle, |window, cx| {
+        window.click("check-for-updates", cx)
+    });
+    cx.wait_for(handle.into(), Duration::from_secs(3), |_, _| {
+        !fixture.downloaded().is_empty()
+    })
+    .await;
+    assert_eq!(fixture.downloaded(), [vec![PORTABLE_PACKAGE.to_string()]]);
+    let install = cx.update(|cx| workspace.read(cx).updater().read(cx).install_type());
+    assert_eq!(install, "portable");
+}
+
+#[gpui_kit::test]
+async fn a_read_only_portable_copy_links_the_portable_zip(cx: &mut TestAppContext) {
+    let (handle, workspace) = open_workspace(cx);
+    let fixture = serve_updates_as(
+        cx,
+        &workspace,
+        Ok("0.2.0"),
+        InstallKind::Unsupported(Unsupported::ReadOnly(r"C:\Program Files\ShellRS".into())),
+        WINDOWS_PORTABLE,
+    );
+    open_about_settings(cx, handle);
+    in_frame(cx, handle, |window, cx| {
+        window.click("check-for-updates", cx)
+    });
+    wait_for_update_status(cx, handle, |status| {
+        status == r"发现新版本 0.2.0。没有权限写入 C:\Program Files\ShellRS，无法自动更新。"
+    })
+    .await;
+    assert_eq!(fixture.downloads(), 0);
+    in_frame(cx, handle, |window, cx| {
+        window.click("open-download-page", cx)
+    });
+    assert_eq!(cx.opened_url().as_deref(), Some(PORTABLE_INSTALLER));
+    // Still counted as portable.
+    let install = cx.update(|cx| workspace.read(cx).updater().read(cx).install_type());
+    assert_eq!(install, "portable");
 }
 
 #[gpui_kit::test]

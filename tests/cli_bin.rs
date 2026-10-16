@@ -1,5 +1,6 @@
 //! The `shellrs-cli` program run as an agent runs it: a separate process
-//! with piped stdio, finding the app through `SHELLRS_DATA_DIR`. A fake
+//! with piped stdio, finding the app through `SHELLRS_DATA_DIR` (or, on
+//! Windows, a portable copy's folder). A fake
 //! backend stands in for SSH, so this runs on every platform, including the
 //! Windows CI where it is the one test of the named pipe between processes.
 //! Also ShellRS itself opened with a link, as a bastion host opens it.
@@ -124,6 +125,43 @@ fn without_the_app_the_command_says_so_and_exits_255() {
             .unwrap()
             .starts_with("shellrs: [not_running]")
     );
+}
+
+/// A portable copy's command, copied into its `bin` for the PATH, finds that
+/// copy's app by where it sits, without `SHELLRS_DATA_DIR`.
+#[cfg(windows)]
+#[test]
+fn the_command_in_a_portable_bin_finds_the_portable_app() {
+    let folder = tempfile::tempdir().unwrap();
+    // As the app spells its own folder: the runner's TEMP is a short name.
+    let root = dunce::canonicalize(folder.path()).unwrap();
+    std::fs::create_dir(root.join("data")).unwrap();
+    std::fs::create_dir(root.join("bin")).unwrap();
+    std::fs::write(root.join("shellrs.exe"), "").unwrap();
+    let command = root.join("bin").join("shellrs.exe");
+    std::fs::copy(env!("CARGO_BIN_EXE_shellrs-cli"), &command).unwrap();
+    let server = CliServer::start(
+        cli_endpoint(&root.join("data")),
+        Arc::new(FakeBackend::default()),
+    )
+    .unwrap();
+    server.set_hosts(&HostStore::empty());
+    server.set_enabled(true);
+
+    let output = Command::new(&command)
+        .args(["hosts", "list"])
+        .env_remove("SHELLRS_DATA_DIR")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let hosts: Vec<HostInfo> = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(hosts.is_empty());
 }
 
 #[test]

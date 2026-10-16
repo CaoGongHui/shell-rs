@@ -3,7 +3,6 @@
 //! thread. Every path comes from [`IntegrationPaths`], so tests point it at
 //! a temporary directory instead of the user's home.
 
-#[cfg(not(windows))]
 use std::path::Path;
 use std::{fs, io, path::PathBuf};
 
@@ -112,7 +111,8 @@ impl IntegrationPaths {
     /// The real locations, or `None` where the command cannot be installed.
     /// macOS gets `/usr/local/bin`, which is on every PATH and may need an
     /// administrator; Linux gets `~/.local/bin`, which needs nobody.
-    /// Windows gets a folder of ShellRS's own, added to the user's PATH.
+    /// Windows gets a folder of ShellRS's own, added to the user's PATH:
+    /// in the profile, or in the folder of a portable copy.
     pub fn system() -> Option<Self> {
         let home = dirs::home_dir()?;
         let exe = program(
@@ -128,12 +128,9 @@ impl IntegrationPaths {
         } else if cfg!(unix) {
             (home.join(".local/bin").join(COMMAND_NAME), exe, None)
         } else if cfg!(windows) {
-            let bin = dirs::data_local_dir()?.join("ShellRS").join("bin");
-            (
-                bin.join(format!("{COMMAND_NAME}.exe")),
-                exe.with_file_name("shellrs-cli.exe"),
-                Some(UserPath::Registry),
-            )
+            let (bin_link, exe) =
+                windows_locations(crate::app::portable_root(), dirs::data_local_dir(), &exe)?;
+            (bin_link, exe, Some(UserPath::Registry))
         } else {
             return None;
         };
@@ -151,6 +148,31 @@ impl IntegrationPaths {
         file.join(COMMAND_NAME).join(SKILL_FILE)
     }
 }
+
+/// Where the command goes on Windows, and the console program it copies. A
+/// portable copy keeps it in its own `bin`, where the command finds the
+/// copy's data (`crate::app::portable_root`); an installed one in the
+/// profile's `ShellRS\bin`.
+fn windows_locations(
+    portable: Option<&Path>,
+    local_data: Option<PathBuf>,
+    exe: &Path,
+) -> Option<(PathBuf, PathBuf)> {
+    let command = format!("{COMMAND_NAME}.exe");
+    Some(match portable {
+        Some(root) => (
+            root.join(crate::app::PORTABLE_BIN).join(command),
+            root.join(WINDOWS_CLI),
+        ),
+        None => (
+            local_data?.join("ShellRS").join("bin").join(command),
+            exe.with_file_name(WINDOWS_CLI),
+        ),
+    })
+}
+
+/// The console program beside `shellrs.exe` on Windows.
+const WINDOWS_CLI: &str = "shellrs-cli.exe";
 
 /// The file the `shellrs` command runs. Inside an AppImage the executable
 /// lives in a mount that is gone once the app exits, so the command runs
@@ -412,6 +434,28 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+
+    #[test]
+    fn a_portable_copy_keeps_the_command_in_its_own_bin() {
+        let exe = Path::new("/Users/me/AppData/Local/Programs/ShellRS/shellrs.exe");
+        let local = PathBuf::from("/Users/me/AppData/Local");
+        assert_eq!(
+            windows_locations(None, Some(local.clone()), exe),
+            Some((
+                local.join("ShellRS").join("bin").join("shellrs.exe"),
+                exe.with_file_name("shellrs-cli.exe"),
+            ))
+        );
+        assert_eq!(windows_locations(None, None, exe), None);
+        let root = Path::new("/Volumes/USB/ShellRS");
+        assert_eq!(
+            windows_locations(Some(root), Some(local), &root.join("shellrs.exe")),
+            Some((
+                root.join("bin").join("shellrs.exe"),
+                root.join("shellrs-cli.exe"),
+            ))
+        );
+    }
 
     #[test]
     fn inside_an_appimage_the_command_links_to_the_appimage() {

@@ -322,6 +322,7 @@ pub(crate) mod tests {
             "ShellRS-0.2.0-macos-aarch64.app.zip",
             "ShellRS-0.2.0-macos-x86_64.app.zip",
             "ShellRS-0.2.0-windows-x86_64-setup.exe",
+            "ShellRS-0.2.0-windows-x86_64-portable.zip",
             "ShellRS-0.2.0-linux-x86_64.AppImage",
         ] {
             std::fs::write(dist.join(name), name).unwrap();
@@ -396,6 +397,16 @@ pub(crate) mod tests {
             manifest.installers["windows-x86_64"].ends_with("windows-x86_64-setup.exe"),
             "{:?}",
             manifest.installers
+        );
+        // The portable copy updates from the zip a person downloads.
+        let portable = dist.join("ShellRS-0.2.0-windows-x86_64-portable.zip");
+        assert_eq!(
+            verify_file(&portable, &manifest.assets["windows-x86_64-portable"]),
+            Ok(())
+        );
+        assert_eq!(
+            manifest.installers["windows-x86_64-portable"],
+            "https://dl.shellrs.com/releases/0.2.0/ShellRS-0.2.0-windows-x86_64-portable.zip"
         );
         assert_eq!(
             open_envelope(&bytes, Channel::Beta, &keys),

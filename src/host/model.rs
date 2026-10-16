@@ -46,6 +46,11 @@ impl PublicId {
         }
     }
 
+    /// Whether `text` looks like an id: sixteen ASCII letters and digits.
+    pub fn has_shape(text: &str) -> bool {
+        text.len() == Self::LEN && text.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    }
+
     /// An id read back from the database.
     pub(crate) fn from_stored(id: String) -> Self {
         Self(id.into())
