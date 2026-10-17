@@ -72,15 +72,35 @@ fn opens_links(modifiers: &Modifiers) -> bool {
     }
 }
 
-fn reconnect_keystroke(event: &KeyDownEvent, lifecycle: &TerminalLifecycle) -> bool {
-    event.keystroke.key == "enter"
-        && event.keystroke.modifiers == Modifiers::default()
-        && !event.is_held
-        && !event.prefer_character_input
-        && matches!(
-            lifecycle,
-            TerminalLifecycle::Exited { .. } | TerminalLifecycle::Failed(_)
-        )
+/// What a key does in a terminal whose connection has ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EndedKey {
+    /// Enter: connect again in the same tab.
+    Reconnect,
+    /// Space: close the tab.
+    Close,
+}
+
+/// The key's meaning once the connection has ended: a fresh press of plain
+/// Enter or Space, nothing held, typed through an input method or
+/// modified.
+fn ended_key(event: &KeyDownEvent, lifecycle: &TerminalLifecycle) -> Option<EndedKey> {
+    let ended = matches!(
+        lifecycle,
+        TerminalLifecycle::Exited { .. } | TerminalLifecycle::Failed(_)
+    );
+    if !ended
+        || event.keystroke.modifiers != Modifiers::default()
+        || event.is_held
+        || event.prefer_character_input
+    {
+        return None;
+    }
+    match event.keystroke.key.as_str() {
+        "enter" => Some(EndedKey::Reconnect),
+        "space" => Some(EndedKey::Close),
+        _ => None,
+    }
 }
 
 /// What a terminal is called for screen readers. Asked for each time it is
@@ -267,6 +287,9 @@ pub struct TerminalView {
     /// Files dropped on it are for ZMODEM: see [`Self::take_dropped_files`].
     takes_dropped_files: bool,
     reconnect_action: Option<Box<dyn Action>>,
+    close_action: Option<Box<dyn Action>>,
+    /// Set by Enter or Space after the connection ended, until the
+    /// terminal starts again: keys queued meanwhile do not act twice.
     reconnect_pending: bool,
     find: Option<FindBar>,
     cursor_visible: bool,
@@ -366,6 +389,7 @@ impl TerminalView {
             menu_items: None,
             takes_dropped_files: false,
             reconnect_action: None,
+            close_action: None,
             reconnect_pending: false,
             find: None,
             cursor_visible: true,
@@ -388,9 +412,17 @@ impl TerminalView {
         self.focus_handle.clone()
     }
 
-    /// Only remote panels opt in, with their own terminal-scoped action.
-    pub(super) fn set_reconnect_action(&mut self, action: impl Action, cx: &mut Context<Self>) {
-        self.reconnect_action = Some(Box::new(action));
+    /// What Enter and Space do once the connection has ended: reconnect,
+    /// and close the tab. Only remote panels opt in, with their own
+    /// terminal-scoped actions.
+    pub(super) fn set_ended_actions(
+        &mut self,
+        reconnect: impl Action,
+        close: impl Action,
+        cx: &mut Context<Self>,
+    ) {
+        self.reconnect_action = Some(Box::new(reconnect));
+        self.close_action = Some(Box::new(close));
         self.engine
             .update(cx, |engine, _| engine.enable_reconnect_on_enter());
     }
@@ -681,10 +713,14 @@ impl TerminalView {
     }
 
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let ended_action = match ended_key(event, &self.lifecycle(cx)) {
+            Some(EndedKey::Reconnect) => self.reconnect_action.as_ref(),
+            Some(EndedKey::Close) => self.close_action.as_ref(),
+            None => None,
+        };
         if self.focus_handle.is_focused(window)
             && !self.reconnect_pending
-            && reconnect_keystroke(event, &self.lifecycle(cx))
-            && let Some(action) = &self.reconnect_action
+            && let Some(action) = ended_action
         {
             // Dispatch is deferred. Latch immediately so queued key events cannot
             // restart this connection twice before its lifecycle becomes Starting.
@@ -2329,7 +2365,9 @@ mod tests {
     }
 
     #[test]
-    fn reconnect_enter_requires_a_fresh_plain_key_and_stopped_lifecycle() {
+    fn enter_reconnects_and_space_closes_only_on_a_fresh_plain_key_once_stopped() {
+        use super::{EndedKey, ended_key};
+
         let stopped = super::TerminalLifecycle::Exited {
             code: 0,
             signal: None,
@@ -2339,29 +2377,41 @@ mod tests {
             is_held: false,
             prefer_character_input: false,
         };
-        assert!(super::reconnect_keystroke(&event, &stopped));
-        assert!(super::reconnect_keystroke(
-            &event,
-            &super::TerminalLifecycle::Failed("offline".into())
-        ));
+        assert_eq!(ended_key(&event, &stopped), Some(EndedKey::Reconnect));
+        assert_eq!(
+            ended_key(&event, &super::TerminalLifecycle::Failed("offline".into())),
+            Some(EndedKey::Reconnect)
+        );
+        let mut space = event.clone();
+        space.keystroke = key("space");
+        assert_eq!(ended_key(&space, &stopped), Some(EndedKey::Close));
         for state in [
             super::TerminalLifecycle::Starting,
             super::TerminalLifecycle::Running,
             super::TerminalLifecycle::Closing,
         ] {
-            assert!(!super::reconnect_keystroke(&event, &state));
+            assert_eq!(ended_key(&event, &state), None);
+            assert_eq!(ended_key(&space, &state), None);
         }
-        for name in ["shift-enter", "ctrl-enter", "alt-enter", "cmd-enter", "a"] {
+        for name in [
+            "shift-enter",
+            "ctrl-enter",
+            "alt-enter",
+            "cmd-enter",
+            "shift-space",
+            "ctrl-space",
+            "a",
+        ] {
             let mut modified = event.clone();
             modified.keystroke = key(name);
-            assert!(!super::reconnect_keystroke(&modified, &stopped));
+            assert_eq!(ended_key(&modified, &stopped), None, "{name}");
         }
-        let mut held = event.clone();
+        let mut held = space.clone();
         held.is_held = true;
-        assert!(!super::reconnect_keystroke(&held, &stopped));
+        assert_eq!(ended_key(&held, &stopped), None);
         let mut character_input = event;
         character_input.prefer_character_input = true;
-        assert!(!super::reconnect_keystroke(&character_input, &stopped));
+        assert_eq!(ended_key(&character_input, &stopped), None);
     }
 
     #[test]

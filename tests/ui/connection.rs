@@ -1042,9 +1042,12 @@ async fn enter_reconnects_stopped_remote(
             .terminal()
             .read(cx)
             .screen_text(cx);
-        assert!(screen.contains("按 Enter 重新连接"), "{screen}");
+        assert!(
+            screen.contains("[按 Enter 重新连接，按 Space 关闭标签页]"),
+            "{screen}"
+        );
         window.click(("terminal", terminal.0), cx);
-        for key in ["shift-enter", "ctrl-enter", "alt-enter"] {
+        for key in ["shift-enter", "ctrl-enter", "alt-enter", "shift-space"] {
             window.press(key, cx);
         }
         cx.write_to_clipboard(ClipboardItem::new_string("\n".into()));
@@ -1103,6 +1106,41 @@ async fn enter_reconnects_failed_remote(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 async fn enter_reconnects_exited_remote(cx: &mut TestAppContext) {
     enter_reconnects_stopped_remote(cx, Arc::new(FakeTerminalFactory::exit_first())).await;
+}
+
+/// Space closes a remote terminal whose connection ended, as its tab's ×
+/// does; while connected it is typed into the shell.
+#[gpui_kit::test]
+async fn space_closes_an_ended_remote_terminal(cx: &mut TestAppContext) {
+    let factory = Arc::new(FakeTerminalFactory::exit_first());
+    let (store, host) = one_host_store(AuthKind::Password);
+    let (handle, workspace) = open_workspace_with_remote_factory(cx, store, factory.clone());
+    let terminal = RemoteTerminalId(1);
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window
+            .within("host-tree")
+            .double_click(("host-row", host.0), cx);
+    })
+    .unwrap();
+    cx.wait_for(handle.into(), Duration::from_secs(2), |_, cx| {
+        matches!(
+            remote_lifecycle(&workspace, terminal, cx),
+            TerminalLifecycle::Exited { .. }
+        )
+    })
+    .await;
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.click(("terminal", terminal.0), cx);
+        window.press("space", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    workspace.read_with(cx, |workspace, _| {
+        assert!(workspace.remote_terminal(terminal).is_none());
+    });
+    assert_eq!(factory.starts(), 1, "Space closes, it does not reconnect");
 }
 
 #[gpui_kit::test]

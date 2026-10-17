@@ -205,9 +205,9 @@ terminal.pty.exit_status:
   zh-CN: 无法读取 shell 退出状态
   en: Couldn’t read the shell’s exit status
 
-terminal.notice.enter_reconnect:
-  zh-CN: 按 Enter 重新连接
-  en: Press Enter to reconnect
+terminal.notice.reconnect_or_close:
+  zh-CN: 按 Enter 重新连接，按 Space 关闭标签页
+  en: Press Enter to reconnect or Space to close the tab
 terminal.zmodem.uploading:
   zh-CN: 正在用 ZMODEM 上传，按 Ctrl+C 取消
   en: Uploading with ZMODEM. Press Ctrl+C to cancel.

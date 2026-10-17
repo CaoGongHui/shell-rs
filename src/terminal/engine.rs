@@ -296,7 +296,10 @@ impl TerminalEngine {
 
     fn append_reconnect_hint(&self) {
         if self.reconnect_on_enter {
-            append_message(&self.runtime.term, &t!("terminal.notice.enter_reconnect"));
+            append_message(
+                &self.runtime.term,
+                &t!("terminal.notice.reconnect_or_close"),
+            );
         }
     }
 

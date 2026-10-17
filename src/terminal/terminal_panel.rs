@@ -104,7 +104,7 @@ impl TerminalPanel {
                 host.address_is_ip(),
                 store.clone(),
             ));
-            terminal.set_reconnect_action(ReconnectTerminal(id), cx);
+            terminal.set_ended_actions(ReconnectTerminal(id), CloseTerminal(id), cx);
             terminal.take_dropped_files();
             terminal
         });
