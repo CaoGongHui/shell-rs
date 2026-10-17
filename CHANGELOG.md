@@ -4,6 +4,16 @@
 
 One section per version, titled `## [version]`, optionally followed by a date. Each section is written in English here and in Chinese in [CHANGELOG.zh.md](CHANGELOG.zh.md), in the same change. The release workflow (`.github/workflows/release.yml`) takes the section with the tag’s version, as it is, for the GitHub release. The website’s changelog shows this file in English and Japanese and CHANGELOG.zh.md in Chinese (ShellRS’s update dialog opens it with What’s new). Written in Markdown, for users.
 
+## [0.1.13-beta.3]
+
+### Added
+
+- Broadcast input: click the megaphone at the left of the tab bar and check a few terminals; they’re shown side by side, and the command bar above them sends a command to all of them. Turn on Sync keys to have typing in one go to the others too.
+
+### Fixed
+
+- A terminal shown in a split no longer pops up a reminder when its bell rings.
+
 ## [0.1.13-beta.2]
 
 ### Improved
