@@ -348,11 +348,11 @@ impl Panel for TerminalPanel {
         let (address, os) = (self.host.address.clone(), self.host.os);
         let tab_menu = self.tab_menu(cx);
         let state = self.connection_state(cx);
-        let mark = match self.broadcast {
-            Some(selection) => selection
-                .render(CenterTab::Terminal(id), self.tab_title(cx))
-                .into_any_element(),
-            None => HostMark::new(
+        let mark = super::BroadcastSelection::lead(
+            self.broadcast.clone(),
+            CenterTab::Terminal(id),
+            self.tab_title(cx),
+            HostMark::new(
                 ("terminal-tab-os", id.0),
                 self.default_title(cx),
                 address,
@@ -360,9 +360,8 @@ impl Panel for TerminalPanel {
             )
             .protocol(self.host.kind())
             .connection_state(state)
-            .small()
-            .into_any_element(),
-        };
+            .small(),
+        );
         ClosableTabTitle::new(("terminal-tab", id.0), mark, self.tab_title(cx))
             .connection_state(state)
             .closable(("close-terminal", id.0), Box::new(CloseTerminal(id)))

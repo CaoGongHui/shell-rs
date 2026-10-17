@@ -42,9 +42,9 @@ pub(super) fn delivery(
     notice: &TerminalNotice,
     settings: NotificationSettings,
     window_active: bool,
-    in_front: bool,
+    in_sight: bool,
 ) -> Delivery {
-    let (allowed, quiet_in_front) = match notice {
+    let (allowed, quiet_in_sight) = match notice {
         TerminalNotice::Program { .. } => (settings.programs, false),
         TerminalNotice::Bell { .. } => (settings.bell, true),
         TerminalNotice::Keyword { .. } => (true, true),
@@ -53,7 +53,7 @@ pub(super) fn delivery(
         Delivery::None
     } else if !window_active {
         Delivery::System
-    } else if in_front && quiet_in_front {
+    } else if in_sight && quiet_in_sight {
         Delivery::None
     } else {
         Delivery::InApp
@@ -120,8 +120,10 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let settings = self.settings().read(cx).settings().notifications;
-        let in_front = self.active_tab == Some(tab);
-        let delivery = delivery(notice, settings, window.is_window_active(), in_front);
+        // In sight is on screen: the tab in front of its group, beside
+        // another in a split as well.
+        let in_sight = self.visible_center_tabs(cx).contains(&tab);
+        let delivery = delivery(notice, settings, window.is_window_active(), in_sight);
         let (Some(tag), Some(tab_title)) = (notice_tag(tab), self.notice_tab_title(tab, cx)) else {
             return;
         };

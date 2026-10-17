@@ -3,6 +3,7 @@
 //! the center shows while no tab is open.
 
 mod analytics;
+mod broadcast_bar;
 mod cli_changes;
 mod credentials;
 mod dock_skin;

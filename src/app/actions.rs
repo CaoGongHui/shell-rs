@@ -35,8 +35,15 @@ gpui_kit::actions!(
         NewGroup,
         /// Open a new local login-shell terminal.
         NewLocalTerminal,
-        /// Replace terminal tab marks with broadcast membership checkboxes.
+        /// Start 命令广播, which turns terminal tab marks into checkboxes,
+        /// or end it.
         ToggleTerminalBroadcast,
+        /// Send the command bar's line to every terminal of 命令广播.
+        SendBroadcastCommand,
+        /// Send Ctrl+C to every terminal of 命令广播.
+        InterruptBroadcast,
+        /// Whether typing in one terminal of 命令广播 goes to the others too.
+        ToggleBroadcastKeys,
         /// Copy the active terminal selection.
         CopyTerminal,
         /// Paste the clipboard into the active terminal.
@@ -307,6 +314,9 @@ id_actions! {
     EditSnippet(SnippetId);
     /// Ask for confirmation, then delete a snippet.
     DeleteSnippet(SnippetId);
+    /// Send a snippet to every terminal of 命令广播, as a click on it in
+    /// 命令片段 would to one.
+    BroadcastSnippet(SnippetId);
     /// Open the rename dialog of a snippet category.
     RenameSnippetCategory(SnippetCategoryId);
     /// Ask for confirmation, then delete a snippet category with the

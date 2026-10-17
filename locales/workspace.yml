@@ -15,6 +15,40 @@ workspace.broadcast.target:
 workspace.broadcast.unavailable:
   zh-CN: 终端连接后可加入命令广播
   en: Connect this terminal to include it in input broadcast
+# The command bar above the checked terminals.
+workspace.broadcast.placeholder:
+  zh-CN: 输入命令，回车发送到勾选的终端
+  en: Type a command. Enter runs it in the checked terminals
+workspace.broadcast.snippets:
+  zh-CN: 片段
+  en: Snippets
+workspace.broadcast.snippets_tooltip:
+  zh-CN: 把命令片段发送到勾选的终端
+  en: Send a snippet to the checked terminals
+workspace.broadcast.no_snippets:
+  zh-CN: 还没有命令片段
+  en: No snippets yet
+workspace.broadcast.keys:
+  zh-CN: 同步按键
+  en: Sync keys
+workspace.broadcast.keys_tooltip:
+  zh-CN: 在任一勾选的终端里打字时，同时发给其他勾选的终端
+  en: Typing in one checked terminal goes to the others too
+workspace.broadcast.send:
+  zh-CN: 发送到全部
+  en: Send to all
+workspace.broadcast.send_tooltip:
+  zh-CN: 在勾选的终端里执行这一行（回车）
+  en: Run this line in the checked terminals (Enter)
+workspace.broadcast.interrupt:
+  zh-CN: 向勾选的终端发送 Ctrl+C
+  en: Send Ctrl+C to the checked terminals
+workspace.broadcast.end:
+  zh-CN: 结束命令广播
+  en: Stop broadcasting
+workspace.broadcast.refused:
+  zh-CN: "没有发送到 %{names}：%{error}"
+  en: "Not sent to %{names}: %{error}"
 
 # The title bar.
 workspace.title_bar.hosts:

@@ -139,7 +139,7 @@ impl LocalTerminalPanel {
         window.focus(&focus, cx);
     }
 
-    fn display_title(&self, cx: &App) -> SharedString {
+    pub(crate) fn display_title(&self, cx: &App) -> SharedString {
         self.terminal.read(cx).title(cx).map_or_else(
             || self.default_title(),
             |title| short_title(&title).into_owned().into(),
@@ -191,12 +191,12 @@ impl BasePanel for LocalTerminalPanel {
 impl Panel for LocalTerminalPanel {
     fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (id, group, panel) = (self.id, self.tab_group.clone(), cx.entity_id());
-        let mark = match self.broadcast {
-            Some(selection) => selection
-                .render(CenterTab::LocalTerminal(id), self.display_title(cx))
-                .into_any_element(),
-            None => Icon::new(CatalogIcon::Terminal).small().into_any_element(),
-        };
+        let mark = super::BroadcastSelection::lead(
+            self.broadcast.clone(),
+            CenterTab::LocalTerminal(id),
+            self.display_title(cx),
+            Icon::new(CatalogIcon::Terminal).small(),
+        );
         ClosableTabTitle::new(
             ("local-terminal-tab", self.id.0),
             mark,

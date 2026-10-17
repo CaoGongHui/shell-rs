@@ -1453,6 +1453,73 @@ async fn terminals_notify_where_the_user_will_see_it(cx: &mut TestAppContext) {
     });
 }
 
+#[gpui_kit::test]
+async fn a_terminal_in_a_split_beside_rings_without_a_reminder(cx: &mut TestAppContext) {
+    use gpui_kit::component::Placement;
+    use gpui_kit::component::dock::{DockPlacement, InsertTarget, PanelId};
+
+    let factory = Arc::new(FakeTerminalFactory::default());
+    let (handle, workspace) = open_running_local_terminal(cx, factory).await;
+    in_frame(cx, handle, |window, _| window.activate_window());
+    in_frame(cx, handle, |window, cx| {
+        window.click("new-local-terminal", cx)
+    });
+    cx.wait_for(handle.into(), Duration::from_secs(2), |_, cx| {
+        workspace
+            .read(cx)
+            .local_terminal(LocalTerminalId(2))
+            .is_some_and(|terminal| {
+                terminal.read(cx).status(cx).lifecycle() == &TerminalLifecycle::Running
+            })
+    })
+    .await;
+    // The second beside the first.
+    cx.update_window(handle.into(), |_, window, cx| {
+        let panel = PanelId::from(
+            workspace
+                .read(cx)
+                .local_terminal(LocalTerminalId(2))
+                .expect("the second terminal")
+                .entity_id(),
+        );
+        let area = workspace.read(cx).dock_area().clone();
+        area.update(cx, |area, cx| {
+            let node = area
+                .layout(DockPlacement::Center)
+                .and_then(|tree| tree.find_panel_node(panel))
+                .expect("in the center");
+            area.move_panel(
+                panel,
+                InsertTarget::Split {
+                    node,
+                    placement: Placement::Right,
+                    size: None,
+                },
+                window,
+                cx,
+            );
+        });
+    })
+    .unwrap();
+    cx.run_until_parked();
+    in_frame(cx, handle, |window, _| {
+        assert!(window.find(("local-terminal", 1_u64)).visible());
+        assert!(window.find(("local-terminal", 2_u64)).visible());
+    });
+    cx.update(|cx| {
+        assert_eq!(
+            workspace.read(cx).active_tab(),
+            Some(shellrs::app::CenterTab::LocalTerminal(LocalTerminalId(1)))
+        );
+    });
+    // In sight, though not the tab in front: the bell says nothing.
+    print_into(cx, &workspace, 2, "y/N\x07");
+    cx.background_executor
+        .advance_clock(Duration::from_millis(200));
+    cx.run_until_parked();
+    assert_eq!(in_window(cx, handle), 0);
+}
+
 /// Have the settings hold `rules`, as the 关键字高亮 page writes them, with
 /// highlighting on.
 fn set_highlight_rules(

@@ -9,21 +9,23 @@ use gpui_kit::component::dock::{
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
-    h_flex, v_flex,
+    h_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-/// Renderers consume this value, never the Workspace entity being rendered.
+/// What the leading center tab bar shows ahead of its tabs: the sidebar
+/// switch and 命令广播's. Renderers consume this value, never the Workspace
+/// entity being rendered.
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
-struct BroadcastBar {
+struct TabBarControls {
     node: Option<NodeId>,
     hosts_open: Option<bool>,
     enabled: bool,
     count: usize,
 }
 
-impl BroadcastBar {
+impl TabBarControls {
     fn controls(self, target: &FocusHandle) -> impl IntoElement {
         let hosts = target.clone();
         let broadcast = target.clone();
@@ -62,7 +64,7 @@ impl BroadcastBar {
                 Button::new("toggle-terminal-broadcast")
                     .ghost()
                     .xsmall()
-                    .icon(Icon::new(CatalogIcon::Cast))
+                    .icon(Icon::new(CatalogIcon::Megaphone))
                     .selected(self.enabled)
                     .accessibility_label(label)
                     .tooltip(t!("workspace.broadcast.title"))
@@ -74,7 +76,8 @@ impl BroadcastBar {
 }
 
 /// The workspace's dock appearance: gpui-kit's `DockSkin`, plus a view that
-/// fills the center while it holds no tab.
+/// fills the center while it holds no tab, and 命令广播's command bar above
+/// the center's tab groups while terminals are checked.
 ///
 /// The dock draws nothing for an empty center and `DockAreaRenderer` has no
 /// empty-center hook, so the placeholder rides on `center_frame`. It is drawn
@@ -86,21 +89,25 @@ pub(super) struct WorkspaceDockSkin {
     // Only the leading center bar replaces the built-in sidebar toggle, so
     // its two controls can sit together. Other dock bars keep their skin.
     center_skin: Rc<DockSkin>,
-    broadcast: Rc<Cell<BroadcastBar>>,
+    broadcast: Rc<Cell<TabBarControls>>,
     target: FocusHandle,
     area: WeakEntity<DockArea>,
     placeholder: AnyView,
     center_empty: Cell<bool>,
+    command_bar: AnyView,
+    command_bar_shown: Cell<bool>,
 }
 
 impl WorkspaceDockSkin {
     /// Build a `DockArea` wearing this skin, together with the handle its
     /// settings are changed through. `placeholder` is what the center shows
-    /// while it is empty.
+    /// while it is empty, `command_bar` what it shows above its tab groups
+    /// while 命令广播 has terminals checked.
     pub(super) fn dock_area(
         id: &'static str,
         version: Option<usize>,
         placeholder: AnyView,
+        command_bar: AnyView,
         target: FocusHandle,
         window: &mut Window,
         cx: &mut App,
@@ -115,6 +122,8 @@ impl WorkspaceDockSkin {
                 area: cx.weak_entity(),
                 placeholder,
                 center_empty: Cell::new(false),
+                command_bar,
+                command_bar_shown: Cell::new(false),
             });
             skin = Some(this.clone());
             DockArea::new(id, version, window, cx).with_renderer(this)
@@ -137,13 +146,20 @@ impl WorkspaceDockSkin {
         count: usize,
         cx: &mut App,
     ) {
-        let state = BroadcastBar {
+        let state = TabBarControls {
             node,
             hosts_open,
             enabled,
             count,
         };
         if self.broadcast.replace(state) != state {
+            _ = self.area.update(cx, |_, cx| cx.notify());
+        }
+    }
+
+    /// Show (`true`) or hide 命令广播's command bar.
+    pub(super) fn set_command_bar_shown(&self, shown: bool, cx: &mut App) {
+        if self.command_bar_shown.replace(shown) != shown {
             _ = self.area.update(cx, |_, cx| cx.notify());
         }
     }
@@ -176,22 +192,17 @@ impl DockAreaRenderer for WorkspaceDockSkin {
         self.skin
             .center_frame(window, cx)
             .relative()
+            // The dock puts the center's tab groups after what the frame
+            // holds, in a column: the bar sits above all of them.
+            .when(
+                self.command_bar_shown.get() && !self.center_empty.get(),
+                |frame| frame.child(self.command_bar.clone()),
+            )
             .when(self.center_empty.get(), |frame| {
                 // Deferred, so it paints after the empty layout's own
                 // background, which the dock draws later in the same frame.
                 frame.child(deferred(
-                    v_flex()
-                        .absolute()
-                        .inset_0()
-                        .child(
-                            h_flex()
-                                .h_8()
-                                .flex_shrink_0()
-                                .border_b_1()
-                                .border_color(cx.theme().border)
-                                .child(self.broadcast.get().controls(&self.target)),
-                        )
-                        .child(div().flex_1().min_h_0().child(self.placeholder.clone())),
+                    div().absolute().inset_0().child(self.placeholder.clone()),
                 ))
             })
     }
@@ -234,7 +245,7 @@ impl DockAreaRenderer for WorkspaceDockSkin {
 struct WorkspaceTabBar {
     skin: Rc<dyn TabGroupRenderer>,
     center_skin: Rc<dyn TabGroupRenderer>,
-    broadcast: Rc<Cell<BroadcastBar>>,
+    broadcast: Rc<Cell<TabBarControls>>,
     target: FocusHandle,
 }
 

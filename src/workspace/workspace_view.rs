@@ -77,6 +77,7 @@ use crate::terminal::{
 use crate::update::{UpdateServices, Updater, UpdaterEvent};
 
 use super::{
+    broadcast_bar::BroadcastBar,
     dock_skin::WorkspaceDockSkin,
     recent_hosts::RecentHosts,
     sidebar::Sidebar,
@@ -145,6 +146,8 @@ pub(super) enum PromptOwner {
 /// panels, and handles every application action.
 pub struct Workspace {
     pub(super) broadcast: super::terminal_groups::TerminalBroadcast,
+    /// 命令广播's command bar, shown by the dock skin above the terminals.
+    pub(super) broadcast_bar: Entity<BroadcastBar>,
     pub(super) store: Entity<HostStore>,
     pub(super) dock_area: Entity<DockArea>,
     pub(super) skin: Rc<WorkspaceDockSkin>,
@@ -334,10 +337,13 @@ impl Workspace {
             serial: serial_terminal_provider,
         };
         let recent = cx.new(|cx| RecentHosts::new(store.clone(), focus_handle.clone(), cx));
+        let broadcast_bar =
+            cx.new(|cx| BroadcastBar::new(store.clone(), focus_handle.clone(), window, cx));
         let (dock_area, skin) = WorkspaceDockSkin::dock_area(
             DOCK_ID,
             Some(DOCK_VERSION),
             recent.clone().into(),
+            broadcast_bar.clone().into(),
             focus_handle.clone(),
             window,
             cx,
@@ -452,10 +458,7 @@ impl Workspace {
             ),
             // Zoom and sidebar toggles only notify. Keep the permanent
             // broadcast control on the leading visible tab bar.
-            cx.observe(&dock_area, |this, _, cx| {
-                this.sync_broadcast(cx);
-                cx.notify();
-            }),
+            cx.observe(&dock_area, |this, _, cx| this.sync_broadcast(cx)),
         ];
 
         // A fixture's hosts start with a terminal tab each.
@@ -564,6 +567,7 @@ impl Workspace {
             next_explorer_id: 1,
             active_tab: None,
             broadcast: Default::default(),
+            broadcast_bar,
             tool_terminal_choice: None,
             tool_sidebar_wanted: false,
             prompt_queue: VecDeque::new(),
@@ -2712,6 +2716,10 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_new_local_terminal))
             .on_action(cx.listener(Self::on_toggle_terminal_broadcast))
             .on_action(cx.listener(Self::on_set_broadcast_target))
+            .on_action(cx.listener(Self::on_send_broadcast_command))
+            .on_action(cx.listener(Self::on_broadcast_snippet))
+            .on_action(cx.listener(Self::on_interrupt_broadcast))
+            .on_action(cx.listener(Self::on_toggle_broadcast_keys))
             .on_action(cx.listener(Self::on_edit_host))
             .on_action(cx.listener(Self::on_duplicate_host))
             .on_action(cx.listener(Self::on_move_host_node))

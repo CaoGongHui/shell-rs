@@ -1,11 +1,14 @@
-//! Real Dock drags and broadcast controls, with an independent transport log
-//! for every participant. No server, PTY or keychain is touched.
+//! 命令广播: the checkboxes on terminal tabs, the split layout and command
+//! bar they bring, and keys shared on request, with an independent
+//! transport log for every participant. No server, PTY or keychain is
+//! touched.
 
 use std::collections::HashMap;
 
 use crate::support::*;
 use gpui_kit::component::dock::ToggleZoom;
-use shellrs::app::{CloseSettings, PasteTerminal};
+use shellrs::app::{BroadcastSnippet, CloseSettings, PasteTerminal};
+use shellrs::host::{SnippetDraft, SnippetId};
 
 struct PerHostTerminals(HashMap<String, Arc<FakeTerminalFactory>>);
 
@@ -31,10 +34,15 @@ async fn open(cx: &mut TestAppContext) -> Fixture {
         "\x1b[?1h\x1b[?2004hready-web",
     ));
     let staging = Arc::new(FakeTerminalFactory::printing("ready-staging"));
-    let local = Arc::new(FakeTerminalFactory::printing("ready-local"));
+    // The local shell runs a full-screen program, which takes no command.
+    let local = Arc::new(FakeTerminalFactory::printing("\x1b[?1049hready-local"));
     let mut workspace = None;
     let handle = cx.open_window(size(px(1440.), px(900.)), |window, cx| {
-        let seed = HostStore::seed();
+        let mut seed = HostStore::seed();
+        // SnippetId(1), run on a click.
+        seed.insert_snippet_unnotified(
+            SnippetDraft::new("磁盘", "df -h", None).with_run_on_click(true),
+        );
         let remote = Arc::new(PerHostTerminals(HashMap::from([
             (
                 seed.host(HostId(WEB_01)).unwrap().address.to_string(),
@@ -88,40 +96,17 @@ async fn open(cx: &mut TestAppContext) -> Fixture {
     }
 }
 
-fn split_pair(cx: &mut TestAppContext, handle: WindowHandle<Root>) {
-    in_frame(cx, handle, |window, cx| {
-        window.click(("terminal-tab", INITIAL_STAGING_TERMINAL), cx);
-    });
-    in_frame(cx, handle, |window, cx| {
-        let from = window
-            .find(("terminal-tab", INITIAL_STAGING_TERMINAL))
-            .bounds()
-            .center();
-        let content = window.find(("terminal", INITIAL_STAGING_TERMINAL)).bounds();
-        window.drag(
-            from,
-            point(content.right() - px(12.), content.center().y),
-            cx,
-        );
-    });
-    in_frame(cx, handle, |window, _| {
-        let left = window.find(("terminal", INITIAL_WEB_TERMINAL));
-        let right = window.find(("terminal", INITIAL_STAGING_TERMINAL));
-        assert!(left.visible() && right.visible());
-        assert!(left.bounds().right() <= right.bounds().left());
-    });
-}
-
+/// Turn 命令广播 on and check web-01's and staging-api's terminals.
 fn select_pair(cx: &mut TestAppContext, handle: WindowHandle<Root>) {
     in_frame(cx, handle, |window, cx| {
         window.click("toggle-terminal-broadcast", cx)
     });
-    in_frame(cx, handle, |window, cx| {
-        for id in [INITIAL_WEB_TERMINAL, INITIAL_STAGING_TERMINAL] {
+    for id in [INITIAL_WEB_TERMINAL, INITIAL_STAGING_TERMINAL] {
+        in_frame(cx, handle, |window, cx| {
             assert_eq!(window.find(("broadcast-remote", id)).checked(), Some(false));
             window.click(("broadcast-remote", id), cx);
-        }
-    });
+        });
+    }
     in_frame(cx, handle, |window, _| {
         assert_eq!(
             window.find("toggle-terminal-broadcast").label(),
@@ -130,14 +115,34 @@ fn select_pair(cx: &mut TestAppContext, handle: WindowHandle<Root>) {
     });
 }
 
+/// Open a local terminal, LocalTerminalId(1), and wait for its shell.
+async fn open_local(cx: &mut TestAppContext, fixture: &Fixture) {
+    in_frame(cx, fixture.handle, |window, cx| {
+        window.click("new-local-terminal", cx)
+    });
+    cx.wait_for(fixture.handle.into(), Duration::from_secs(2), |_, cx| {
+        fixture
+            .workspace
+            .read(cx)
+            .local_terminal(LocalTerminalId(1))
+            .is_some_and(|panel| {
+                panel
+                    .read(cx)
+                    .terminal()
+                    .read(cx)
+                    .lifecycle(cx)
+                    .accepts_input()
+            })
+    })
+    .await;
+}
+
 #[gpui_kit::test]
-async fn permanent_toggle_replaces_logos_without_adding_a_toolbar(cx: &mut TestAppContext) {
+async fn the_toggle_puts_checkboxes_ahead_of_the_tab_marks(cx: &mut TestAppContext) {
     let fixture = open(cx).await;
     let handle = fixture.handle;
     in_frame(cx, handle, |window, cx| {
-        assert!(window.try_find("terminal-controls").is_none());
-        assert!(window.try_find("split-terminal-right").is_none());
-        assert!(window.try_find("start-terminal-broadcast").is_none());
+        assert!(window.try_find("broadcast-bar").is_none());
         let hide = window.find("toggle-dock:Left").bounds();
         let broadcast = window.find("toggle-terminal-broadcast").bounds();
         let tab = window.find(("terminal-tab", INITIAL_WEB_TERMINAL)).bounds();
@@ -153,24 +158,26 @@ async fn permanent_toggle_replaces_logos_without_adding_a_toolbar(cx: &mut TestA
     });
     let active = cx.update(|cx| fixture.workspace.read(cx).active_tab());
     in_frame(cx, handle, |window, cx| {
-        assert!(
-            window
-                .try_find(("terminal-tab-os", INITIAL_WEB_TERMINAL))
-                .is_none()
-        );
-        assert_eq!(
-            window
-                .find(("broadcast-remote", INITIAL_WEB_TERMINAL))
-                .checked(),
-            Some(false)
-        );
+        // The checkbox comes ahead of the mark, which still tells whether
+        // the terminal is connected.
+        let checkbox = window.find(("broadcast-remote", INITIAL_WEB_TERMINAL));
+        let mark = window.find(("terminal-tab-os", INITIAL_WEB_TERMINAL));
+        assert!(mark.visible());
+        assert!(checkbox.bounds().right() <= mark.bounds().left());
+        assert_eq!(checkbox.checked(), Some(false));
         window.click(("broadcast-remote", INITIAL_WEB_TERMINAL), cx);
     });
+    // One checked terminal leaves the layout alone and brings no bar.
     assert_eq!(
         cx.update(|cx| fixture.workspace.read(cx).active_tab()),
         active
     );
     in_frame(cx, handle, |window, cx| {
+        assert!(window.try_find("broadcast-bar").is_none());
+        assert_eq!(
+            window.find("toggle-terminal-broadcast").label(),
+            Some("命令广播 · 勾选至少两个终端")
+        );
         window.click("toggle-terminal-broadcast", cx)
     });
     in_frame(cx, handle, |window, _| {
@@ -185,39 +192,132 @@ async fn permanent_toggle_replaces_logos_without_adding_a_toolbar(cx: &mut TestA
                 .is_none()
         );
     });
-    // Still present with one tab, and on the empty start page.
-    for id in [INITIAL_WEB_TERMINAL, INITIAL_STAGING_TERMINAL] {
-        in_frame(cx, handle, |window, cx| {
-            window.click(("close-terminal", id), cx)
-        });
-        in_frame(cx, handle, |window, _| {
-            assert!(window.find("toggle-terminal-broadcast").visible())
-        });
-    }
+    // With a tab left, the toggle stays; the start page has no tab bar.
+    in_frame(cx, handle, |window, cx| {
+        window.click(("close-terminal", INITIAL_WEB_TERMINAL), cx)
+    });
+    in_frame(cx, handle, |window, cx| {
+        assert!(window.find("toggle-terminal-broadcast").visible());
+        window.click(("close-terminal", INITIAL_STAGING_TERMINAL), cx)
+    });
+    in_frame(cx, handle, |window, _| {
+        assert!(window.try_find("toggle-terminal-broadcast").is_none());
+    });
 }
 
 #[gpui_kit::test]
-async fn broadcast_reaches_background_tabs_and_encodes_each_terminal_mode(cx: &mut TestAppContext) {
+async fn checking_two_terminals_splits_them_under_the_command_bar(cx: &mut TestAppContext) {
     let fixture = open(cx).await;
     let handle = fixture.handle;
-    in_frame(cx, handle, |window, cx| {
-        window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx);
+    select_pair(cx, handle);
+    in_frame(cx, handle, |window, _| {
+        let bar = window.find("broadcast-bar").bounds();
+        let web = window.find(("terminal", INITIAL_WEB_TERMINAL));
+        let staging = window.find(("terminal", INITIAL_STAGING_TERMINAL));
+        assert!(web.visible() && staging.visible());
+        // Side by side, in the order checked, below the bar.
+        assert!(web.bounds().right() <= staging.bounds().left());
+        assert!(bar.bottom() <= web.bounds().top());
+        assert!(bar.bottom() <= staging.bounds().top());
     });
-    in_frame(cx, handle, |window, cx| window.input("solo", cx));
+    // The command line has the keyboard: Enter runs it everywhere, each
+    // terminal pasting the way its program asked.
+    in_frame(cx, handle, |window, cx| {
+        window.input("uptime", cx);
+        window.press("enter", cx);
+    });
     cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
-        fixture.web.written_text() == "solo"
+        fixture.web.written_text().ends_with('\r') && fixture.staging.written_text().ends_with('\r')
     })
     .await;
-    assert_eq!(fixture.staging.written_text(), "");
-    select_pair(cx, handle);
+    // Typed after what is there, as other tools send to all: nothing
+    // cleared first.
+    assert_eq!(fixture.web.written_text(), "\x1b[200~uptime\x1b[201~\r");
+    assert_eq!(fixture.staging.written_text(), "uptime\r");
+    // Sent, so the line is empty again; the snippets and Ctrl+C go to all.
     in_frame(cx, handle, |window, cx| {
+        window.dispatch_action(Box::new(BroadcastSnippet(SnippetId(1))), cx);
+    });
+    in_frame(cx, handle, |window, cx| {
+        window.click("broadcast-interrupt", cx)
+    });
+    cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
+        fixture.web.written_text().ends_with('\x03')
+            && fixture.staging.written_text().ends_with('\x03')
+    })
+    .await;
+    assert_eq!(fixture.staging.written_text(), "uptime\rdf -h\r\x03");
+    // Typing in a terminal stays there until keys are shared.
+    in_frame(cx, handle, |window, cx| {
+        window.click(("terminal", INITIAL_WEB_TERMINAL), cx);
+        window.input("solo", cx);
+    });
+    cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
+        fixture.web.written_text().ends_with("solo")
+    })
+    .await;
+    assert!(fixture.staging.written_text().ends_with('\x03'));
+    // Stopping takes the bar and the checkboxes away; the split stays.
+    in_frame(cx, handle, |window, cx| window.click("broadcast-end", cx));
+    in_frame(cx, handle, |window, _| {
+        assert!(window.try_find("broadcast-bar").is_none());
+        assert!(
+            window
+                .try_find(("broadcast-remote", INITIAL_WEB_TERMINAL))
+                .is_none()
+        );
+        assert!(window.find(("terminal", INITIAL_WEB_TERMINAL)).visible());
+        assert!(
+            window
+                .find(("terminal", INITIAL_STAGING_TERMINAL))
+                .visible()
+        );
+    });
+}
+
+#[gpui_kit::test]
+async fn a_terminal_that_cannot_take_the_command_says_so(cx: &mut TestAppContext) {
+    let fixture = open(cx).await;
+    let handle = fixture.handle;
+    open_local(cx, &fixture).await;
+    in_frame(cx, handle, |window, cx| {
+        window.click("toggle-terminal-broadcast", cx)
+    });
+    for target in [
+        ElementId::from(("broadcast-remote", INITIAL_WEB_TERMINAL)),
+        ElementId::from(("broadcast-local", 1_u64)),
+    ] {
+        in_frame(cx, handle, |window, cx| window.click(target.clone(), cx));
+    }
+    in_frame(cx, handle, |window, cx| {
+        window.input("ls", cx);
+        window.press("enter", cx);
+    });
+    cx.wait_for(handle.into(), Duration::from_secs(2), |window, cx| {
+        window.render_frame(cx);
+        fixture.web.written_text().ends_with('\r') && window.notifications(cx).len() == 1
+    })
+    .await;
+    // The full-screen program got nothing.
+    assert_eq!(fixture.local.written_text(), "");
+}
+
+#[gpui_kit::test]
+async fn shared_keys_reach_every_checked_terminal_in_its_own_mode(cx: &mut TestAppContext) {
+    let fixture = open(cx).await;
+    let handle = fixture.handle;
+    select_pair(cx, handle);
+    in_frame(cx, handle, |window, cx| window.click("broadcast-keys", cx));
+    in_frame(cx, handle, |window, cx| {
+        assert_eq!(window.find("broadcast-keys").checked(), Some(true));
         window.dispatch_action(Box::new(FindInTerminal), cx)
     });
+    // Nothing typed in the find bar goes anywhere.
     in_frame(cx, handle, |window, cx| {
         window.input("search-only", cx);
         window.press("escape", cx);
     });
-    assert_eq!(fixture.web.written_text(), "solo");
+    assert_eq!(fixture.web.written_text(), "");
     assert_eq!(fixture.staging.written_text(), "");
     in_frame(cx, handle, |window, cx| {
         window.click(("terminal", INITIAL_WEB_TERMINAL), cx);
@@ -225,6 +325,14 @@ async fn broadcast_reaches_background_tabs_and_encodes_each_terminal_mode(cx: &m
         window.press("up", cx);
         window.press("enter", cx);
         window.press("ctrl-c", cx);
+    });
+    // Each key a platform event of its own, as typed: the keys reach the
+    // other terminal before the paste does.
+    cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
+        fixture.staging.written_text().ends_with('\x03')
+    })
+    .await;
+    in_frame(cx, handle, |window, cx| {
         cx.write_to_clipboard(ClipboardItem::new_string("one\ntwo".into()));
         window.dispatch_action(Box::new(PasteTerminal), cx);
     });
@@ -235,21 +343,25 @@ async fn broadcast_reaches_background_tabs_and_encodes_each_terminal_mode(cx: &m
     .await;
     assert_eq!(
         fixture.web.written_text(),
-        "solo中文\x1bOA\r\x03\x1b[200~one\ntwo\x1b[201~"
+        "中文\x1bOA\r\x03\x1b[200~one\ntwo\x1b[201~"
     );
     assert_eq!(fixture.staging.written_text(), "中文\x1b[A\r\x03one\ntwo");
     in_frame(cx, handle, |window, cx| {
-        window.click(("terminal-tab", INITIAL_STAGING_TERMINAL), cx)
+        window.click(("terminal", INITIAL_STAGING_TERMINAL), cx);
+        window.input("from-b", cx);
     });
-    in_frame(cx, handle, |window, cx| window.input("from-b", cx));
     cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
         fixture.web.written_text().ends_with("from-b")
     })
     .await;
+    // Stopping ends the sharing too.
     in_frame(cx, handle, |window, cx| {
         window.click("toggle-terminal-broadcast", cx)
     });
-    in_frame(cx, handle, |window, cx| window.input("alone", cx));
+    in_frame(cx, handle, |window, cx| {
+        window.click(("terminal", INITIAL_STAGING_TERMINAL), cx);
+        window.input("alone", cx);
+    });
     cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
         fixture.staging.written_text().ends_with("alone")
     })
@@ -258,78 +370,31 @@ async fn broadcast_reaches_background_tabs_and_encodes_each_terminal_mode(cx: &m
 }
 
 #[gpui_kit::test]
-async fn checking_local_tabs_is_immediate_and_unchecking_stops_broadcast(cx: &mut TestAppContext) {
+async fn unchecking_leaves_the_broadcast_and_new_tabs_are_not_checked(cx: &mut TestAppContext) {
     let fixture = open(cx).await;
     let handle = fixture.handle;
+    select_pair(cx, handle);
+    in_frame(cx, handle, |window, cx| window.click("broadcast-keys", cx));
     in_frame(cx, handle, |window, cx| {
-        window.click("new-local-terminal", cx)
+        window.click(("broadcast-remote", INITIAL_STAGING_TERMINAL), cx)
     });
-    cx.wait_for(handle.into(), Duration::from_secs(2), |_, cx| {
-        fixture
-            .workspace
-            .read(cx)
-            .local_terminal(LocalTerminalId(1))
-            .is_some_and(|panel| {
-                panel
-                    .read(cx)
-                    .terminal()
-                    .read(cx)
-                    .lifecycle(cx)
-                    .accepts_input()
-            })
-    })
-    .await;
+    // One left: no bar, nothing shared.
     in_frame(cx, handle, |window, cx| {
-        window.click("toggle-terminal-broadcast", cx)
+        assert!(window.try_find("broadcast-bar").is_none());
+        window.click(("terminal", INITIAL_WEB_TERMINAL), cx);
+        window.input("unshared", cx);
     });
-    in_frame(cx, handle, |window, cx| {
-        window.click(("broadcast-local", 1_u64), cx)
-    });
-    in_frame(cx, handle, |window, cx| window.input("only-local", cx));
     cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
-        fixture.local.written_text() == "only-local"
-    })
-    .await;
-    assert_eq!(fixture.web.written_text(), "");
-    in_frame(cx, handle, |window, cx| {
-        window.click(("broadcast-remote", INITIAL_WEB_TERMINAL), cx)
-    });
-    in_frame(cx, handle, |window, cx| window.input("shared", cx));
-    cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
-        fixture.web.written_text() == "shared"
+        fixture.web.written_text() == "unshared"
     })
     .await;
     assert_eq!(fixture.staging.written_text(), "");
-    in_frame(cx, handle, |window, cx| {
-        window.click(("broadcast-remote", INITIAL_WEB_TERMINAL), cx)
-    });
-    in_frame(cx, handle, |window, cx| window.input("unshared", cx));
-    cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
-        fixture.local.written_text().ends_with("unshared")
-    })
-    .await;
-    assert_eq!(fixture.web.written_text(), "shared");
-    // Opening a terminal while enabled does not select it automatically.
-    in_frame(cx, handle, |window, cx| {
-        window.click("new-local-terminal", cx)
-    });
-    cx.wait_for(handle.into(), Duration::from_secs(2), |window, _| {
-        window.try_find(("broadcast-local", 2_u64)).is_some()
-    })
-    .await;
+    // A terminal opened meanwhile is not checked by itself.
+    open_local(cx, &fixture).await;
     in_frame(cx, handle, |window, _| {
         assert_eq!(
-            window.find(("broadcast-local", 2_u64)).checked(),
+            window.find(("broadcast-local", 1_u64)).checked(),
             Some(false)
-        )
-    });
-    in_frame(cx, handle, |window, cx| {
-        window.click(("close-local-terminal", 1_u64), cx)
-    });
-    in_frame(cx, handle, |window, _| {
-        assert_eq!(
-            window.find("toggle-terminal-broadcast").label(),
-            Some("命令广播 · 勾选至少两个终端")
         )
     });
 }
@@ -350,9 +415,6 @@ async fn hidden_tabs_stay_selected_but_reconnected_tabs_leave_broadcast(cx: &mut
     });
     in_frame(cx, handle, |window, cx| {
         window.dispatch_action(Box::new(CloseSettings), cx)
-    });
-    in_frame(cx, handle, |window, cx| {
-        window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx);
     });
     in_frame(cx, handle, |window, cx| {
         window.dispatch_action(
@@ -376,24 +438,15 @@ async fn hidden_tabs_stay_selected_but_reconnected_tabs_leave_broadcast(cx: &mut
                 .accepts_input()
     })
     .await;
-    in_frame(cx, handle, |window, cx| {
+    in_frame(cx, handle, |window, _| {
         assert_eq!(
             window
                 .find(("broadcast-remote", INITIAL_STAGING_TERMINAL))
                 .checked(),
             Some(false)
         );
-        window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx);
+        assert!(window.try_find("broadcast-bar").is_none());
     });
-    in_frame(cx, handle, |window, cx| {
-        window.click(("terminal", INITIAL_WEB_TERMINAL), cx);
-        window.input("after-reconnect", cx);
-    });
-    cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
-        fixture.web.written_text() == "after-reconnect"
-    })
-    .await;
-    assert_eq!(fixture.staging.written_text(), "");
 }
 
 #[gpui_kit::test]
@@ -403,7 +456,7 @@ async fn dragging_and_zooming_preserve_broadcast_membership_and_connections(
     let fixture = open(cx).await;
     let handle = fixture.handle;
     select_pair(cx, handle);
-    split_pair(cx, handle);
+    in_frame(cx, handle, |window, cx| window.click("broadcast-keys", cx));
     in_frame(cx, handle, |window, cx| {
         window.click(("terminal", INITIAL_WEB_TERMINAL), cx);
         window.dispatch_action(Box::new(ToggleZoom), cx);
@@ -420,6 +473,7 @@ async fn dragging_and_zooming_preserve_broadcast_membership_and_connections(
         fixture.staging.written_text() == "zoomed"
     })
     .await;
+    // Merged back into one group by hand: still checked, still connected.
     in_frame(cx, handle, |window, cx| {
         let from = window
             .find(("terminal-tab", INITIAL_STAGING_TERMINAL))

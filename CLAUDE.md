@@ -98,6 +98,10 @@ ShellRS（crate 与二进制都叫 `shellrs`）是 Xshell / WinSCP 式的 SSH �
   - 更新对话框不列更新内容：「查看更新内容」打开整页的 `https://shellrs.com/changelog`（中文界面打开 `/zh/changelog`，那里是中文的更新日志），另一个按钮是「重启并安装」，没有「稍后」。不点也在退出时装好。
   - 「设置 › 关于」三组：「应用更新」三行（当前版本、更新渠道（稳定版 / Beta，运行时切换）、自动升级），「隐私」一行（见下条），「ShellRS」一行「官网」（打开 `https://shellrs.com`）。
   - 检查只发 User-Agent，不发安装标识。
+- **命令广播**（合并的 PR #26，样子是用户按 termark 定的）：标签栏最左边（隐藏侧栏按钮旁）「命令广播」→ 远程和本地终端标签的图标前面多出复选框（图标保留，用户要靠它看是否在线），只认已连接的；关闭、断开、重连就退出，新终端不自动加入，不保存。
+  - 勾满两个就按勾选顺序自动排成分屏（约成方阵：先收进第一个的标签组再拆出来，`arrange_broadcast`），中间区所有分屏上方出现命令栏（`BroadcastBar`，经 dock skin 的 `center_frame` 放上去）：输入行（回车 = 「发送到全部」，走 `enter_command` 但不替换已打的内容：用户对照 Xshell、SecureCRT 定的，不发 Ctrl-E Ctrl-U，那在 bash 空行上会响铃，对网络设备另有含义）、「片段」（按片段的「点击时自动执行」）、「同步按键」、「Ctrl+C」、×。结束广播时分屏保留。开始页不加东西。
+  - 「同步按键」是 PR 原有的按键同步，默认关（用户定的：命令栏为主，免得把密码、vim 里的按键误发出去）。
+  - 命令栏刚出现时把焦点交给输入行要在 spawn 的任务里做：Dock 用 spawn 的任务给移动过的标签发 `set_active`，标签借此抢焦点，defer 抢不过。
 - **Windows 便携版**（多位用户要的）：zip `ShellRS-<版本>-windows-x86_64-portable.zip`，根上是 `shellrs.exe`、`shellrs-cli.exe` 和空的 `data`（7-Zip 打包，`Compress-Archive` 会丢掉空文件夹），同一个 zip 既是首次下载也是升级包。
   - 认法（`app::portable_root`，只在 Windows）：exe 所在文件夹有 `data` 文件夹、**没有** `unins000.exe`（安装目录里建 `data` 不算：卸载删整个 `{app}`）；`bin` 里的 CLI 副本认上一级（上一级要有 `shellrs.exe`）。路径先 `dunce::canonicalize`，否则 8.3 短名、大小写会让管道名对不上。顺序是 `SHELLRS_DATA_DIR` → 便携版的 `data` → 默认；更新的下载也在 `data\updates`。
   - 密码、口令照旧进 Windows 凭据管理器、和安装版共用（用户定的：不改 secrets，手册写明不随文件夹走、一边删主机可能清掉另一边的密码），不做随文件夹走的加密存储。
