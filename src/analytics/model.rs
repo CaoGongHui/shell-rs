@@ -107,10 +107,14 @@ pub enum Counter {
     HighlightOff,
     ExternalCliOn,
     ExternalCliOff,
+    /// Hosts imported from `~/.ssh/config`, once per import.
+    ImportSshConfig,
+    /// Hosts imported from `~/.ssh/known_hosts`, once per import.
+    ImportKnownHosts,
 }
 
 impl Counter {
-    pub const ALL: [Counter; 53] = [
+    pub const ALL: [Counter; 55] = [
         Self::Ssh,
         Self::SshJump,
         Self::SshProxy,
@@ -164,6 +168,8 @@ impl Counter {
         Self::HighlightOff,
         Self::ExternalCliOn,
         Self::ExternalCliOff,
+        Self::ImportSshConfig,
+        Self::ImportKnownHosts,
     ];
 
     pub fn key(self) -> &'static str {
@@ -221,6 +227,8 @@ impl Counter {
             Self::HighlightOff => "highlight_off",
             Self::ExternalCliOn => "external_cli_on",
             Self::ExternalCliOff => "external_cli_off",
+            Self::ImportSshConfig => "import_ssh_config",
+            Self::ImportKnownHosts => "import_known_hosts",
         }
     }
 

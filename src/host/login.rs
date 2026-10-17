@@ -126,6 +126,10 @@ pub struct SerialLine {
     pub settings: SerialSettings,
 }
 
+/// The private keys in `~/.ssh` a [`LoginMethod::NoPassword`] login tries,
+/// in order: OpenSSH's defaults, less the ones it has dropped.
+pub const DEFAULT_KEY_FILES: [&str; 3] = ["id_ed25519", "id_ecdsa", "id_rsa"];
+
 /// Which authentication methods a login tries. Each one starts by asking
 /// the server to let the user in with nothing at all, which a server without
 /// authentication grants.

@@ -14,10 +14,10 @@ use super::database::now_seconds;
 use super::private_key::{is_kept_in, moved_key, write_key_file};
 use super::{
     AuthKind, BookmarkSide, Credential, CredentialDraft, CredentialId, CredentialKind,
-    ForwardDraft, ForwardId, ForwardRule, GroupDraft, GroupId, Host, HostConnection, HostDatabase,
-    HostDraft, HostGroup, HostId, HostLogin, HostNode, HostOs, JumpLogin, LoginRoute, NodeDrop,
-    Protocol, ProxyLogin, PublicId, Route, SerialLine, Snippet, SnippetCategory, SnippetScope,
-    SshLink, StoredData, TelnetLogin,
+    ForwardDraft, ForwardId, ForwardRule, GroupDraft, GroupId, GroupPathError, GroupPlan, Host,
+    HostConnection, HostDatabase, HostDraft, HostGroup, HostId, HostLogin, HostNode, HostOs,
+    JumpLogin, LoginRoute, NodeDrop, Protocol, ProxyLogin, PublicId, Route, SerialLine, Snippet,
+    SnippetCategory, SnippetScope, SshLink, StoredData, TelnetLogin,
 };
 
 mod snippets;
@@ -96,6 +96,9 @@ pub struct HostStore {
     /// Inside [`Self::capture_failures`], the failures reported so far,
     /// besides the events that report them.
     capturing: RefCell<Option<Vec<SharedString>>>,
+    /// Inside [`Self::in_one_transaction`], the failures already reported
+    /// as events, so a burst of writes failing the same way says so once.
+    batch: RefCell<Option<HashSet<SharedString>>>,
 }
 
 /// How many hosts the start page lists as recently connected.
@@ -133,6 +136,7 @@ enum Change {
     NewSnippetCategory,
     RenameSnippetCategory,
     DeleteSnippetCategory,
+    Batch,
 }
 
 impl Change {
@@ -177,6 +181,7 @@ impl Change {
                 "host.store.not_saved.delete_snippet_category",
                 error = error
             ),
+            Change::Batch => t!("host.store.not_saved.batch", error = error),
         }
     }
 }
@@ -253,6 +258,7 @@ impl HostStore {
             secrets: Arc::new(TemporarySecretStore::new(Arc::new(NoSecretStore))),
             key_dir: None,
             capturing: RefCell::new(None),
+            batch: RefCell::new(None),
         }
     }
 
@@ -350,6 +356,7 @@ impl HostStore {
             secrets: Arc::new(TemporarySecretStore::new(Arc::new(NoSecretStore))),
             key_dir: None,
             capturing: RefCell::new(None),
+            batch: RefCell::new(None),
         })
     }
 
@@ -601,6 +608,67 @@ impl HostStore {
     /// The group's full path, e.g. `生产 / 数据库`, as the forms list it.
     pub fn group_path(&self, id: GroupId) -> String {
         self.group_names(id).join(" / ")
+    }
+
+    /// The group a path such as `生产/数据库` names, or the groups to make
+    /// for it. The whole path is looked for first, so a name with a `/` in
+    /// it still matches; then level by level, making what is missing.
+    pub fn resolve_group_path(&self, path: &str) -> Result<GroupPlan, GroupPathError> {
+        let path = path.trim();
+        if path.is_empty() {
+            return Ok(GroupPlan::Existing(None));
+        }
+        let names: Vec<&str> = path.split('/').map(str::trim).collect();
+        if names.iter().any(|name| name.is_empty()) {
+            return Err(GroupPathError::EmptyLevel {
+                path: path.to_string(),
+            });
+        }
+        let wanted = names.join("/");
+        let ambiguous = |count: usize, path: String| GroupPathError::Ambiguous { count, path };
+        let whole: Vec<GroupId> = self
+            .groups
+            .iter()
+            .filter(|group| self.group_names(group.id).join("/") == wanted)
+            .map(|group| group.id)
+            .collect();
+        match whole.as_slice() {
+            [id] => return Ok(GroupPlan::Existing(Some(*id))),
+            [] => {}
+            many => return Err(ambiguous(many.len(), wanted)),
+        }
+        let mut parent = None;
+        for (level, name) in names.iter().enumerate() {
+            let children: Vec<GroupId> = self
+                .groups
+                .iter()
+                .filter(|group| group.parent == parent && group.name.as_ref() == *name)
+                .map(|group| group.id)
+                .collect();
+            match children.as_slice() {
+                [] => {
+                    return Ok(GroupPlan::Create {
+                        parent,
+                        names: names[level..].iter().map(ToString::to_string).collect(),
+                    });
+                }
+                [id] => parent = Some(*id),
+                many => return Err(ambiguous(many.len(), names[..=level].join("/"))),
+            }
+        }
+        Ok(GroupPlan::Existing(parent))
+    }
+
+    /// The group a host goes into, made first when it is new.
+    pub fn place_group(&mut self, plan: GroupPlan, cx: &mut Context<Self>) -> Option<GroupId> {
+        match plan {
+            GroupPlan::Existing(group) => group,
+            GroupPlan::Create { parent, names } => {
+                names.into_iter().fold(parent, |parent, name| {
+                    Some(self.insert_group(GroupDraft::new(name, parent), cx))
+                })
+            }
+        }
     }
 
     /// The names along the path to a group, from the top level down to it.
@@ -1734,7 +1802,42 @@ impl HostStore {
         if let Some(failures) = self.capturing.borrow_mut().as_mut() {
             failures.push(message.clone());
         }
-        cx.emit(HostStoreEvent::PersistFailed(message));
+        let first = self
+            .batch
+            .borrow_mut()
+            .as_mut()
+            .is_none_or(|reported| reported.insert(message.clone()));
+        if first {
+            cx.emit(HostStoreEvent::PersistFailed(message));
+        }
+    }
+
+    /// Run `change` with every database write it makes in one transaction:
+    /// a burst of them (an import) pays for one commit rather than one
+    /// each. Each write still lands whole or not at all, and the memory
+    /// changes stand as they always do. Nested calls join the outer one.
+    pub fn in_one_transaction<R>(
+        &mut self,
+        cx: &mut Context<Self>,
+        change: impl FnOnce(&mut Self, &mut Context<Self>) -> R,
+    ) -> R {
+        if self.batch.borrow().is_some() {
+            return change(self, cx);
+        }
+        let begun = self
+            .database
+            .as_ref()
+            .is_some_and(|database| database.begin_batch().is_ok());
+        self.batch.replace(Some(HashSet::new()));
+        let result = change(self, cx);
+        self.batch.replace(None);
+        if begun
+            && let Some(database) = &self.database
+            && let Err(error) = database.end_batch()
+        {
+            self.report_failure(Change::Batch.not_saved(&error), cx);
+        }
+        result
     }
 
     /// Run `change` and say what of it could not be written to the
@@ -2328,6 +2431,87 @@ mod tests {
     #[test]
     fn without_a_key_directory_no_key_is_saved() {
         assert!(HostStore::empty().save_private_key(None, "one").is_err());
+    }
+
+    #[gpui_kit::test]
+    fn one_transaction_keeps_every_write_and_reports_a_repeated_failure_once(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use gpui_kit::AppContext as _;
+        use std::{cell::RefCell, rc::Rc};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shellrs.db");
+        let store = cx.new(|_| HostStore::load(HostDatabase::open(&path).unwrap()).unwrap());
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let _subscription = cx.update(|cx| {
+            let events = events.clone();
+            cx.subscribe(&store, move |_, event: &HostStoreEvent, _| {
+                events.borrow_mut().push(event.clone());
+            })
+        });
+
+        let (_, failures) = store.update(cx, |store, cx| {
+            store.capture_failures(cx, |store, cx| {
+                store.in_one_transaction(cx, |store, cx| {
+                    let group = store.insert_group(GroupDraft::new("生产", None), cx);
+                    store.insert(draft("web", Some(group)), cx);
+                    // Nested: joins the outer transaction.
+                    store.in_one_transaction(cx, |store, cx| store.insert(draft("db", None), cx));
+                    // Three hosts in a group the database never heard of.
+                    for name in ["a", "b", "c"] {
+                        store.insert(draft(name, Some(GroupId(99))), cx);
+                    }
+                })
+            })
+        });
+        assert_eq!(failures.len(), 3, "{failures:?}");
+        cx.run_until_parked();
+        assert_eq!(
+            *events.borrow(),
+            [HostStoreEvent::PersistFailed(failures[0].clone())]
+        );
+
+        let data = HostDatabase::open(&path).unwrap().load().unwrap();
+        let names: Vec<&str> = data.hosts.iter().map(|host| host.name.as_ref()).collect();
+        assert_eq!(names, ["web", "db"]);
+        assert_eq!(data.groups.len(), 1);
+    }
+
+    #[test]
+    fn a_group_path_names_a_group_or_the_groups_to_make() {
+        let mut store = HostStore::empty();
+        let production = store.insert_group_unnotified(GroupDraft::new("生产", None));
+        let east = store.insert_group_unnotified(GroupDraft::new("华东", Some(production)));
+        assert_eq!(
+            store.resolve_group_path("  "),
+            Ok(GroupPlan::Existing(None))
+        );
+        assert_eq!(
+            store.resolve_group_path(" 生产 / 华东 "),
+            Ok(GroupPlan::Existing(Some(east)))
+        );
+        assert_eq!(
+            store.resolve_group_path("生产/华北/一区"),
+            Ok(GroupPlan::Create {
+                parent: Some(production),
+                names: vec!["华北".into(), "一区".into()],
+            })
+        );
+        assert_eq!(
+            store.resolve_group_path("生产//华东"),
+            Err(GroupPathError::EmptyLevel {
+                path: "生产//华东".into()
+            })
+        );
+        store.insert_group_unnotified(GroupDraft::new("生产", None));
+        assert_eq!(
+            store.resolve_group_path("生产/华北"),
+            Err(GroupPathError::Ambiguous {
+                count: 2,
+                path: "生产".into()
+            })
+        );
     }
 
     #[gpui_kit::test]

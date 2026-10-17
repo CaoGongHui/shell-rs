@@ -9,8 +9,9 @@ use gpui_kit::SharedString;
 
 use crate::host::{
     AuthKind, Credential, CredentialDraft, CredentialId, CredentialKind, DataBits, FlowControl,
-    GroupId, Host, HostConnection, HostDraft, HostId, HostStore, Parity, PastedKey, Protocol,
-    ProxyKind, ProxySettings, Route, SSH_PORT, SerialSettings, StopBits, TELNET_PORT,
+    GroupId, GroupPathError, GroupPlan, Host, HostConnection, HostDraft, HostId, HostStore, Parity,
+    PastedKey, Protocol, ProxyKind, ProxySettings, Route, SSH_PORT, SerialSettings, StopBits,
+    TELNET_PORT,
 };
 use crate::i18n::{t, tn};
 use crate::secrets::SecretRef;
@@ -333,18 +334,6 @@ pub fn find_credential<'a>(store: &'a HostStore, id: &str) -> Result<&'a Credent
         .iter()
         .find(|credential| credential.keychain_id.as_str() == id.trim())
         .ok_or_else(|| credential_not_found(id))
-}
-
-/// Where a host goes in the tree.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum GroupPlan {
-    Existing(Option<GroupId>),
-    /// Into groups made for it: `names` one inside the other, the first
-    /// under `parent`.
-    Create {
-        parent: Option<GroupId>,
-        names: Vec<String>,
-    },
 }
 
 /// What becomes of a keychain entry.
@@ -724,51 +713,14 @@ fn jump_hosts(
 }
 
 /// The group a path such as `生产/数据库` names, or the groups to make for
-/// it. The whole path is looked for first, so a name with a `/` in it
-/// still matches; then level by level, making what is missing.
+/// it, in the CLI's words when it names none.
 fn resolve_group(store: &HostStore, path: &str) -> Result<GroupPlan, CliError> {
-    let path = path.trim();
-    if path.is_empty() {
-        return Ok(GroupPlan::Existing(None));
-    }
-    let names: Vec<&str> = path.split('/').map(str::trim).collect();
-    if names.iter().any(|name| name.is_empty()) {
-        return Err(bad(t!("cli.group.empty_level", path = path)));
-    }
-    let wanted = names.join("/");
-    let ambiguous =
-        |count: usize, path: &str| bad(t!("cli.group.ambiguous", count = count, path = path));
-    let whole: Vec<GroupId> = store
-        .groups()
-        .iter()
-        .filter(|group| store.group_names(group.id).join("/") == wanted)
-        .map(|group| group.id)
-        .collect();
-    match whole.as_slice() {
-        [id] => return Ok(GroupPlan::Existing(Some(*id))),
-        [] => {}
-        many => return Err(ambiguous(many.len(), &wanted)),
-    }
-    let mut parent = None;
-    for (level, name) in names.iter().enumerate() {
-        let children: Vec<GroupId> = store
-            .groups()
-            .iter()
-            .filter(|group| group.parent == parent && group.name.as_ref() == *name)
-            .map(|group| group.id)
-            .collect();
-        match children.as_slice() {
-            [] => {
-                return Ok(GroupPlan::Create {
-                    parent,
-                    names: names[level..].iter().map(ToString::to_string).collect(),
-                });
-            }
-            [id] => parent = Some(*id),
-            many => return Err(ambiguous(many.len(), &names[..=level].join("/"))),
+    store.resolve_group_path(path).map_err(|error| match error {
+        GroupPathError::EmptyLevel { path } => bad(t!("cli.group.empty_level", path = path)),
+        GroupPathError::Ambiguous { count, path } => {
+            bad(t!("cli.group.ambiguous", count = count, path = path))
         }
-    }
-    Ok(GroupPlan::Existing(parent))
+    })
 }
 
 /// A credential to save, checked. Its password's and passphrase's entries

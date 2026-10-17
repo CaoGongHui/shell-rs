@@ -23,8 +23,8 @@ use gpui_kit::*;
 use crate::app::{
     CatalogIcon, CollapseAllGroups, ConnectGroup, ConnectHost, ConnectSelected, CopyHostAddress,
     CopyHostId, DeleteGroup, DeleteHost, DuplicateHost, EditHost, ExpandAllGroups,
-    HOST_PANEL_CONTEXT, MoveHostNode, NewChildGroup, NewGroup, NewHost, NewHostInGroup,
-    OpenExplorer, RenameGroup,
+    HOST_PANEL_CONTEXT, ImportKnownHosts, ImportSshConfig, MoveHostNode, NewChildGroup, NewGroup,
+    NewHost, NewHostInGroup, OpenExplorer, RenameGroup,
 };
 
 use crate::i18n::{UiLocale, t, tn};
@@ -908,8 +908,8 @@ fn build_context_menu(node: Option<HostNode>, store: &HostStore, menu: PopupMenu
                 Icon::new(CatalogIcon::Trash),
                 Box::new(DeleteGroup(id)),
             ),
-        None => menu
-            .menu_with_icon(
+        None => import_menu_items(
+            menu.menu_with_icon(
                 t!("host.menu.new_host"),
                 Icon::new(IconName::Plus),
                 Box::new(NewHost),
@@ -918,6 +918,23 @@ fn build_context_menu(node: Option<HostNode>, store: &HostStore, menu: PopupMenu
                 t!("host.menu.new_group"),
                 Icon::new(CatalogIcon::FolderPlus),
                 Box::new(NewGroup),
-            ),
+            )
+            .separator(),
+        ),
     }
+}
+
+/// The import commands, one per source: under the blank space's menu and
+/// in the dock's 「…」 menu while the host list shows.
+pub fn import_menu_items(menu: PopupMenu) -> PopupMenu {
+    menu.menu_with_icon(
+        t!("host.menu.import_ssh_config"),
+        Icon::new(CatalogIcon::Import),
+        Box::new(ImportSshConfig),
+    )
+    .menu_with_icon(
+        t!("host.menu.import_known_hosts"),
+        Icon::new(CatalogIcon::Import),
+        Box::new(ImportKnownHosts),
+    )
 }

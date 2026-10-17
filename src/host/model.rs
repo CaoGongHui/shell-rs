@@ -980,3 +980,24 @@ impl GroupDraft {
         }
     }
 }
+
+/// Where a group path such as `生产/数据库` puts a host.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GroupPlan {
+    Existing(Option<GroupId>),
+    /// Into groups made for it: `names` one inside the other, the first
+    /// under `parent`.
+    Create {
+        parent: Option<GroupId>,
+        names: Vec<String>,
+    },
+}
+
+/// Why a group path names no one place.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GroupPathError {
+    /// A level between two slashes is empty, as in `生产//数据库`.
+    EmptyLevel { path: String },
+    /// Several groups have the same path, so it picks none of them.
+    Ambiguous { count: usize, path: String },
+}

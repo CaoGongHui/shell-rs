@@ -7,6 +7,7 @@ mod forward;
 mod group_dialog;
 mod host_dialog;
 mod host_panel;
+mod import;
 mod login;
 mod model;
 mod outline;
@@ -27,10 +28,11 @@ pub use host_dialog::{
     DeleteHandler, Dependents, HostForm, confirm_delete_host, join_sentences, open_host_dialog,
     open_temporary_connection_dialog,
 };
-pub use host_panel::{HostPanel, host_menu};
+pub use host_panel::{HostPanel, host_menu, import_menu_items};
+pub use import::{ImportHandler, ImportOutcome, ImportSource, open_import_dialog};
 pub use login::{
-    HostConnection, HostLogin, JumpLogin, LoginMethod, LoginRoute, ProxyLogin, SerialLine,
-    TelnetAutoLogin, TelnetLogin,
+    DEFAULT_KEY_FILES, HostConnection, HostLogin, JumpLogin, LoginMethod, LoginRoute, ProxyLogin,
+    SerialLine, TelnetAutoLogin, TelnetLogin,
 };
 pub use model::*;
 pub use outline::{

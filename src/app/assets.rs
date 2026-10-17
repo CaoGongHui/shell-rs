@@ -18,6 +18,7 @@ icon_assets!(
         Terminal,
         Upload,
         Download,
+        Import,
         Trash,
         Pencil,
         RefreshCw,

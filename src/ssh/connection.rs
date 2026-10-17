@@ -3,7 +3,7 @@ use crate::{
     connection::{
         ConnectionPrompt, ConnectionPromptField, ConnectionPromptKind, ConnectionPromptReply,
     },
-    host::{HostLogin, JumpLogin, LoginMethod, LoginRoute, ProxyLogin},
+    host::{DEFAULT_KEY_FILES, HostLogin, JumpLogin, LoginMethod, LoginRoute, ProxyLogin},
     i18n::t,
     secrets::{SecretRef, SharedSecretStore},
     terminal::ChannelStream,
@@ -1230,7 +1230,7 @@ fn key_paths(login: &HostLogin) -> Result<Vec<PathBuf>> {
     let Some(home) = dirs::home_dir() else {
         return Ok(Vec::new());
     };
-    Ok(["id_ed25519", "id_ecdsa", "id_rsa"]
+    Ok(DEFAULT_KEY_FILES
         .into_iter()
         .map(|name| home.join(".ssh").join(name))
         .collect())

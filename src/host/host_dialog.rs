@@ -2240,7 +2240,7 @@ enum CommittedLogin {
 }
 
 /// A credential as the host form's select lists it: `运维（root · 密码）`.
-fn credential_option(credential: &Credential, key_dir: Option<&Path>) -> SharedString {
+pub(super) fn credential_option(credential: &Credential, key_dir: Option<&Path>) -> SharedString {
     t!(
         "host.dialog.credential_option",
         name = credential.name,

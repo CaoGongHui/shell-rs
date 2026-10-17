@@ -39,9 +39,9 @@ pub use integration::{CliIntegration, IntegrationStatus};
 pub use link::{OpenLink, link_arguments};
 pub use manage::CliChange;
 pub(crate) use manage::{
-    CredentialPlan, GroupPlan, SecretChange, credential_details, credential_secrets,
-    find_credential, find_host, find_saved_host, host_details, host_info, host_secrets,
-    plan_credential, plan_host, with_saved_credential_secrets, with_saved_passwords,
+    CredentialPlan, SecretChange, credential_details, credential_secrets, find_credential,
+    find_host, find_saved_host, host_details, host_info, host_secrets, plan_credential, plan_host,
+    with_saved_credential_secrets, with_saved_passwords,
 };
 pub use protocol::{
     AuthChoice, CliError, CredentialDeleted, CredentialDetails, CredentialFields,

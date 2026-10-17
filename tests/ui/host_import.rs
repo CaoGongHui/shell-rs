@@ -1,0 +1,338 @@
+//! 导入主机: the hosts `~/.ssh/config` and `~/.ssh/known_hosts` name,
+//! previewed in the import dialog and added to the store.
+
+use std::path::{Path, PathBuf};
+
+use shellrs::analytics::{Analytics, Counter, Signal};
+use shellrs::app::{ImportKnownHosts, ImportSshConfig};
+
+use crate::support::*;
+
+/// A home directory whose `.ssh` holds `files`.
+fn ssh_home(files: &[(&str, &str)]) -> tempfile::TempDir {
+    let home = tempfile::tempdir().unwrap();
+    let ssh = home.path().join(".ssh");
+    std::fs::create_dir(&ssh).unwrap();
+    for (name, text) in files {
+        std::fs::write(ssh.join(name), text).unwrap();
+    }
+    home
+}
+
+fn ssh_dir(home: &tempfile::TempDir) -> PathBuf {
+    home.path().join(".ssh")
+}
+
+/// Have the workspace report to a channel the test reads.
+fn report(
+    cx: &mut TestAppContext,
+    handle: WindowHandle<Root>,
+    workspace: &Entity<Workspace>,
+) -> mpsc::Receiver<Signal> {
+    let (sender, receiver) = mpsc::channel();
+    cx.update_window(handle.into(), |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.set_analytics(Analytics::new(sender, true), window, cx)
+        });
+    })
+    .unwrap();
+    cx.run_until_parked();
+    receiver
+}
+
+/// Point 导入 at `dir`, open the dialog with `action` and wait for it to
+/// have read its file.
+async fn open_import(
+    cx: &mut TestAppContext,
+    handle: WindowHandle<Root>,
+    workspace: &Entity<Workspace>,
+    dir: &Path,
+    action: Box<dyn gpui_kit::Action>,
+) {
+    workspace.update(cx, |workspace, _| {
+        workspace.set_ssh_dir(Some(dir.to_path_buf()))
+    });
+    in_frame(cx, handle, |window, cx| window.dispatch_action(action, cx));
+    cx.wait_for(handle.into(), Duration::from_secs(2), |window, cx| {
+        window.render_frame(cx);
+        window.try_find(("import-address", 0usize)).is_some()
+            || window.try_find("import-empty").is_some()
+    })
+    .await;
+}
+
+/// Type `text` into a row's field.
+fn type_into(
+    cx: &mut TestAppContext,
+    handle: WindowHandle<Root>,
+    field: (&'static str, usize),
+    text: &str,
+) {
+    in_frame(cx, handle, |window, cx| {
+        window.click(field, cx);
+        window.input(text, cx);
+    });
+}
+
+#[gpui_kit::test]
+async fn hosts_from_ssh_config_are_added_with_their_groups_and_keys(cx: &mut TestAppContext) {
+    let home = ssh_home(&[
+        (
+            "config",
+            "\
+Host web-01
+  HostName 10.0.1.1
+  User deploy
+  IdentityFile ~/.ssh/deploy_key
+Host saved
+  HostName WEB-02.EXAMPLE.COM
+Host db-01
+  HostName 10.0.1.3
+  ProxyJump saved
+Host *
+  User ops
+",
+        ),
+        ("deploy_key", "not really a key"),
+    ]);
+    let mut store = HostStore::empty();
+    store.insert_unnotified(HostDraft::new(
+        "web-02",
+        "web-02.example.com",
+        22,
+        "root",
+        AuthKind::Password,
+        None,
+    ));
+    let (handle, workspace) = open_workspace_with_store(cx, store);
+    let signals = report(cx, handle, &workspace);
+    open_import(
+        cx,
+        handle,
+        &workspace,
+        &ssh_dir(&home),
+        Box::new(ImportSshConfig),
+    )
+    .await;
+
+    in_frame(cx, handle, |window, _| {
+        // The host already saved is listed, greyed out of the import.
+        assert_eq!(window.find(("import-status", 0usize)).label(), Some("新增"));
+        assert_eq!(
+            window.find(("import-status", 1usize)).label(),
+            Some("已存在")
+        );
+        assert_eq!(
+            window.find(("import-select", 1usize)).checked(),
+            Some(false)
+        );
+        assert_eq!(window.find(("import-select", 0usize)).checked(), Some(true));
+        // A key file of its own: a key credential, made by the import.
+        assert_eq!(
+            window.find(("import-auth", 0usize)).label(),
+            Some("deploy_key（新建凭据）")
+        );
+        assert_eq!(window.find(("import-auth", 2usize)).label(), Some("无密码"));
+        assert_eq!(window.find(("import-user", 2usize)).value(), Some("ops"));
+        assert_eq!(
+            window.find("import-counts").label(),
+            Some("共 3 台 · 1 台已存在 · 已选 2 台")
+        );
+        assert!(enabled(&window.find("commit")));
+    });
+    type_into(cx, handle, ("import-group", 0), "生产/华东");
+    type_into(cx, handle, ("import-group", 2), "生产/华东");
+    in_frame(cx, handle, |window, cx| window.click("commit", cx));
+    wait_for_dialog_to_close(cx, handle).await;
+
+    cx.update(|cx| {
+        let store = workspace.read(cx).store().read(cx);
+        let hosts: Vec<(String, String, String, String)> = store
+            .hosts()
+            .iter()
+            .map(|host| {
+                (
+                    host.name.to_string(),
+                    host.address.to_string(),
+                    host.user.to_string(),
+                    host.group
+                        .map(|group| store.group_path(group))
+                        .unwrap_or_default(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            hosts,
+            [
+                (
+                    "web-02".into(),
+                    "web-02.example.com".into(),
+                    "root".into(),
+                    String::new()
+                ),
+                (
+                    "web-01".into(),
+                    "10.0.1.1".into(),
+                    "deploy".into(),
+                    "生产 / 华东".into()
+                ),
+                (
+                    "db-01".into(),
+                    "10.0.1.3".into(),
+                    "ops".into(),
+                    "生产 / 华东".into()
+                ),
+            ]
+        );
+        assert_eq!(store.groups().len(), 2);
+        let [credential] = store.credentials() else {
+            panic!("one key credential: {:?}", store.credentials());
+        };
+        assert_eq!(credential.kind, CredentialKind::Key);
+        assert_eq!(credential.user.as_ref(), "deploy");
+        assert_eq!(
+            credential.key_path.as_deref().map(Path::new),
+            Some(ssh_dir(&home).join("deploy_key").as_path())
+        );
+        assert_eq!(store.hosts()[1].credential, Some(credential.id));
+        assert_eq!(store.hosts()[2].auth, AuthKind::NoPassword);
+        assert_eq!(store.hosts()[2].route, Route::Direct);
+    });
+    cx.update_window(handle.into(), |_, window, cx| {
+        assert_eq!(window.notifications(cx).len(), 1);
+    })
+    .unwrap();
+    let counted: Vec<Counter> = signals
+        .try_iter()
+        .filter_map(|signal| match signal {
+            Signal::Count(counter) => Some(counter),
+            _ => None,
+        })
+        .collect();
+    assert!(counted.contains(&Counter::ImportSshConfig), "{counted:?}");
+}
+
+#[gpui_kit::test]
+async fn hosts_from_known_hosts_log_in_as_root_and_hashed_ones_are_counted(
+    cx: &mut TestAppContext,
+) {
+    let home = ssh_home(&[(
+        "known_hosts",
+        "\
+|1|c2FsdA==|aGFzaA== ssh-ed25519 AAAA
+[10.0.0.7]:2222 ssh-ed25519 AAAA
+10.0.0.8 ssh-ed25519 AAAA
+10.0.0.8 ssh-rsa BBBB
+@cert-authority *.corp ssh-ed25519 CCCC
+",
+    )]);
+    let (handle, workspace) = open_workspace_with_store(cx, HostStore::empty());
+    open_import(
+        cx,
+        handle,
+        &workspace,
+        &ssh_dir(&home),
+        Box::new(ImportKnownHosts),
+    )
+    .await;
+
+    in_frame(cx, handle, |window, cx| {
+        let note = window
+            .find("import-note")
+            .label()
+            .unwrap_or_default()
+            .to_string();
+        assert!(note.contains("另有 1 条经过哈希的记录"), "{note}");
+        assert_eq!(window.find(("import-user", 0usize)).value(), Some("root"));
+        assert!(window.try_find(("import-address", 2usize)).is_none());
+        window.click(("import-select", 1usize), cx);
+    });
+    in_frame(cx, handle, |window, cx| {
+        assert_eq!(
+            window.find("import-counts").label(),
+            Some("共 2 台 · 已选 1 台")
+        );
+        window.click("commit", cx);
+    });
+    wait_for_dialog_to_close(cx, handle).await;
+
+    cx.update(|cx| {
+        let store = workspace.read(cx).store().read(cx);
+        let [host] = store.hosts() else {
+            panic!("one host: {:?}", store.hosts());
+        };
+        assert_eq!(
+            (
+                host.name.as_ref(),
+                host.address.as_ref(),
+                host.port,
+                host.user.as_ref()
+            ),
+            ("10.0.0.7", "10.0.0.7", 2222, "root")
+        );
+        assert_eq!(host.auth, AuthKind::NoPassword);
+        assert!(store.groups().is_empty());
+    });
+}
+
+#[gpui_kit::test]
+async fn without_a_file_or_a_selection_nothing_can_be_imported(cx: &mut TestAppContext) {
+    let home = ssh_home(&[(
+        "known_hosts",
+        "10.0.0.1 ssh-ed25519 AAAA\n10.0.0.2 ssh-ed25519 AAAA\n",
+    )]);
+    let (handle, workspace) = open_workspace_with_store(cx, HostStore::empty());
+    open_import(
+        cx,
+        handle,
+        &workspace,
+        &ssh_dir(&home),
+        Box::new(ImportSshConfig),
+    )
+    .await;
+    in_frame(cx, handle, |window, cx| {
+        let missing = window
+            .find("import-empty")
+            .label()
+            .unwrap_or_default()
+            .to_string();
+        assert!(missing.starts_with("找不到 "), "{missing}");
+        assert!(!enabled(&window.find("commit")));
+        // Enter commits a form; with nothing to import it does nothing.
+        window.press("enter", cx);
+    });
+    in_frame(cx, handle, |window, cx| {
+        assert!(window.try_find("commit").is_some());
+        window.press("escape", cx);
+    });
+    wait_for_dialog_to_close(cx, handle).await;
+
+    open_import(
+        cx,
+        handle,
+        &workspace,
+        &ssh_dir(&home),
+        Box::new(ImportKnownHosts),
+    )
+    .await;
+    in_frame(cx, handle, |window, cx| {
+        assert_eq!(window.find("import-select-all").checked(), Some(true));
+        window.click("import-select-all", cx);
+    });
+    in_frame(cx, handle, |window, cx| {
+        assert_eq!(
+            window.find(("import-select", 0usize)).checked(),
+            Some(false)
+        );
+        assert_eq!(
+            window.find(("import-select", 1usize)).checked(),
+            Some(false)
+        );
+        assert!(!enabled(&window.find("commit")));
+        window.click("import-select-all", cx);
+    });
+    in_frame(cx, handle, |window, _| {
+        assert_eq!(window.find(("import-select", 1usize)).checked(), Some(true));
+        assert!(enabled(&window.find("commit")));
+    });
+}

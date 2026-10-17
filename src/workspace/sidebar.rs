@@ -2,14 +2,16 @@ use gpui_kit::component::{
     ActiveTheme as _, Icon, Sizable as _,
     button::{Button, ButtonVariants as _},
     dock::{BasePanel, Panel, PanelControl, PanelEvent},
-    h_flex, v_flex,
+    h_flex,
+    menu::PopupMenu,
+    v_flex,
 };
 use gpui_kit::*;
 
 use crate::app::{CatalogIcon, OpenSettings};
 use crate::credential::CredentialPanel;
 use crate::forward::ForwardPanel;
-use crate::host::HostPanel;
+use crate::host::{HostPanel, import_menu_items};
 use crate::i18n::t;
 
 /// Which list the left dock is showing.
@@ -130,6 +132,20 @@ impl Panel for Sidebar {
                 .update(cx, |panel, cx| panel.toolbar_buttons(window, cx)),
             SidebarMode::Forwards => Some(self.forwards.read(cx).toolbar_buttons()),
             SidebarMode::Credentials => Some(self.credentials.read(cx).toolbar_buttons()),
+        }
+    }
+
+    /// The dock's 「…」 menu: the host list's import commands, which are
+    /// used too rarely for a toolbar button of their own.
+    fn dropdown_menu(
+        &mut self,
+        menu: PopupMenu,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) -> PopupMenu {
+        match self.mode {
+            SidebarMode::Hosts => import_menu_items(menu),
+            SidebarMode::Forwards | SidebarMode::Credentials => menu,
         }
     }
 

@@ -14,11 +14,11 @@ use crate::cli::{
     HostFields, Reply,
 };
 use crate::cli::{
-    CredentialPlan, GroupPlan, SecretChange, credential_details, credential_secrets,
-    find_credential, find_host, find_saved_host, host_details, host_info, host_secrets,
-    plan_credential, plan_host, with_saved_credential_secrets, with_saved_passwords,
+    CredentialPlan, SecretChange, credential_details, credential_secrets, find_credential,
+    find_host, find_saved_host, host_details, host_info, host_secrets, plan_credential, plan_host,
+    with_saved_credential_secrets, with_saved_passwords,
 };
-use crate::host::{CredentialId, GroupDraft, GroupId, HostId, HostStore};
+use crate::host::{CredentialId, HostId, HostStore};
 use crate::i18n::t;
 use crate::secrets::{SecretRef, SharedSecretStore};
 use crate::terminal::{RunFailure, RunHandle, TerminalLifecycle, TerminalPanel};
@@ -186,7 +186,7 @@ impl Workspace {
             let (id, mut failures, writes) = store.update(cx, |store, cx| {
                 let (id, failures) = store.capture_failures(cx, |store, cx| {
                     let mut draft = plan.draft;
-                    draft.group = place_group(store, plan.group, cx);
+                    draft.group = store.place_group(plan.group, cx);
                     match existing {
                         Some(id) => {
                             store.update(id, draft, cx);
@@ -330,20 +330,6 @@ impl Workspace {
                 .map(|host| host_info(host, store))
                 .collect(),
         }))
-    }
-}
-
-/// The group a host goes into, made first when it is new.
-fn place_group(
-    store: &mut HostStore,
-    plan: GroupPlan,
-    cx: &mut Context<HostStore>,
-) -> Option<GroupId> {
-    match plan {
-        GroupPlan::Existing(group) => group,
-        GroupPlan::Create { parent, names } => names.into_iter().fold(parent, |parent, name| {
-            Some(store.insert_group(GroupDraft::new(name, parent), cx))
-        }),
     }
 }
 

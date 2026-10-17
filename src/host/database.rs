@@ -392,6 +392,48 @@ impl HostDatabase {
         Ok(Self { connection })
     }
 
+    /// Start a batch: every write until [`Self::end_batch`] lands in one
+    /// transaction, so a burst of them (an import) pays for one commit
+    /// rather than one each.
+    pub fn begin_batch(&self) -> rusqlite::Result<()> {
+        self.connection.execute_batch("BEGIN")
+    }
+
+    /// Commit the batch. A commit that fails rolls it back, so the
+    /// connection is back to committing each write on its own.
+    pub fn end_batch(&self) -> rusqlite::Result<()> {
+        self.connection.execute_batch("COMMIT").inspect_err(|_| {
+            let _ = self.connection.execute_batch("ROLLBACK");
+        })
+    }
+
+    /// One write that lands whole or not at all: in a transaction of its
+    /// own, or, inside a batch, in a savepoint, which costs no commit.
+    fn atomically<T>(
+        &self,
+        write: impl FnOnce(&Connection) -> rusqlite::Result<T>,
+    ) -> rusqlite::Result<T> {
+        if self.connection.is_autocommit() {
+            let transaction = self.connection.unchecked_transaction()?;
+            let value = write(&transaction)?;
+            transaction.commit()?;
+            return Ok(value);
+        }
+        self.connection.execute_batch("SAVEPOINT write")?;
+        match write(&self.connection) {
+            Ok(value) => {
+                self.connection.execute_batch("RELEASE write")?;
+                Ok(value)
+            }
+            Err(error) => {
+                let _ = self
+                    .connection
+                    .execute_batch("ROLLBACK TO write; RELEASE write");
+                Err(error)
+            }
+        }
+    }
+
     pub fn load(&self) -> rusqlite::Result<StoredData> {
         let groups = self
             .connection
@@ -718,9 +760,9 @@ impl HostDatabase {
 
     /// Insert a host together with its jump hosts.
     pub fn insert_host(&self, host: &Host) -> rusqlite::Result<()> {
-        let transaction = self.connection.unchecked_transaction()?;
-        let row = HostRow::of(host);
-        transaction.execute(
+        self.atomically(|connection| {
+            let row = HostRow::of(host);
+            connection.execute(
             "INSERT INTO hosts (id, public_id, group_id, sort_order, name, address, port, auth, \
              username, credential_id, route, proxy_kind, proxy_host, proxy_port, \
              proxy_username, notes, os, protocol, serial_baud, serial_data_bits, \
@@ -756,8 +798,8 @@ impl HostDatabase {
                 row.telnet_password_prompt,
             ],
         )?;
-        write_jumps(&transaction, host)?;
-        transaction.commit()
+            write_jumps(connection, host)
+        })
     }
 
     /// Rewrite the fields the host form edits, jump hosts included.
@@ -765,43 +807,43 @@ impl HostDatabase {
     /// `touch_connected` and `set_host_os`, and neither is part of the
     /// host form. `public_id` and `protocol` never change.
     pub fn update_host(&self, host: &Host) -> rusqlite::Result<()> {
-        let transaction = self.connection.unchecked_transaction()?;
-        let row = HostRow::of(host);
-        transaction.execute(
-            "UPDATE hosts SET group_id = ?2, sort_order = ?3, name = ?4, address = ?5, \
+        self.atomically(|connection| {
+            let row = HostRow::of(host);
+            connection.execute(
+                "UPDATE hosts SET group_id = ?2, sort_order = ?3, name = ?4, address = ?5, \
              port = ?6, auth = ?7, username = ?8, credential_id = ?9, route = ?10, \
              proxy_kind = ?11, proxy_host = ?12, proxy_port = ?13, proxy_username = ?14, \
              notes = ?15, serial_baud = ?16, serial_data_bits = ?17, serial_parity = ?18, \
              serial_stop_bits = ?19, serial_flow = ?20, telnet_user_prompt = ?21, \
              telnet_pass_prompt = ?22, protocol = ?23 WHERE id = ?1",
-            params![
-                to_sql(host.id.0),
-                host.group.map(|group| to_sql(group.0)),
-                host.sort_order,
-                host.name.as_ref(),
-                host.address.as_ref(),
-                host.port,
-                row.auth,
-                row.username,
-                row.credential,
-                row.route,
-                row.proxy_kind,
-                row.proxy_host,
-                row.proxy_port,
-                row.proxy_username,
-                host.notes.as_ref(),
-                row.serial.baud,
-                row.serial.data_bits,
-                row.serial.parity,
-                row.serial.stop_bits,
-                row.serial.flow,
-                row.telnet_user_prompt,
-                row.telnet_password_prompt,
-                host.protocol.as_str(),
-            ],
-        )?;
-        write_jumps(&transaction, host)?;
-        transaction.commit()
+                params![
+                    to_sql(host.id.0),
+                    host.group.map(|group| to_sql(group.0)),
+                    host.sort_order,
+                    host.name.as_ref(),
+                    host.address.as_ref(),
+                    host.port,
+                    row.auth,
+                    row.username,
+                    row.credential,
+                    row.route,
+                    row.proxy_kind,
+                    row.proxy_host,
+                    row.proxy_port,
+                    row.proxy_username,
+                    host.notes.as_ref(),
+                    row.serial.baud,
+                    row.serial.data_bits,
+                    row.serial.parity,
+                    row.serial.stop_bits,
+                    row.serial.flow,
+                    row.telnet_user_prompt,
+                    row.telnet_password_prompt,
+                    host.protocol.as_str(),
+                ],
+            )?;
+            write_jumps(connection, host)
+        })
     }
 
     /// Deleting a host takes its jump hosts, bookmarks and forwards with
@@ -815,9 +857,8 @@ impl HostDatabase {
 
     /// Save one drag as a unit, including parent changes and sibling order.
     pub fn save_tree_order(&self, groups: &[HostGroup], hosts: &[Host]) -> rusqlite::Result<()> {
-        let transaction = self.connection.unchecked_transaction()?;
-        {
-            let mut update_group = transaction
+        self.atomically(|connection| {
+            let mut update_group = connection
                 .prepare("UPDATE groups SET parent_id = ?2, sort_order = ?3 WHERE id = ?1")?;
             for group in groups {
                 update_group.execute(params![
@@ -826,7 +867,7 @@ impl HostDatabase {
                     group.sort_order,
                 ])?;
             }
-            let mut update_host = transaction
+            let mut update_host = connection
                 .prepare("UPDATE hosts SET group_id = ?2, sort_order = ?3 WHERE id = ?1")?;
             for host in hosts {
                 update_host.execute(params![
@@ -835,8 +876,8 @@ impl HostDatabase {
                     host.sort_order,
                 ])?;
             }
-        }
-        transaction.commit()
+            Ok(())
+        })
     }
 
     /// Append a bookmark; adding one that exists is a no-op.
@@ -875,17 +916,16 @@ impl HostDatabase {
         side: BookmarkSide,
         paths: &[String],
     ) -> rusqlite::Result<()> {
-        let transaction = self.connection.unchecked_transaction()?;
-        {
-            let mut update = transaction.prepare(
+        self.atomically(|connection| {
+            let mut update = connection.prepare(
                 "UPDATE bookmarks SET sort_order = ?4 \
                  WHERE host_id = ?1 AND side = ?2 AND path = ?3",
             )?;
             for (order, path) in (0_i64..).zip(paths) {
                 update.execute(params![to_sql(host.0), side.as_str(), path, order])?;
             }
-        }
-        transaction.commit()
+            Ok(())
+        })
     }
 
     pub fn insert_forward(&self, rule: &ForwardRule) -> rusqlite::Result<()> {
@@ -975,18 +1015,19 @@ impl HostDatabase {
     /// their own with `auth`, as the credential's user, first: a credential
     /// still in use cannot be deleted.
     pub fn remove_credential(&self, id: CredentialId, auth: AuthKind) -> rusqlite::Result<()> {
-        let transaction = self.connection.unchecked_transaction()?;
-        transaction.execute(
-            "UPDATE hosts SET auth = ?2, credential_id = NULL, \
-             username = (SELECT username FROM credentials WHERE id = ?1) \
-             WHERE credential_id = ?1",
-            params![to_sql(id.0), auth.as_str()],
-        )?;
-        transaction.execute(
-            "DELETE FROM credentials WHERE id = ?1",
-            params![to_sql(id.0)],
-        )?;
-        transaction.commit()
+        self.atomically(|connection| {
+            connection.execute(
+                "UPDATE hosts SET auth = ?2, credential_id = NULL, \
+                 username = (SELECT username FROM credentials WHERE id = ?1) \
+                 WHERE credential_id = ?1",
+                params![to_sql(id.0), auth.as_str()],
+            )?;
+            connection.execute(
+                "DELETE FROM credentials WHERE id = ?1",
+                params![to_sql(id.0)],
+            )?;
+            Ok(())
+        })
     }
 
     pub fn insert_snippet_category(&self, category: &SnippetCategory) -> rusqlite::Result<()> {
@@ -2469,6 +2510,38 @@ INSERT INTO snippets (id, category_id, name, command, scope_host_id)
 
         db.touch_connected(HostId(1), 400).unwrap();
         assert_eq!(db.load().unwrap().recent, [HostId(1), HostId(3)]);
+    }
+
+    #[test]
+    fn a_batch_lands_in_one_commit_and_a_failed_write_takes_only_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shellrs.db");
+        {
+            let db = HostDatabase::open(&path).unwrap();
+            db.begin_batch().unwrap();
+            db.insert_group(&group(1, "生产", None)).unwrap();
+            db.insert_host(&host(1, "web-01", Some(1))).unwrap();
+            // A host that jumps through itself fails whole: neither its row
+            // nor its jump is left behind, and the batch goes on.
+            let looped = routed(host(2, "loop", None), Route::Jump(vec![Some(HostId(2))]));
+            assert!(db.insert_host(&looped).is_err());
+            let jumped = routed(host(3, "app", None), Route::Jump(vec![Some(HostId(1))]));
+            db.insert_host(&jumped).unwrap();
+            db.end_batch().unwrap();
+            assert!(db.connection.is_autocommit());
+            // Back to one transaction per write.
+            db.insert_host(&host(4, "db-01", None)).unwrap();
+        }
+        let db = HostDatabase::open(&path).unwrap();
+        let data = db.load().unwrap();
+        let names: Vec<&str> = data.hosts.iter().map(|host| host.name.as_ref()).collect();
+        assert_eq!(names, ["web-01", "app", "db-01"]);
+        assert_eq!(data.groups.len(), 1);
+        let jumps: i64 = db
+            .connection
+            .query_row("SELECT COUNT(*) FROM host_jumps", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(jumps, 1);
     }
 
     #[test]

@@ -496,6 +496,12 @@ host.menu.new_host:
 host.menu.new_group:
   zh-CN: 新建分组…
   en: New group…
+host.menu.import_ssh_config:
+  zh-CN: 从 ~/.ssh/config 导入…
+  en: Import from ~/.ssh/config…
+host.menu.import_known_hosts:
+  zh-CN: 从 ~/.ssh/known_hosts 导入…
+  en: Import from ~/.ssh/known_hosts…
 host.menu.connect_group:
   zh-CN: 连接组内主机
   en: Connect all in group
@@ -674,6 +680,9 @@ host.store.not_saved.rename_snippet_category:
 host.store.not_saved.delete_snippet_category:
   zh-CN: 删除片段分类未能保存到本地数据库：%{error}
   en: "Couldn’t delete the snippet category from the local database: %{error}"
+host.store.not_saved.batch:
+  zh-CN: 这批改动未能保存到本地数据库：%{error}
+  en: "Couldn’t save these changes to the local database: %{error}"
 
 host.store.copy_name:
   zh-CN: "%{name} 副本"
@@ -712,3 +721,127 @@ host.store.secret.proxy_delete:
 host.store.secret.temporary:
   zh-CN: 这次连接的密码未能记下：%{error}
   en: "Couldn’t keep the password for this connection: %{error}"
+
+# 导入主机: the dialog that adds the hosts ~/.ssh/config or known_hosts names.
+host.import.title.ssh_config:
+  zh-CN: 从 ~/.ssh/config 导入
+  en: Import from ~/.ssh/config
+host.import.title.known_hosts:
+  zh-CN: 从 ~/.ssh/known_hosts 导入
+  en: Import from ~/.ssh/known_hosts
+host.import.note.ssh_config:
+  zh-CN: 列出 Host 行里写明名称的主机，通配符条目里的设置会带上。ProxyJump 和 ProxyCommand 不导入，主机按直接连接导入；Match 块不读。
+  en: Lists the hosts named on Host lines, with the settings of the wildcard entries that match them. ProxyJump and ProxyCommand aren’t imported, so the hosts connect directly; Match blocks are skipped.
+host.import.note.known_hosts:
+  zh-CN: 列出连接过的主机。known_hosts 里没有用户名，都填 root。
+  en: Lists the hosts you’ve connected to. known_hosts has no usernames, so each one is set to root.
+host.import.note.hashed.one:
+  en: "%{count} hashed entry can’t be read."
+host.import.note.hashed.other:
+  zh-CN: 另有 %{count} 条经过哈希的记录，读不出地址。
+  en: "%{count} hashed entries can’t be read."
+host.import.source:
+  zh-CN: 来源：%{path}
+  en: "Source: %{path}"
+host.import.choose_file:
+  zh-CN: 选择文件…
+  en: Choose file…
+host.import.choose_prompt.ssh_config:
+  zh-CN: 选择 OpenSSH 配置文件
+  en: Choose an OpenSSH config file
+host.import.choose_prompt.known_hosts:
+  zh-CN: 选择 known_hosts 文件
+  en: Choose a known_hosts file
+host.import.count.found.one:
+  en: "%{count} host"
+host.import.count.found.other:
+  zh-CN: 共 %{count} 台
+  en: "%{count} hosts"
+host.import.count.existing.one:
+  en: "%{count} already saved"
+host.import.count.existing.other:
+  zh-CN: "%{count} 台已存在"
+  en: "%{count} already saved"
+host.import.count.selected.one:
+  en: "%{count} selected"
+host.import.count.selected.other:
+  zh-CN: 已选 %{count} 台
+  en: "%{count} selected"
+host.import.select_all:
+  zh-CN: 全选
+  en: Select all
+host.import.column.name:
+  zh-CN: 名称
+  en: Name
+host.import.column.group:
+  zh-CN: 分组
+  en: Group
+host.import.column.address:
+  zh-CN: 地址
+  en: Address
+host.import.column.port:
+  zh-CN: 端口
+  en: Port
+host.import.column.user:
+  zh-CN: 用户名
+  en: Username
+host.import.column.auth:
+  zh-CN: 认证
+  en: Authentication
+host.import.column.status:
+  zh-CN: 状态
+  en: Status
+host.import.group_placeholder:
+  zh-CN: 例如 生产/华东
+  en: e.g. Production/East
+host.import.auth.new_key:
+  zh-CN: "%{name}（新建凭据）"
+  en: "%{name} (new credential)"
+host.import.user_from_credential:
+  zh-CN: 用户名取自所选凭据
+  en: The username comes from the chosen credential
+host.import.existing:
+  zh-CN: 已存在
+  en: Saved
+host.import.new:
+  zh-CN: 新增
+  en: New
+host.import.loading:
+  zh-CN: 正在读取…
+  en: Loading…
+host.import.missing:
+  zh-CN: 找不到 %{path}
+  en: "%{path} doesn’t exist"
+host.import.failed:
+  zh-CN: 读取失败：%{error}
+  en: "Couldn’t read the file: %{error}"
+host.import.empty.ssh_config:
+  zh-CN: 这个文件里没有写明名称的 Host
+  en: This file names no hosts
+host.import.empty.known_hosts:
+  zh-CN: 这个文件里没有读得出的主机
+  en: This file has no readable hosts
+host.import.commit.one:
+  en: Import %{count} host
+host.import.commit.other:
+  zh-CN: 导入 %{count} 台主机
+  en: Import %{count} hosts
+host.import.error.group_empty_level:
+  zh-CN: 「%{name}」的分组「%{path}」里有空的一级
+  en: "The group “%{path}” for “%{name}” has an empty level."
+host.import.error.group_ambiguous:
+  zh-CN: 「%{name}」的分组：有 %{count} 个分组的路径都是「%{path}」，先给它们改名
+  en: "%{count} groups have the path “%{path}”, given for “%{name}”. Rename them first."
+host.import.error.host:
+  zh-CN: 「%{name}」：%{error}
+  en: "“%{name}”: %{error}"
+host.import.done.one:
+  en: Imported %{count} host
+host.import.done.other:
+  zh-CN: 已导入 %{count} 台主机
+  en: Imported %{count} hosts
+host.import.new_credentials.one:
+  en: Added %{count} key credential.
+host.import.new_credentials.other:
+  zh-CN: 新建了 %{count} 个密钥凭据。
+  en: Added %{count} key credentials.
