@@ -59,6 +59,26 @@ impl TerminalFont {
     }
 }
 
+/// The width of one cell: the font's `M`, on whole device pixels like the
+/// row height. Every column then starts on a pixel and a character looks the
+/// same in each; at a fractional width each column falls at another point
+/// between pixels and its strokes blur, at 150 % scaling most of all.
+pub(super) fn cell_width(font: Font, size: Pixels, window: &Window) -> Pixels {
+    let run = TextRun {
+        len: 1,
+        font,
+        color: Hsla::default(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let width = window
+        .text_system()
+        .shape_line("M".into(), size, &[run], None)
+        .width();
+    window.pixel_snap(width).max(px(1.))
+}
+
 /// Whether the system has `family`. GPUI substitutes another font for a
 /// family it cannot find, so a family from the settings file is only used
 /// when it is installed. The list is read once per process.
@@ -155,11 +175,7 @@ impl RenderOnce for TerminalFontPreview {
                             underline: None,
                             strikethrough: None,
                         };
-                        let cell_width = window
-                            .text_system()
-                            .shape_line("M".into(), size, &[run(1)], None)
-                            .width()
-                            .max(px(1.));
+                        let cell_width = cell_width(text_style.font(), size, window);
                         lines
                             .iter()
                             .map(|line| {
@@ -207,7 +223,22 @@ fn in_cells(line: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::in_cells;
+    use gpui_kit::{TestAppContext, font, px};
+
+    use super::{cell_width, in_cells};
+
+    /// The test text system's `M` is 0.6 of the font size, its window at 2×.
+    #[gpui_kit::test]
+    fn a_cell_is_whole_device_pixels_wide(cx: &mut TestAppContext) {
+        let cx = cx.add_empty_window();
+        let mut width =
+            |size: f32| cx.update(|window, _| cell_width(font("Menlo"), px(size), window));
+        // 7.8 px, 15.6 device pixels.
+        assert_eq!(width(13.), px(8.));
+        // 8.4 px, 16.8 device pixels.
+        assert_eq!(width(14.), px(8.5));
+        assert_eq!(width(15.), px(9.));
+    }
 
     #[test]
     fn wide_characters_take_two_cells() {

@@ -30,6 +30,7 @@ use crate::app::{
 use crate::connection::{ConnectionPromptReply, Latency};
 use crate::i18n::{UiLocale, t};
 
+use super::font;
 use super::mouse::{self, MouseReport, ReportButton, ReportKind};
 use super::scrollbar::ScrollbackHandle;
 use super::search::SearchMark;
@@ -1472,19 +1473,7 @@ impl Element for TerminalElement {
         let bounds = window.pixel_snap_bounds(bounds);
         let text_style = window.text_style();
         let font_size = text_style.font_size.to_pixels(window.rem_size());
-        let measure_run = TextRun {
-            len: 1,
-            font: text_style.font(),
-            color: text_style.color,
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        let cell_width = window
-            .text_system()
-            .shape_line("M".into(), font_size, &[measure_run], None)
-            .width()
-            .max(px(1.));
+        let cell_width = font::cell_width(text_style.font(), font_size, window);
         let line_height = TerminalFont::current(cx).row_height(window);
         let columns = ((bounds.size.width / cell_width).floor() as usize).max(2);
         let rows = ((bounds.size.height / line_height).floor() as usize).max(1);
