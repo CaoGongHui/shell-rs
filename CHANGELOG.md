@@ -4,6 +4,25 @@
 
 One section per version, titled `## [version]`, optionally followed by a date. Each section is written in English here and in Chinese in [CHANGELOG.zh.md](CHANGELOG.zh.md), in the same change. The release workflow (`.github/workflows/release.yml`) takes the section with the tag’s version, as it is, for the GitHub release. The website’s changelog shows this file in English and Japanese and CHANGELOG.zh.md in Chinese (ShellRS’s update dialog opens it with What’s new). Written in Markdown, for users.
 
+## [0.1.13]
+
+### Added
+
+- Import hosts from ~/.ssh/config and ~/.ssh/known_hosts: open it from the host list’s “…” menu or the context menu of its empty space, preview the hosts, tick the ones to import, and change each one’s name, group, username and authentication.
+- Broadcast input: click the megaphone at the left of the tab bar and check a few terminals; they’re shown side by side, and the command bar above them sends a command to all of them. Turn on Sync keys to have typing in one go to the others too.
+- Windows portable version: unzip and run, with all its data in the data folder next to the program; it updates itself too.
+
+### Improved
+
+- After a remote terminal disconnects, Space closes the tab; Enter still reconnects.
+- Less processor use in virtual machines without a graphics card (where the processor draws the interface): fewer frames while a terminal scrolls, a cursor that doesn’t blink, and no animations.
+- In the Chinese interface, What’s new opens the changelog in Chinese.
+
+### Fixed
+
+- Terminal text looked blurry at display scaling such as 150%.
+- A terminal shown in a split popped up a reminder when its bell rang.
+
 ## [0.1.13-beta.3]
 
 ### Added
