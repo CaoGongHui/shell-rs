@@ -7,6 +7,7 @@ mod paths;
 mod quit;
 mod rendering;
 mod shortcuts;
+mod system_hotkey;
 mod window_hiding;
 
 pub use actions::*;
@@ -21,9 +22,10 @@ pub use quit::{quit_held_back, set_quit_guard};
 pub use rendering::{SOFTWARE_FRAME_INTERVAL, frame_due, note_renderer, software_rendering};
 pub use shortcuts::{
     Refusal, SHORTCUTS, Shortcut, ShortcutGroup, ShortcutOverrides, apply_shortcuts, check,
-    fixed_bindings, key_caps, key_text,
+    fixed_bindings, key_caps, key_text, listen_for_system_hotkey,
 };
-pub use window_hiding::{MainWindow, bring_forward, hide_when_closed};
+pub use system_hotkey::{system_hotkey_available, take_system_hotkey_press};
+pub use window_hiding::{MainWindow, bring_forward, hide_when_closed, restore_window, send_back};
 
 use gpui_kit::component::Theme;
 use gpui_kit::*;

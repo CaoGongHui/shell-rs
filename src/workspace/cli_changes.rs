@@ -2,13 +2,15 @@
 //! is opened again, the changes to hosts and credentials a `shellrs`
 //! command asks for, and the `exec --terminal` runs. The request threads
 //! cannot reach the store or the terminals; the changes and the runs wait
-//! in the server until they are taken up here.
+//! in the server until they are taken up here. 显示或隐藏 ShellRS, the
+//! key the system hears for it, waits alike.
 
 use std::time::Duration;
 
 use gpui_kit::*;
 
 use crate::analytics::Counter;
+use crate::app::ShowOrHideApp;
 use crate::cli::{
     CliChange, CliError, CliUse, CredentialDeleted, CredentialFields, ErrorCode, HostDeleted,
     HostFields, Reply,
@@ -44,6 +46,9 @@ impl Workspace {
             loop {
                 cx.background_executor().timer(CLI_POLL).await;
                 let taken = this.update_in(cx, |this, window, cx| {
+                    if crate::app::take_system_hotkey_press() {
+                        this.on_show_or_hide_app(&ShowOrHideApp, window, cx);
+                    }
                     let server = this.cli_server.as_ref()?;
                     let links = server.take_activation();
                     let change = server.take_change();

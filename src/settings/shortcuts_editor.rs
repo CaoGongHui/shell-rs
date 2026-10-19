@@ -13,8 +13,8 @@ use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
 use crate::app::{
-    CatalogIcon, Shortcut, ShortcutGroup, ShortcutOverrides, check, fixed_bindings, key_caps,
-    key_text,
+    CatalogIcon, Refusal, Shortcut, ShortcutGroup, ShortcutOverrides, check, fixed_bindings,
+    key_caps, key_text, system_hotkey_available,
 };
 use crate::i18n::t;
 
@@ -100,7 +100,15 @@ impl ShortcutsEditor {
             return;
         }
         let overrides = self.store.read(cx).settings().shortcuts;
-        match check(shortcut, keystroke, &overrides, &fixed_bindings(cx)) {
+        let checked =
+            check(shortcut, keystroke, &overrides, &fixed_bindings(cx)).and_then(|keys| {
+                if !shortcut.is_system_wide() || system_hotkey_available(&keys, cx) {
+                    Ok(keys)
+                } else {
+                    Err(Refusal::Unavailable)
+                }
+            });
+        match checked {
             Ok(keys) => {
                 self.change(|overrides| overrides.set(shortcut, keys), cx);
                 self.finish(window, cx);
@@ -242,6 +250,8 @@ fn render_field(
                 .with_size(size)
                 .icon(Icon::new(CatalogIcon::Ban))
                 .selected(disabled)
+                // Nothing to turn off: no key, and none by default.
+                .disabled(keys.is_none() && !disabled)
                 .tooltip(if disabled {
                     t!("settings.shortcuts.enable")
                 } else {

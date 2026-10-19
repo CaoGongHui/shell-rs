@@ -94,6 +94,9 @@ serde_yaml_ng = "0.10.0"
 # ZMODEM (`rz` / `sz` in a terminal): the protocol only, driven by the
 # terminal's parser thread. Pinned: its 0.x API changes between releases.
 zmodem2 = "=0.7.3"
+# 显示或隐藏 ShellRS, the shortcut that works in any app: the system's
+# hot keys (Carbon on macOS, RegisterHotKey on Windows, X11 on Linux).
+global-hotkey = "0.9"
 
 [target.'cfg(unix)'.dependencies]
 # `access(2)`: whether the folder ShellRS runs from can take its update.
@@ -123,6 +126,8 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_WindowsProgramming",
     "Win32_UI_WindowsAndMessaging",
 ] }
+# The window's handle, to restore it from maximized: GPUI only maximizes.
+raw-window-handle = "0.6"
 # The Windows portable package updates itself from a zip. Deflate through
 # flate2, which keeps its default Rust backend: our own `flate2` asks for it.
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }

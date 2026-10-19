@@ -21,6 +21,7 @@ on:
       - "src/app/paths.rs"
       - "src/host/private_key.rs"
       - "src/app/window_hiding.rs"
+      - "src/app/system_hotkey.rs"
       - "src/main.rs"
       - "src/bin/**"
       - "src/ssh/connection.rs"

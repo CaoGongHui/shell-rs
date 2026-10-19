@@ -2,7 +2,7 @@
 //! the font and the size, links, the mouse for programs and their copies.
 
 use crate::support::*;
-use shellrs::app::{CopyTerminal, SelectAllTerminal};
+use shellrs::app::{CopyTerminal, SelectAllTerminal, Shortcut};
 use shellrs::terminal::RightClick;
 
 fn open_workspace_with_factory(
@@ -77,10 +77,11 @@ async fn creates_independent_local_terminals_from_button_and_shortcut(cx: &mut T
         window.render_frame(cx);
         assert!(window.find(("local-terminal", 1_u64)).visible());
         assert_eq!(window.find(("local-terminal", 1_u64)).focused(), Some(true));
+        // Elsewhere Ctrl+T is the shell's in a terminal.
         #[cfg(target_os = "macos")]
         window.press("cmd-t", cx);
         #[cfg(not(target_os = "macos"))]
-        window.press("ctrl-t", cx);
+        window.click("new-local-terminal", cx);
     })
     .unwrap();
     cx.run_until_parked();
@@ -155,6 +156,77 @@ async fn tab_keys_are_sent_to_the_focused_terminal(cx: &mut TestAppContext) {
         assert_eq!(window.find(("local-terminal", 1_u64)).focused(), Some(true));
     })
     .unwrap();
+}
+
+#[gpui_kit::test]
+async fn ctrl_with_a_letter_is_the_shells_in_a_terminal(cx: &mut TestAppContext) {
+    let factory = Arc::new(FakeTerminalFactory::default());
+    let (handle, workspace) = open_workspace_with_factory(cx, factory.clone());
+    // 新建本地终端 as on Windows and Linux.
+    cx.update(|cx| {
+        let settings = workspace.read(cx).settings().clone();
+        settings.update(cx, |store, cx| {
+            store.update(
+                |settings| {
+                    settings.shortcuts.set(
+                        Shortcut::find("new-local-terminal").unwrap(),
+                        "ctrl-t".into(),
+                    )
+                },
+                cx,
+            )
+        });
+    });
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.click("new-local-terminal", cx);
+    })
+    .unwrap();
+    cx.wait_for(handle.into(), Duration::from_secs(2), |window, _| {
+        window
+            .try_find("status-connection")
+            .is_some_and(|element| element.label() == Some("运行中 本地终端"))
+    })
+    .await;
+
+    // In the terminal it goes to the shell, as tmux's Ctrl+B would.
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(window.find(("local-terminal", 1_u64)).focused(), Some(true));
+        window.press("ctrl-t", cx);
+    })
+    .unwrap();
+    cx.wait_for(handle.into(), Duration::from_secs(2), |_, _| {
+        factory.written_text() == "\x14"
+    })
+    .await;
+    cx.run_until_parked();
+    assert!(cx.update(|cx| {
+        workspace
+            .read(cx)
+            .local_terminal(LocalTerminalId(2))
+            .is_none()
+    }));
+
+    // Outside a terminal the shortcut works.
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.click("open-settings", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        window.press("ctrl-t", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(cx.update(|cx| {
+        workspace
+            .read(cx)
+            .local_terminal(LocalTerminalId(2))
+            .is_some()
+    }));
 }
 
 #[gpui_kit::test]

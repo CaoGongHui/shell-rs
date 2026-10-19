@@ -44,3 +44,37 @@ pub fn bring_forward(window: &mut Window, cx: &mut App) {
     cx.activate(true);
     window.activate_window();
 }
+
+/// Put ShellRS away, when 显示或隐藏 ShellRS is pressed with it in front:
+/// hidden on macOS, as ⌘H does, minimized elsewhere.
+pub fn send_back(window: &mut Window, cx: &mut App) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = window;
+        cx.hide();
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = cx;
+        window.minimize_window();
+    }
+}
+
+/// Put a maximized window back to its size before. Zooming again does on
+/// macOS and Linux; on Windows GPUI's zoom only maximizes, so the system
+/// is asked.
+pub fn restore_window(window: &Window) {
+    #[cfg(windows)]
+    {
+        use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{SW_RESTORE, ShowWindow};
+        if let Ok(handle) = window.window_handle()
+            && let RawWindowHandle::Win32(handle) = handle.as_raw()
+        {
+            // SAFETY: the handle is this open window's.
+            unsafe { ShowWindow(handle.hwnd.get() as *mut core::ffi::c_void, SW_RESTORE) };
+        }
+    }
+    #[cfg(not(windows))]
+    window.zoom_window();
+}

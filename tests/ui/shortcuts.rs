@@ -36,6 +36,23 @@ fn open_shortcuts(cx: &mut TestAppContext, handle: WindowHandle<Root>) {
     });
 }
 
+/// Scroll the page down to the tab shortcuts, below the window's fold.
+fn scroll_to_tab_shortcuts(cx: &mut TestAppContext, handle: WindowHandle<Root>) {
+    in_frame(cx, handle, |window, cx| {
+        let position = window.find("shortcut-keys-new-host").bounds().center();
+        window.dispatch_event(
+            gpui_kit::ScrollWheelEvent {
+                position,
+                delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-600.))),
+                modifiers: gpui_kit::Modifiers::default(),
+                touch_phase: gpui_kit::TouchPhase::Moved,
+            }
+            .to_platform_input(),
+            cx,
+        );
+    });
+}
+
 fn overrides(workspace: &Entity<Workspace>, cx: &mut TestAppContext) -> serde_json::Value {
     cx.update(|cx| {
         serde_json::to_value(workspace.read(cx).settings().read(cx).settings().shortcuts).unwrap()
@@ -86,6 +103,7 @@ fn tabs_are_switched_from_the_keyboard(cx: &mut TestAppContext) {
 fn a_shortcut_takes_the_keys_pressed_for_it(cx: &mut TestAppContext) {
     let (handle, workspace) = open_workspace(cx);
     open_shortcuts(cx, handle);
+    scroll_to_tab_shortcuts(cx, handle);
     in_frame(cx, handle, |window, cx| {
         assert!(window.find("shortcut-keys-next-tab").visible());
         window.click("shortcut-keys-next-tab", cx);
@@ -120,6 +138,7 @@ fn a_shortcut_takes_the_keys_pressed_for_it(cx: &mut TestAppContext) {
 fn a_shortcut_turned_off_does_nothing_until_put_back(cx: &mut TestAppContext) {
     let (handle, workspace) = open_workspace(cx);
     open_shortcuts(cx, handle);
+    scroll_to_tab_shortcuts(cx, handle);
     in_frame(cx, handle, |window, cx| {
         window.click("shortcut-disable-next-tab", cx)
     });
@@ -147,6 +166,7 @@ fn a_shortcut_turned_off_does_nothing_until_put_back(cx: &mut TestAppContext) {
 fn keys_that_are_taken_or_plain_are_refused_and_escape_gives_up(cx: &mut TestAppContext) {
     let (handle, workspace) = open_workspace(cx);
     open_shortcuts(cx, handle);
+    scroll_to_tab_shortcuts(cx, handle);
     in_frame(cx, handle, |window, cx| {
         window.click("shortcut-keys-next-tab", cx)
     });
@@ -176,6 +196,35 @@ fn keys_that_are_taken_or_plain_are_refused_and_escape_gives_up(cx: &mut TestApp
         assert!(window.find("shortcut-keys-next-tab").visible());
     });
     assert_eq!(overrides(&workspace, cx), serde_json::json!({}));
+}
+
+#[gpui_kit::test]
+fn the_system_wide_shortcut_starts_with_no_key_and_takes_one_the_system_knows(
+    cx: &mut TestAppContext,
+) {
+    let (handle, workspace) = open_workspace(cx);
+    open_shortcuts(cx, handle);
+    in_frame(cx, handle, |window, cx| {
+        assert_eq!(
+            window.find("shortcut-keys-show-hide-app").label(),
+            Some("无")
+        );
+        window.click("shortcut-keys-show-hide-app", cx);
+    });
+    // No key the system has a name for: said and refused, still listening.
+    in_frame(cx, handle, |window, cx| window.press("ctrl-alt-+", cx));
+    in_frame(cx, handle, |window, cx| {
+        assert!(window.find("shortcut-recorder-show-hide-app").visible());
+        assert_eq!(window.notifications(cx).len(), 1);
+        window.press("alt-space", cx);
+    });
+    in_frame(cx, handle, |window, _| {
+        assert!(window.try_find("shortcut-recorder-show-hide-app").is_none());
+    });
+    assert_eq!(
+        overrides(&workspace, cx),
+        serde_json::json!({ "show-hide-app": "alt-space" })
+    );
 }
 
 #[gpui_kit::test]

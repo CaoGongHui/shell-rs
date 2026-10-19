@@ -20,6 +20,15 @@ app.shortcut.toggle_sidebar:
 app.shortcut.toggle_tool_sidebar:
   zh-CN: 显示或隐藏右侧栏
   en: Show or hide right sidebar
+app.shortcut.maximize_window:
+  zh-CN: 最大化窗口
+  en: Maximize window
+app.shortcut.restore_window:
+  zh-CN: 还原窗口
+  en: Restore window
+app.shortcut.show_hide_app:
+  zh-CN: 显示或隐藏 ShellRS（全局）
+  en: Show or hide ShellRS (system-wide)
 app.shortcut.focus_search:
   zh-CN: 聚焦搜索
   en: Focus search
@@ -115,3 +124,6 @@ app.shortcut_refusal.used_by:
 app.shortcut_refusal.reserved:
   zh-CN: "%{keys} 已被输入框等内置功能使用。"
   en: "%{keys} is used by text fields and other built-in features."
+app.shortcut_refusal.unavailable:
+  zh-CN: "%{keys} 不能用作全局快捷键，可能已被其他程序占用。"
+  en: "%{keys} can’t be used system-wide. Another app may be using it."

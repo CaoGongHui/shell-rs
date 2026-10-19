@@ -53,6 +53,9 @@ pub struct Shortcut {
     /// One binding for each digit from 1 to 9, the key standing for the
     /// digit: 切换到标签 1…9.
     numbered: bool,
+    /// Taken from the system rather than bound in the window: it works
+    /// while another app is in front (`system_hotkey`).
+    system_wide: bool,
     /// The action, given the digit of a numbered shortcut.
     action: fn(usize) -> Box<dyn Action>,
 }
@@ -75,13 +78,14 @@ macro_rules! shortcut {
             mac: $mac,
             other: $other,
             numbered: false,
+            system_wide: false,
             action: |_| Box::new($action),
         }
     };
 }
 
 /// The shortcuts of 设置 › 键盘快捷键, in the order the page lists them.
-pub static SHORTCUTS: [Shortcut; 26] = [
+pub static SHORTCUTS: [Shortcut; 29] = [
     shortcut!(
         "new-host",
         "app.shortcut.new_host",
@@ -127,6 +131,38 @@ pub static SHORTCUTS: [Shortcut; 26] = [
         "ctrl-alt-b",
         ToggleToolSidebar
     ),
+    // ⌘↑ and ⌘↓ go to the top and bottom of a text field, and up a folder
+    // and into one in SFTP. Elsewhere Win+↑ and Win+↓ are the system's own.
+    shortcut!(
+        "maximize-window",
+        "app.shortcut.maximize_window",
+        General,
+        &[],
+        "ctrl-cmd-up",
+        "",
+        MaximizeWindow
+    ),
+    shortcut!(
+        "restore-window",
+        "app.shortcut.restore_window",
+        General,
+        &[],
+        "ctrl-cmd-down",
+        "",
+        RestoreWindow
+    ),
+    // A key taken from every other app as well: none until one is chosen.
+    Shortcut {
+        id: "show-hide-app",
+        label: "app.shortcut.show_hide_app",
+        group: ShortcutGroup::General,
+        contexts: &[],
+        mac: "",
+        other: "",
+        numbered: false,
+        system_wide: true,
+        action: |_| Box::new(ShowOrHideApp),
+    },
     // In a terminal ⌘K clears instead, as in other macOS terminals.
     shortcut!(
         "focus-search",
@@ -219,6 +255,7 @@ pub static SHORTCUTS: [Shortcut; 26] = [
         mac: "cmd-1",
         other: "alt-1",
         numbered: true,
+        system_wide: false,
         action: |digit| Box::new(SwitchToTab(digit)),
     },
     shortcut!(
@@ -347,7 +384,12 @@ impl Shortcut {
         self.numbered
     }
 
-    /// Its key on this platform unless the user changed it.
+    pub fn is_system_wide(&self) -> bool {
+        self.system_wide
+    }
+
+    /// Its key on this platform unless the user changed it; empty for
+    /// none.
     pub fn default_keys(&self) -> &'static str {
         if cfg!(target_os = "macos") {
             self.mac
@@ -363,8 +405,11 @@ impl Shortcut {
     /// Whether it and `other` can be in effect at the same place: both
     /// anywhere, or in a key context they share. Anywhere and a context
     /// may share a key; the context's wins there, as ⌘K does in a terminal.
+    /// The system's key wins everywhere.
     fn shares_scope(&self, other: &Shortcut) -> bool {
-        (self.is_global() && other.is_global())
+        self.system_wide
+            || other.system_wide
+            || (self.is_global() && other.is_global())
             || self
                 .contexts
                 .iter()
@@ -389,7 +434,7 @@ impl Shortcut {
     }
 
     fn bindings(&self, overrides: &ShortcutOverrides) -> Vec<KeyBinding> {
-        let Some(keys) = overrides.keys(self) else {
+        let Some(keys) = overrides.keys(self).filter(|_| !self.system_wide) else {
             return Vec::new();
         };
         let contexts: Vec<Option<&str>> = if self.is_global() {
@@ -446,11 +491,11 @@ impl<'de> Deserialize<'de> for ShortcutOverrides {
 
 impl ShortcutOverrides {
     /// What `shortcut` is bound to: the user's key, its default, or none
-    /// when turned off.
+    /// when turned off or it has no default.
     pub fn keys(&self, shortcut: &Shortcut) -> Option<String> {
         match self.0.get(shortcut.id) {
             Some(keys) => keys.clone(),
-            None => Some(shortcut.default_keys().to_string()),
+            None => Some(shortcut.default_keys().to_string()).filter(|keys| !keys.is_empty()),
         }
     }
 
@@ -504,6 +549,9 @@ pub enum Refusal {
     UsedBy(&'static str),
     /// A text field, list or dialog has it.
     Reserved,
+    /// The system would not give it to a shortcut that works in any app:
+    /// another app has it, or the system knows no such key.
+    Unavailable,
 }
 
 impl Refusal {
@@ -525,6 +573,7 @@ impl Refusal {
             )
             .to_string(),
             Self::Reserved => t!("app.shortcut_refusal.reserved", keys = keys).to_string(),
+            Self::Unavailable => t!("app.shortcut_refusal.unavailable", keys = keys).to_string(),
         }
     }
 }
@@ -684,7 +733,26 @@ pub fn apply_shortcuts(overrides: &ShortcutOverrides, cx: &mut App) {
     cx.clear_key_bindings();
     cx.bind_keys(kit);
     cx.bind_keys(key_bindings(overrides));
+    super::system_hotkey::take(overrides.keys(system_wide()).as_deref(), cx);
     cx.set_global(AppliedShortcuts(overrides.clone()));
+}
+
+/// Take 显示或隐藏 ShellRS's key from the system from now on, the one the
+/// shortcuts were last applied with first. The app's to call, not tests'.
+pub fn listen_for_system_hotkey(cx: &mut App) {
+    super::system_hotkey::listen(cx);
+    let keys = cx
+        .try_global::<AppliedShortcuts>()
+        .and_then(|applied| applied.0.keys(system_wide()));
+    super::system_hotkey::take(keys.as_deref(), cx);
+}
+
+/// 显示或隐藏 ShellRS, the one shortcut the system hears.
+fn system_wide() -> &'static Shortcut {
+    SHORTCUTS
+        .iter()
+        .find(|shortcut| shortcut.system_wide)
+        .expect("a system-wide shortcut")
 }
 
 /// The bindings no user change touches that a shortcut working anywhere
@@ -708,6 +776,7 @@ fn key_bindings(overrides: &ShortcutOverrides) -> Vec<KeyBinding> {
         .flat_map(|shortcut| shortcut.bindings(overrides))
         .collect();
     bindings.extend(fixed_global_bindings());
+    bindings.extend(shell_keys_in_terminal(&bindings));
     bindings.extend(
         SHORTCUTS
             .iter()
@@ -716,6 +785,36 @@ fn key_bindings(overrides: &ShortcutOverrides) -> Vec<KeyBinding> {
     );
     bindings.extend(fixed_context_bindings());
     bindings
+}
+
+/// Ctrl with a letter is the shell's in a terminal (tmux's Ctrl+B,
+/// readline's Ctrl+W and Ctrl+K), so a shortcut that works anywhere leaves
+/// it there. The terminal's own shortcuts, bound after, still win in it.
+fn shell_keys_in_terminal(anywhere: &[KeyBinding]) -> Vec<KeyBinding> {
+    anywhere
+        .iter()
+        .filter_map(|binding| {
+            let [keystroke] = binding.keystrokes() else {
+                return None;
+            };
+            let keystroke = keystroke.inner();
+            let modifiers = keystroke.modifiers;
+            let letter = keystroke.key.len() == 1
+                && keystroke.key.bytes().all(|byte| byte.is_ascii_lowercase());
+            (letter
+                && modifiers.control
+                && !modifiers.alt
+                && !modifiers.shift
+                && !modifiers.platform)
+                .then(|| {
+                    KeyBinding::new(
+                        &keystroke.unparse(),
+                        NoAction {},
+                        Some(TERMINAL_KEY_CONTEXT),
+                    )
+                })
+        })
+        .collect()
 }
 
 fn fixed_global_bindings() -> Vec<KeyBinding> {
@@ -1001,7 +1100,7 @@ fn file_list_key_bindings() -> Vec<KeyBinding> {
 
 #[cfg(test)]
 mod tests {
-    use gpui_kit::{KeyBinding, Keystroke, NoAction};
+    use gpui_kit::{Action as _, KeyBinding, Keystroke, NoAction};
 
     use super::{Refusal, SHORTCUTS, Shortcut, ShortcutOverrides, check, key_bindings, key_caps};
 
@@ -1131,6 +1230,68 @@ mod tests {
         );
         assert_eq!(overrides.keys(shortcut("quit")), None);
         assert!(overrides.is_default(shortcut("close-tab")));
+    }
+
+    #[test]
+    fn ctrl_with_a_letter_stays_the_shells_in_a_terminal() {
+        let mut overrides = ShortcutOverrides::default();
+        overrides.set(shortcut("new-local-terminal"), "ctrl-t".into());
+        overrides.set(shortcut("toggle-sidebar"), "ctrl-shift-b".into());
+        overrides.set(shortcut("terminal-copy"), "ctrl-c".into());
+        let bindings = described(&key_bindings(&overrides));
+        let in_terminal = |keys: &str| {
+            bindings.iter().position(|(bound, name, context)| {
+                bound == keys
+                    && name == NoAction.name()
+                    && context.as_deref() == Some(super::TERMINAL_KEY_CONTEXT)
+            })
+        };
+        assert!(in_terminal("ctrl-t").is_some());
+        // Ctrl+Shift with a letter is the app's, as in other terminals.
+        assert!(in_terminal("ctrl-shift-b").is_none());
+        // The terminal's own shortcut is bound after, and wins there.
+        assert!(in_terminal("ctrl-c").is_none());
+        assert!(position(&bindings, "shellrs::CopyTerminal") > in_terminal("ctrl-t").unwrap());
+    }
+
+    #[test]
+    fn the_system_wide_shortcut_has_no_key_until_one_is_chosen() {
+        let show = shortcut("show-hide-app");
+        let mut overrides = ShortcutOverrides::default();
+        assert_eq!(overrides.keys(show), None);
+        assert!(!overrides.is_disabled(show));
+        overrides.set(show, "alt-space".into());
+        assert_eq!(overrides.keys(show).as_deref(), Some("alt-space"));
+        // The system hears it, not the keymap.
+        assert!(
+            !described(&key_bindings(&overrides))
+                .iter()
+                .any(|(_, name, _)| name == "shellrs::ShowOrHideApp")
+        );
+        // It takes the key from everywhere, so no shortcut can share one.
+        let copy = shortcut("terminal-copy");
+        assert_eq!(
+            check(show, &keys(copy.default_keys()), &overrides, &[]),
+            Err(Refusal::UsedBy("terminal-copy"))
+        );
+        assert_eq!(
+            check(copy, &keys("alt-space"), &overrides, &[]),
+            Err(Refusal::UsedBy("show-hide-app"))
+        );
+        // ⌃⌘↑ and ⌃⌘↓ are free on macOS; elsewhere the system's Win+↑ and
+        // Win+↓ do it.
+        for id in ["maximize-window", "restore-window"] {
+            let window = shortcut(id);
+            if cfg!(target_os = "macos") {
+                let default = window.default_keys();
+                assert_eq!(
+                    check(window, &keys(default), &ShortcutOverrides::default(), &[]),
+                    Ok(keys(default).unparse())
+                );
+            } else {
+                assert_eq!(ShortcutOverrides::default().keys(window), None);
+            }
+        }
     }
 
     #[test]

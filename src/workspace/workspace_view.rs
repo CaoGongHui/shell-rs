@@ -30,13 +30,13 @@ use crate::app::{
     CopyAgentSkill, CopyHostAddress, CopyHostId, CopyTerminal, DeleteGroup, DeleteHost,
     DisconnectTerminal, DismissTerminalFind, DuplicateHost, EditHost, ExpandAllGroups,
     ExplorerAction, ExplorerCommand, ExplorerShortcut, FindInTerminal, FindNextInTerminal,
-    FindPreviousInTerminal, FocusSearch, InstallAgentSkill, InstallCliCommand, MoveHostNode,
-    NewChildGroup, NewGroup, NewHost, NewHostInGroup, NewLocalTerminal, NewTemporaryConnection,
-    OpenExplorer, OpenSettings, PasteTerminal, QuickConnect, ReconnectTerminal,
-    RefreshCliIntegration, RemoveAgentSkill, RemoveCliCommand, RenameExplorer, RenameGroup,
-    RenameTerminal, RestartLocalTerminal, SelectAllTerminal, SendBreak, SetFileSizeFormat,
-    ToggleHiddenFiles, ToggleHostPanel, ToggleTheme, ToolKind, ZoomIn, ZoomOut, ZoomReset,
-    ZoomTerminalIn, ZoomTerminalOut, ZoomTerminalReset,
+    FindPreviousInTerminal, FocusSearch, InstallAgentSkill, InstallCliCommand, MaximizeWindow,
+    MoveHostNode, NewChildGroup, NewGroup, NewHost, NewHostInGroup, NewLocalTerminal,
+    NewTemporaryConnection, OpenExplorer, OpenSettings, PasteTerminal, QuickConnect,
+    ReconnectTerminal, RefreshCliIntegration, RemoveAgentSkill, RemoveCliCommand, RenameExplorer,
+    RenameGroup, RenameTerminal, RestartLocalTerminal, RestoreWindow, SelectAllTerminal, SendBreak,
+    SetFileSizeFormat, ShowOrHideApp, ToggleHiddenFiles, ToggleHostPanel, ToggleTheme, ToolKind,
+    ZoomIn, ZoomOut, ZoomReset, ZoomTerminalIn, ZoomTerminalOut, ZoomTerminalReset,
 };
 use crate::cli::{CliIntegration, CliServer, IntegrationPaths, SshCliBackend};
 use crate::connection::{
@@ -2264,6 +2264,38 @@ impl Workspace {
         cx.notify();
     }
 
+    fn on_maximize_window(
+        &mut self,
+        _: &MaximizeWindow,
+        window: &mut Window,
+        _: &mut Context<Self>,
+    ) {
+        if !window.is_maximized() {
+            window.zoom_window();
+        }
+    }
+
+    fn on_restore_window(&mut self, _: &RestoreWindow, window: &mut Window, _: &mut Context<Self>) {
+        if window.is_maximized() {
+            crate::app::restore_window(window);
+        }
+    }
+
+    /// 显示或隐藏 ShellRS: in front of other apps, or away when it already
+    /// is.
+    pub(super) fn on_show_or_hide_app(
+        &mut self,
+        _: &ShowOrHideApp,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if window.is_window_active() {
+            crate::app::send_back(window, cx);
+        } else {
+            crate::app::bring_forward(window, cx);
+        }
+    }
+
     /// The title bar's quick switch: it picks 应用外观 outright, leaving
     /// 跟随系统 if that was chosen, and the settings observer applies it.
     fn on_toggle_theme(&mut self, _: &ToggleTheme, _: &mut Window, cx: &mut Context<Self>) {
@@ -2790,6 +2822,9 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_dismiss_terminal_find))
             .on_action(cx.listener(Self::on_clear_terminal))
             .on_action(cx.listener(Self::on_toggle_host_panel))
+            .on_action(cx.listener(Self::on_maximize_window))
+            .on_action(cx.listener(Self::on_restore_window))
+            .on_action(cx.listener(Self::on_show_or_hide_app))
             .on_action(cx.listener(Self::on_toggle_tool_sidebar))
             .on_action(cx.listener(Self::on_toggle_tool))
             .on_action(cx.listener(Self::on_refresh_gpu))

@@ -53,6 +53,8 @@ fn main() {
             open_settings()
         };
         shellrs::init(cx);
+        // 显示或隐藏 ShellRS takes its key from the system; tests never do.
+        shellrs::app::listen_for_system_hotkey(cx);
         shellrs::app::show_logo_when_unbundled(cx);
         cx.activate(true);
 

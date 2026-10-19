@@ -73,6 +73,15 @@ gpui_kit::actions!(
         ToggleHostPanel,
         /// Show or hide the right sidebar, whichever tool it is showing.
         ToggleToolSidebar,
+        /// Fill the screen with the window, as double-clicking its title
+        /// bar does.
+        MaximizeWindow,
+        /// Put a maximized window back to its size before.
+        RestoreWindow,
+        /// 显示或隐藏 ShellRS: bring it in front of other apps, or put it
+        /// away when it already is. The system tells of its key
+        /// (`system_hotkey`), not the keymap.
+        ShowOrHideApp,
         /// Read the network connections of the SSH terminal's host again.
         RefreshConnections,
         /// Read the processes of the SSH terminal's host again.
