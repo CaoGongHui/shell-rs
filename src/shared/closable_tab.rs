@@ -105,6 +105,12 @@ impl RenderOnce for ClosableTabTitle {
             .child(self.leading)
             .child(
                 div()
+                    // A long title, such as a command line a shell names the
+                    // tab after, gives way rather than the tab bar.
+                    .max_w(rems(20.))
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
                     .when(offline, |label| {
                         label.text_color(cx.theme().muted_foreground)
                     })

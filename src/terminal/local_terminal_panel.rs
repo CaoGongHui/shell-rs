@@ -142,7 +142,11 @@ impl LocalTerminalPanel {
     pub(crate) fn display_title(&self, cx: &App) -> SharedString {
         self.terminal.read(cx).title(cx).map_or_else(
             || self.default_title(),
-            |title| short_title(&title).into_owned().into(),
+            |title| {
+                short_title(&title, super::local_shell::host_name().as_deref())
+                    .into_owned()
+                    .into()
+            },
         )
     }
 }
@@ -274,16 +278,46 @@ impl Render for LocalTerminalPanel {
     }
 }
 
-/// The shell's title without the folders of programs. The Windows console
-/// titles a window with the whole path of what runs in it
-/// (`C:\Windows\system32\cmd.exe - ping localhost`), which leaves a tab
-/// little else; each such path shows as the program's name, `cmd`.
-fn short_title(title: &str) -> Cow<'_, str> {
+/// A title up to this long shows whole, `xuz@mac:~/src` as it is: the
+/// folder alone, `src` or `~`, says too little.
+const WHOLE_TITLE_CHARS: usize = 30;
+
+/// The shell's title, short enough to tell tabs apart by.
+///
+/// - Shells title a window `user@host:~/src/app` (oh-my-zsh, bash on
+///   Debian and Fedora). On `this_host`, a title longer than
+///   [`WHOLE_TITLE_CHARS`] shows as the folder alone, `app`: the user and
+///   host are the same on every local tab. A host ssh'd to from here keeps
+///   the whole title.
+/// - The Windows console titles a window with the whole path of what runs
+///   in it (`C:\Windows\system32\cmd.exe - ping localhost`), which leaves a
+///   tab little else; each such path shows as the program's name, `cmd`.
+fn short_title<'a>(title: &'a str, this_host: Option<&str>) -> Cow<'a, str> {
+    static USER_HOST_FOLDER: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^[^@\s]+@([^:\s]+): ?([~/].*)$").expect("pattern"));
     static PROGRAM_PATH: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r#"(?i)\b[a-z]:\\(?:[^\\/:*?"<>|\r\n]+\\)*([^\\/:*?"<>|\r\n]+?)\.exe\b"#)
             .expect("pattern")
     });
+    if let Some(this_host) = this_host
+        && title.chars().count() > WHOLE_TITLE_CHARS
+        && let Some(parts) = USER_HOST_FOLDER.captures(title)
+        && is_this_host(&parts[1], this_host)
+    {
+        let path = parts.get(2).expect("group").as_str();
+        return match path.trim_end_matches('/') {
+            "" => Cow::Borrowed("/"),
+            path => Cow::Borrowed(path.rsplit('/').next().unwrap_or(path)),
+        };
+    }
     PROGRAM_PATH.replace_all(title, "$1")
+}
+
+/// Whether `host` in a title names this computer, `this_host`: whole, or
+/// up to its first dot as prompts write it.
+fn is_this_host(host: &str, this_host: &str) -> bool {
+    let short = this_host.split('.').next().unwrap_or(this_host);
+    host.eq_ignore_ascii_case(this_host) || host.eq_ignore_ascii_case(short)
 }
 
 /// 「本地终端 1」, in the interface language.
@@ -333,7 +367,45 @@ mod tests {
             (r"D:\work", r"D:\work"),
             ("vim notes.exe.txt", "vim notes.exe.txt"),
         ] {
-            assert_eq!(short_title(title), shown, "{title}");
+            assert_eq!(short_title(title, None), shown, "{title}");
         }
+    }
+
+    #[test]
+    fn this_computers_user_and_host_show_as_the_folder() {
+        let here = Some("XuzdeMacBook-Pro.local");
+        for (title, shown) in [
+            (
+                "xuz@XuzdeMacBook-Pro:~/Documents/Projects/GoProjects/go-dock",
+                "go-dock",
+            ),
+            ("xuz@xuzdemacbook-pro: ~/Documents/src/", "src"),
+            ("root@XuzdeMacBook-Pro.local:/var/log", "log"),
+            ("xuz@XuzdeMacBook-Pro:~/My Projects/app one", "app one"),
+            ("administrator@XuzdeMacBook-Pro.local:~", "~"),
+            ("administrator@XuzdeMacBook-Pro.local:/", "/"),
+            // A short title shows whole.
+            ("xuz@XuzdeMacBook-Pro:~", "xuz@XuzdeMacBook-Pro:~"),
+            ("xuz@XuzdeMacBook-Pro:~/src", "xuz@XuzdeMacBook-Pro:~/src"),
+            // Another host, ssh'd to from here, keeps its name.
+            (
+                "root@web-01.example.com:/var/log/nginx",
+                "root@web-01.example.com:/var/log/nginx",
+            ),
+            // Not a folder: what runs, or another kind of title.
+            (
+                "xuz@XuzdeMacBook-Pro: vim /etc/nginx/nginx.conf",
+                "xuz@XuzdeMacBook-Pro: vim /etc/nginx/nginx.conf",
+            ),
+            ("claude", "claude"),
+            ("ssh root@web-01", "ssh root@web-01"),
+        ] {
+            assert_eq!(short_title(title, here), shown, "{title}");
+        }
+        // With no name for this computer, nothing is taken for it.
+        assert_eq!(
+            short_title("xuz@XuzdeMacBook-Pro:~/Documents/src", None),
+            "xuz@XuzdeMacBook-Pro:~/Documents/src"
+        );
     }
 }

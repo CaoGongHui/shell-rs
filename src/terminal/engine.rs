@@ -1082,7 +1082,9 @@ fn terminal_config() -> Config {
         },
         // Programs may copy to the clipboard (vim, tmux), never read it.
         osc52: Osc52::OnlyCopy,
-        kitty_keyboard: false,
+        // Programs that ask may have keys told apart (`encode_key`):
+        // Shift+Enter is how Claude Code takes a new line.
+        kitty_keyboard: true,
         ..Config::default()
     }
 }
@@ -1592,6 +1594,33 @@ mod tests {
         // Nothing asked, nothing written.
         proxy.answer(&term);
         assert!(commands.try_recv().is_err());
+    }
+
+    /// A program asks whether keys can be told apart (Claude Code does, to
+    /// take Shift+Enter), turns that on for as long as it runs and off
+    /// again.
+    #[test]
+    fn programs_may_turn_on_the_kitty_keyboard_protocol() {
+        let size = TerminalSize::new(20, 4, 8, 16);
+        let (proxy, commands, _) = test_proxy(size);
+        let mut term = AlacrittyTerm::new(terminal_config(), &size, proxy.clone());
+        let answer = |term: &AlacrittyTerm| {
+            proxy.answer(term);
+            commands
+                .try_iter()
+                .map(|command| match command {
+                    TerminalTransportCommand::Write(bytes) => String::from_utf8(bytes).unwrap(),
+                    _ => panic!("only writes"),
+                })
+                .collect::<Vec<_>>()
+        };
+        feed(&mut term, b"\x1b[?u");
+        assert_eq!(answer(&term), ["\x1b[?0u"]);
+        feed(&mut term, b"\x1b[>5u\x1b[?u");
+        assert_eq!(answer(&term), ["\x1b[?5u"]);
+        assert!(term.mode().contains(TermMode::DISAMBIGUATE_ESC_CODES));
+        feed(&mut term, b"\x1b[<u");
+        assert!(!term.mode().intersects(TermMode::KITTY_KEYBOARD_PROTOCOL));
     }
 
     /// Each link on screen: the text of its cells and where it leads.

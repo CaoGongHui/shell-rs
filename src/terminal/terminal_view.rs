@@ -2272,6 +2272,14 @@ pub(crate) fn encode_key(keystroke: &Keystroke, mode: TermMode) -> Option<Vec<u8
     if keystroke.modifiers.platform {
         return None;
     }
+    if mode.intersects(
+        TermMode::DISAMBIGUATE_ESC_CODES
+            | TermMode::REPORT_EVENT_TYPES
+            | TermMode::REPORT_ALL_KEYS_AS_ESC,
+    ) && let Some(sequence) = encode_kitty_key(keystroke)
+    {
+        return Some(sequence);
+    }
     let modifiers = keystroke.modifiers;
     let key = keystroke.key.as_str();
     let app_cursor = mode.contains(TermMode::APP_CURSOR);
@@ -2336,6 +2344,54 @@ pub(crate) fn encode_key(keystroke: &Keystroke, mode: TermMode) -> Option<Vec<u8
         sequence.insert(0, 0x1b);
     }
     Some(sequence)
+}
+
+/// A key as the kitty keyboard protocol tells it apart, once a program
+/// asked for that: `CSI code ; modifiers u` for Esc, and for Enter, Tab,
+/// Backspace, the space bar and characters typed with modifiers other than
+/// Shift alone. Shift+Enter, which otherwise sends what Enter does, is how
+/// Claude Code takes a new line. Every other key goes as it does without
+/// the protocol, which the protocol keeps: plain Enter still runs `reset`
+/// after a program that left the protocol on.
+///
+/// Only what the protocol's first flag asks for, and only presses: a
+/// program asking for more gets this much and reads the rest as it would
+/// without the protocol.
+fn encode_kitty_key(keystroke: &Keystroke) -> Option<Vec<u8>> {
+    let modifiers = keystroke.modifiers;
+    let (code, text) = match keystroke.key.as_str() {
+        "escape" => (27, false),
+        "enter" => (13, false),
+        "tab" => (9, false),
+        "backspace" => (127, false),
+        "space" => (32, true),
+        key => {
+            let mut characters = key.chars();
+            let character = characters.next()?;
+            if characters.next().is_some() {
+                // A named key: arrows, F1… go as they do without the protocol.
+                return None;
+            }
+            // Letters by their lowercase, as the protocol numbers them.
+            (u32::from(character.to_ascii_lowercase()), true)
+        }
+    };
+    let modified = modifiers.control || modifiers.alt || (modifiers.shift && !text);
+    if !modified && code != 27 {
+        return None;
+    }
+    let modifier = 1
+        + u8::from(modifiers.shift)
+        + u8::from(modifiers.alt) * 2
+        + u8::from(modifiers.control) * 4;
+    Some(
+        if modifier == 1 {
+            format!("\x1b[{code}u")
+        } else {
+            format!("\x1b[{code};{modifier}u")
+        }
+        .into_bytes(),
+    )
 }
 
 #[cfg(test)]
@@ -2416,6 +2472,57 @@ mod tests {
         assert_eq!(
             encode_key(&key("shift-up"), TermMode::default()),
             Some(b"\x1b[1;2A".to_vec())
+        );
+    }
+
+    #[test]
+    fn keys_are_told_apart_once_a_program_asks() {
+        let kitty = TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALTERNATE_KEYS;
+        for (name, sequence) in [
+            ("shift-enter", "\x1b[13;2u"),
+            ("alt-enter", "\x1b[13;3u"),
+            ("ctrl-enter", "\x1b[13;5u"),
+            ("escape", "\x1b[27u"),
+            ("shift-tab", "\x1b[9;2u"),
+            ("alt-backspace", "\x1b[127;3u"),
+            ("ctrl-space", "\x1b[32;5u"),
+            ("ctrl-c", "\x1b[99;5u"),
+            ("ctrl-shift-a", "\x1b[97;6u"),
+            ("alt-b", "\x1b[98;3u"),
+        ] {
+            assert_eq!(
+                encode_key(&key(name), kitty),
+                Some(sequence.as_bytes().to_vec()),
+                "{name}"
+            );
+        }
+        // What only one key sends goes as it does without the protocol.
+        for (name, sequence) in [
+            ("enter", "\r"),
+            ("tab", "\t"),
+            ("backspace", "\x7f"),
+            ("up", "\x1b[A"),
+            ("shift-up", "\x1b[1;2A"),
+            ("pagedown", "\x1b[6~"),
+        ] {
+            assert_eq!(
+                encode_key(&key(name), kitty),
+                Some(sequence.as_bytes().to_vec()),
+                "{name}"
+            );
+        }
+        // Text is typed, Shift or not.
+        for name in ["a", "shift-a", "space", "shift-space"] {
+            assert_eq!(encode_key(&key(name), kitty), None, "{name}");
+        }
+        // Without the protocol Shift+Enter is Enter, as everywhere.
+        assert_eq!(
+            encode_key(&key("shift-enter"), TermMode::default()),
+            Some(b"\r".to_vec())
+        );
+        assert_eq!(
+            encode_key(&key("alt-enter"), TermMode::default()),
+            Some(b"\x1b\r".to_vec())
         );
     }
 
