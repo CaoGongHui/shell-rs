@@ -66,9 +66,10 @@ pub fn send_back(window: &mut Window, cx: &mut App) {
 pub fn restore_window(window: &Window) {
     #[cfg(windows)]
     {
-        use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
         use windows_sys::Win32::UI::WindowsAndMessaging::{SW_RESTORE, ShowWindow};
-        if let Ok(handle) = window.window_handle()
+        // GPUI's own `window_handle` is the app's handle, not the system's.
+        if let Ok(handle) = HasWindowHandle::window_handle(window)
             && let RawWindowHandle::Win32(handle) = handle.as_raw()
         {
             // SAFETY: the handle is this open window's.
