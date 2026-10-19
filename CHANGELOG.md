@@ -4,6 +4,17 @@
 
 One section per version, titled `## [version]`, optionally followed by a date. Each section is written in English here and in Chinese in [CHANGELOG.zh.md](CHANGELOG.zh.md), in the same change. The release workflow (`.github/workflows/release.yml`) takes the section with the tag’s version, as it is, for the GitHub release. The website’s changelog shows this file in English and Japanese and CHANGELOG.zh.md in Chinese (ShellRS’s update dialog opens it with What’s new). Written in Markdown, for users.
 
+## [0.1.14-beta.2]
+
+### Added
+
+- Maximize window ⌃⌘↑ and Restore window ⌃⌘↓ shortcuts (macOS).
+- A system-wide Show or hide ShellRS shortcut that works from any app; it has no keys until you set them in Settings › Keyboard shortcuts.
+
+### Improved
+
+- In a terminal on Windows and Linux, Ctrl with a letter (such as tmux’s Ctrl+B) goes to the shell instead of triggering a ShellRS shortcut.
+
 ## [0.1.14-beta.1]
 
 ### Added
