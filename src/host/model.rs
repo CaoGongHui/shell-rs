@@ -1,6 +1,7 @@
 use gpui_kit::{Rgba, SharedString, rgb};
 use rand::{Rng as _, distr::Alphanumeric};
 
+use crate::app::ToolKind;
 use crate::i18n::t;
 use crate::secrets::SecretRef;
 
@@ -432,6 +433,10 @@ pub struct Host {
     /// show the right mark before anyone connects. `None` until a probe
     /// succeeds, and the host tree falls back to the name's first letter.
     pub os: Option<HostOs>,
+    /// The right sidebar's tool as the host's terminals last had it, `None`
+    /// while hidden: the next terminal of the host in front brings it back.
+    /// Written by the sidebar, never by the host form.
+    pub sidebar_tool: Option<ToolKind>,
 }
 
 impl Host {
@@ -453,6 +458,7 @@ impl Host {
             notes: draft.notes,
             sort_order: 0,
             os: None,
+            sidebar_tool: None,
         }
     }
 

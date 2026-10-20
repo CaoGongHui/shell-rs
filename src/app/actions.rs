@@ -492,8 +492,9 @@ impl ToolKind {
         ToolKind::Gpu,
     ];
 
-    /// What `settings.json` calls the tool in 侧栏功能. Never changed once
-    /// released: a renamed key would bring a hidden tool back.
+    /// What `settings.json` calls the tool in 侧栏功能, and the database
+    /// in a host's `sidebar_tool`. Never changed once released: a renamed
+    /// key would bring a hidden tool back, and lose the tool a host keeps.
     pub fn key(self) -> &'static str {
         match self {
             ToolKind::Snippets => "snippets",
@@ -508,6 +509,11 @@ impl ToolKind {
             ToolKind::Monitor => "monitor",
             ToolKind::Gpu => "gpu",
         }
+    }
+
+    /// The tool `key` names; none for a key no tool has.
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|tool| tool.key() == key)
     }
 
     /// Whether the sidebar offers the tool until the user says otherwise.

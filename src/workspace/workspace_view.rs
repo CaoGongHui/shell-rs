@@ -208,9 +208,9 @@ pub struct Workspace {
     /// one in front. Another tab in front of the other half of a split
     /// leaves it be.
     pub(super) tool_terminal_choice: Option<RemoteTerminalId>,
-    /// Whether the right sidebar is to show while an SSH terminal is in
-    /// front. It hides with any other tab and comes back with the next one.
-    pub(super) tool_sidebar_wanted: bool,
+    /// The right sidebar's tool for the terminals of a host deleted while
+    /// they are open: the store no longer has the host to keep it on.
+    pub(super) deleted_host_tools: HashMap<HostId, ToolKind>,
     pub(super) prompt_queue: VecDeque<(PromptOwner, HostId, ConnectionPrompt)>,
     pub(super) active_prompt: Option<(PromptOwner, HostId, u64)>,
     /// Dispatch target for the title bar and start page: actions sent to it
@@ -425,9 +425,6 @@ impl Workspace {
                     .sidebar_tools
                     .shows(crate::app::ToolKind::Kubernetes)
                 {
-                    if this.tools.read(cx).tool() == crate::app::ToolKind::Kubernetes {
-                        this.tool_sidebar_wanted = false;
-                    }
                     this.tools
                         .update(cx, |tools, cx| tools.disable_kubernetes(cx));
                 }
@@ -575,7 +572,7 @@ impl Workspace {
             broadcast: Default::default(),
             broadcast_bar,
             tool_terminal_choice: None,
-            tool_sidebar_wanted: false,
+            deleted_host_tools: HashMap::new(),
             prompt_queue: VecDeque::new(),
             active_prompt: None,
             focus_handle,

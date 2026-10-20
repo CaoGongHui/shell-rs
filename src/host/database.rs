@@ -13,6 +13,7 @@ use std::{
 use gpui_kit::SharedString;
 use rusqlite::{Connection, params};
 
+use crate::app::ToolKind;
 use crate::i18n::t;
 
 use super::{
@@ -39,8 +40,9 @@ fn from_sql(id: i64) -> u64 {
 ///
 /// 13 is the schema as it was rebuilt before the first release. Versions up
 /// to 12 were development builds, and their files are refused. 14 adds the
-/// command snippets, 15 the serial hosts, 16 the Telnet hosts.
-const SCHEMA_VERSION: i64 = 16;
+/// command snippets, 15 the serial hosts, 16 the Telnet hosts, 17 each
+/// host's right sidebar.
+const SCHEMA_VERSION: i64 = 17;
 
 /// The whole schema, as a new database gets it.
 ///
@@ -63,8 +65,10 @@ const SCHEMA_VERSION: i64 = 16;
 ///     `proxy`, whose four columns are set exactly for a proxy route.
 ///   - `public_id` may be missing, which a row added by hand is until the
 ///     next open (see `fill_missing_public_ids`); the ones there are unique.
-///   - `os` and `last_connected_at` are written by connections, not by the
-///     host form.
+///   - `os` and `last_connected_at` are written by connections, and
+///     `sidebar_tool` (the right sidebar's tool as the host's terminals
+///     last had it, `ToolKind::key`; `NULL` while hidden) by the sidebar;
+///     none of them by the host form.
 ///   - `protocol` is `ssh`, `telnet` or `serial`. A serial host's device is
 ///     its `address` and its line is in the five `serial_*` columns, set
 ///     exactly for a serial host; the login and route columns keep what a
@@ -142,6 +146,7 @@ CREATE TABLE hosts (
         CHECK (protocol = 'telnet' OR telnet_user_prompt IS NULL),
     telnet_pass_prompt TEXT CHECK (telnet_pass_prompt <> '')
         CHECK (protocol = 'telnet' OR telnet_pass_prompt IS NULL),
+    sidebar_tool      TEXT,
     CHECK ((auth = 'credential') = (credential_id IS NOT NULL)),
     CHECK ((auth = 'credential') = (username IS NULL)),
     CHECK ((route = 'proxy') = (proxy_kind IS NOT NULL)),
@@ -215,7 +220,7 @@ enum Step {
 ///
 /// A step is history: it says what that version's change was, and stays as
 /// written when `SCHEMA` changes again.
-const STEPS: [(i64, Step); 3] = [
+const STEPS: [(i64, Step); 4] = [
     (
     13,
     // The command snippets.
@@ -264,6 +269,16 @@ COMMIT;",
     ),
     // The Telnet hosts.
     (15, Step::Code(add_telnet)),
+    (
+        16,
+        // Each host's right sidebar.
+        Step::Sql(
+            "BEGIN;
+ALTER TABLE hosts ADD COLUMN sidebar_tool      TEXT;
+PRAGMA user_version = 17;
+COMMIT;",
+        ),
+    ),
 ];
 
 /// Version 16, the Telnet hosts: `protocol` takes `telnet`, and the two
@@ -458,7 +473,8 @@ impl HostDatabase {
                 "SELECT id, public_id, group_id, sort_order, name, address, port, auth, username, \
                  credential_id, route, proxy_kind, proxy_host, proxy_port, proxy_username, \
                  notes, os, protocol, serial_baud, serial_data_bits, serial_parity, \
-                 serial_stop_bits, serial_flow, telnet_user_prompt, telnet_pass_prompt \
+                 serial_stop_bits, serial_flow, telnet_user_prompt, telnet_pass_prompt, \
+                 sidebar_tool \
                  FROM hosts ORDER BY id",
             )?
             .query_map([], |row| {
@@ -490,6 +506,7 @@ impl HostDatabase {
                     user_prompt: row.get::<_, Option<String>>(23)?.unwrap_or_default().into(),
                     password_prompt: row.get::<_, Option<String>>(24)?.unwrap_or_default().into(),
                 };
+                let sidebar_tool: Option<String> = row.get(25)?;
                 let mut host = Host::new(
                     HostId(from_sql(id)),
                     HostDraft::new(
@@ -521,6 +538,7 @@ impl HostDatabase {
                     _ => Route::Direct,
                 };
                 host.os = os.as_deref().and_then(HostOs::from_stored);
+                host.sidebar_tool = sidebar_tool.as_deref().and_then(ToolKind::from_key);
                 match protocol.as_str() {
                     "serial" => host.protocol = Protocol::Serial(serial.settings()),
                     "telnet" => host.protocol = Protocol::Telnet(telnet),
@@ -767,9 +785,9 @@ impl HostDatabase {
              username, credential_id, route, proxy_kind, proxy_host, proxy_port, \
              proxy_username, notes, os, protocol, serial_baud, serial_data_bits, \
              serial_parity, serial_stop_bits, serial_flow, telnet_user_prompt, \
-             telnet_pass_prompt) \
+             telnet_pass_prompt, sidebar_tool) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, \
-             ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
+             ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26)",
             params![
                 to_sql(host.id.0),
                 host.public_id.as_str(),
@@ -796,6 +814,7 @@ impl HostDatabase {
                 row.serial.flow,
                 row.telnet_user_prompt,
                 row.telnet_password_prompt,
+                host.sidebar_tool.map(ToolKind::key),
             ],
         )?;
             write_jumps(connection, host)
@@ -803,9 +822,9 @@ impl HostDatabase {
     }
 
     /// Rewrite the fields the host form edits, jump hosts included.
-    /// `last_connected_at` and `os` are left alone: they are written by
-    /// `touch_connected` and `set_host_os`, and neither is part of the
-    /// host form. `public_id` and `protocol` never change.
+    /// `last_connected_at`, `os` and `sidebar_tool` are left alone: they are
+    /// written by `touch_connected`, `set_host_os` and
+    /// `set_host_sidebar_tool`, and none is part of the host form. `public_id` and `protocol` never change.
     pub fn update_host(&self, host: &Host) -> rusqlite::Result<()> {
         self.atomically(|connection| {
             let row = HostRow::of(host);
@@ -1103,6 +1122,20 @@ impl HostDatabase {
         self.connection.execute(
             "UPDATE hosts SET os = ?2 WHERE id = ?1",
             params![to_sql(id.0), os.map(HostOs::as_str)],
+        )?;
+        Ok(())
+    }
+
+    /// Record the right sidebar's tool as the host's terminals have it now,
+    /// `None` for hidden.
+    pub fn set_host_sidebar_tool(
+        &self,
+        id: HostId,
+        tool: Option<ToolKind>,
+    ) -> rusqlite::Result<()> {
+        self.connection.execute(
+            "UPDATE hosts SET sidebar_tool = ?2 WHERE id = ?1",
+            params![to_sql(id.0), tool.map(ToolKind::key)],
         )?;
         Ok(())
     }
@@ -1910,6 +1943,81 @@ INSERT INTO snippets (id, category_id, name, command, scope_host_id)
         assert!(data.forwards.is_empty());
         assert!(data.snippets.is_empty());
         assert_eq!(data.hosts[0].route, Route::Jump(vec![None, None]));
+    }
+
+    #[test]
+    fn a_version_16_file_gets_the_sidebar_column_and_keeps_its_hosts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shellrs.db");
+        {
+            // Version 16 as files of it have it: 15's schema, taken on by
+            // its step.
+            let old = Connection::open(&path).unwrap();
+            old.execute_batch(&format!(
+                "BEGIN;\n{SCHEMA_15}\nPRAGMA user_version = 15;\nCOMMIT;"
+            ))
+            .unwrap();
+            add_telnet(&old).unwrap();
+            old.execute(
+                "INSERT INTO hosts (id, name, address, port, auth, username, os, protocol) \
+                 VALUES (1, 'switch', '10.0.0.5', 23, 'no-password', '', 'debian', 'telnet')",
+                [],
+            )
+            .unwrap();
+        }
+
+        let db = HostDatabase::open(&path).unwrap();
+        let version: i64 = db
+            .connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        assert!(dir.path().join("shellrs.db.v16.bak").exists());
+        let fresh = HostDatabase::in_memory().unwrap();
+        assert_eq!(schema_of(&db.connection), schema_of(&fresh.connection));
+        let data = db.load().unwrap();
+        assert_eq!(data.hosts.len(), 1);
+        assert_eq!(data.hosts[0].os, Some(HostOs::Debian));
+        assert!(data.hosts[0].protocol.telnet().is_some());
+        assert_eq!(data.hosts[0].sidebar_tool, None);
+    }
+
+    #[test]
+    fn a_host_keeps_its_sidebar_tool_apart_from_the_form() {
+        let db = HostDatabase::in_memory().unwrap();
+        let mut host = Host::new(
+            HostId(1),
+            HostDraft::new("web", "10.0.0.1", 22, "root", AuthKind::Password, None),
+        );
+        host.sidebar_tool = Some(ToolKind::Files);
+        db.insert_host(&host).unwrap();
+        assert_eq!(
+            db.load().unwrap().hosts[0].sidebar_tool,
+            Some(ToolKind::Files)
+        );
+
+        // Saving the form leaves it alone; the sidebar changes it.
+        host.name = "web-01".into();
+        host.sidebar_tool = None;
+        db.update_host(&host).unwrap();
+        assert_eq!(
+            db.load().unwrap().hosts[0].sidebar_tool,
+            Some(ToolKind::Files)
+        );
+        db.set_host_sidebar_tool(HostId(1), Some(ToolKind::Monitor))
+            .unwrap();
+        assert_eq!(
+            db.load().unwrap().hosts[0].sidebar_tool,
+            Some(ToolKind::Monitor)
+        );
+        db.set_host_sidebar_tool(HostId(1), None).unwrap();
+        assert_eq!(db.load().unwrap().hosts[0].sidebar_tool, None);
+
+        // A tool this version does not know is no tool.
+        db.connection
+            .execute("UPDATE hosts SET sidebar_tool = 'radar' WHERE id = 1", [])
+            .unwrap();
+        assert_eq!(db.load().unwrap().hosts[0].sidebar_tool, None);
     }
 
     #[test]

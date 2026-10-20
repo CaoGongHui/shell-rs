@@ -1375,10 +1375,10 @@ async fn kubernetes_sidebar_setting_hides_stops_and_reopens_the_tool(cx: &mut Te
             .within("sidebar-tools-hidden")
             .click("sidebar-tool-kubernetes", cx)
     });
+    // web-01 kept Kubernetes: its terminal opens with it again.
     in_frame(cx, handle, |window, cx| {
         window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx)
     });
-    in_frame(cx, handle, |window, cx| window.click("tool-kubernetes", cx));
     label(cx, handle, "k8s-count", "2 项资源 · 2 个命名空间").await;
     assert_eq!(
         factory.exec_count(),

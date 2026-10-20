@@ -5,10 +5,12 @@
 //! the settings or the start page in front it is not there at all, switch
 //! included. With the center split it works on the SSH terminal in front
 //! last, as long as that one is on screen, and names its host; it hides once
-//! no SSH terminal shows. Whether it is open and which tool it shows stay as they were,
-//! so the next SSH terminal brings it back the same. A tool that cannot work
-//! on the host in front (the monitor on a host known not to run Linux) is
-//! not offered there: no button, and no sidebar while it is the one picked.
+//! no SSH terminal shows. Whether it is open and which tool it shows are the
+//! host's: the host keeps them, a saved one across launches, and its next
+//! terminal in front brings the sidebar back the same, while another host's
+//! has it as that host left it. A tool that cannot work on the host in front
+//! (the monitor on a host known not to run Linux) is not offered there: no
+//! button, and no sidebar while it is the one the host keeps.
 
 use std::rc::Rc;
 
@@ -31,7 +33,7 @@ use crate::docker::{
     self, ContainerCommand, ContainerSubject, DockerObject, open_container_dialog,
     open_object_dialog,
 };
-use crate::host::HostOs;
+use crate::host::{HostId, HostOs};
 use crate::i18n::t;
 use crate::processes::{end_command, ended, open_process_dialog};
 use crate::services::{ServiceCommand, control_command, controlled, open_service_dialog};
@@ -180,18 +182,41 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let tool = action.0;
+        let Some(terminal) = self.tool_terminal(cx) else {
+            return;
+        };
         if !self.offered_tools(cx).contains(&tool) {
             return;
         }
         if self.tool_showing(cx) == Some(tool) {
-            self.tool_sidebar_wanted = false;
+            self.remember_host_tool(terminal.host, None, cx);
         } else {
-            self.tools
-                .update(cx, |tools, cx| tools.show(tool, window, cx));
-            self.tool_sidebar_wanted = true;
+            self.remember_host_tool(terminal.host, Some(tool), cx);
             self.count_tool(tool);
         }
         self.sync_tool_sidebar(window, cx);
+    }
+
+    /// The right sidebar's tool as the host's terminals last had it, `None`
+    /// while hidden.
+    fn host_tool(&self, host: HostId, cx: &App) -> Option<ToolKind> {
+        match self.store.read(cx).host(host) {
+            Some(host) => host.sidebar_tool,
+            None => self.deleted_host_tools.get(&host).copied(),
+        }
+    }
+
+    /// Keep the right sidebar's tool for the host's terminals: on the host,
+    /// or here for one deleted while its terminals are open.
+    fn remember_host_tool(&mut self, host: HostId, tool: Option<ToolKind>, cx: &mut Context<Self>) {
+        if self.store.read(cx).host(host).is_some() {
+            self.store
+                .update(cx, |store, cx| store.set_host_sidebar_tool(host, tool, cx));
+        } else if let Some(tool) = tool {
+            self.deleted_host_tools.insert(host, tool);
+        } else {
+            self.deleted_host_tools.remove(&host);
+        }
     }
 
     /// Undo a drag that took the right sidebar below its narrowest. Runs
@@ -692,28 +717,33 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let offered = self.offered_tools(cx);
-        let Some(&first) = offered.first() else {
+        let (Some(terminal), Some(&first)) = (self.tool_terminal(cx), offered.first()) else {
             return;
         };
-        if self.dock_area.read(cx).is_dock_open(DockPlacement::Right) {
-            self.tool_sidebar_wanted = false;
+        let tool = if self.dock_area.read(cx).is_dock_open(DockPlacement::Right) {
+            None
         } else {
-            if !offered.contains(&self.tools.read(cx).tool()) {
-                self.tools
-                    .update(cx, |tools, cx| tools.show(first, window, cx));
-            }
-            self.tool_sidebar_wanted = true;
-        }
+            let last = self.tools.read(cx).tool();
+            Some(if offered.contains(&last) { last } else { first })
+        };
+        self.remember_host_tool(terminal.host, tool, cx);
         self.sync_tool_sidebar(window, cx);
     }
 
-    /// Point the sidebar at the SSH terminal in front, and open it if one is,
-    /// its tool works on the host and the sidebar is wanted; close it
-    /// otherwise. Also when the host turns out to run something else.
+    /// Point the sidebar at the SSH terminal in front, and open it on the
+    /// tool its host keeps if one is and the tool works on the host; close
+    /// it otherwise. Also when the host turns out to run something else.
     pub(super) fn sync_tool_sidebar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let terminal = self.tool_terminal(cx);
-        let offered = self.offered_tools(cx).contains(&self.tools.read(cx).tool());
-        let open = self.tool_sidebar_wanted && terminal.is_some() && offered;
+        let tool = terminal
+            .as_ref()
+            .and_then(|terminal| self.host_tool(terminal.host, cx))
+            .filter(|tool| self.offered_tools(cx).contains(tool));
+        if let Some(tool) = tool {
+            self.tools
+                .update(cx, |tools, cx| tools.show(tool, window, cx));
+        }
+        let open = tool.is_some();
         // A terminal's 文件 is made the first time it is shown, and kept.
         // 目录跟随's check goes first: the terminal's channels open one at a
         // time, so it is answered before 文件's opens and 文件 starts out in

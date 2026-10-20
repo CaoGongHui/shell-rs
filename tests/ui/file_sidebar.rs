@@ -197,11 +197,8 @@ async fn each_terminal_has_files_of_its_own(cx: &mut TestAppContext) {
     });
     wait_for_path(cx, fixture.handle, FILES, "/srv").await;
 
-    // The other terminal's, made as it comes forward with 文件 showing.
-    in_frame(cx, fixture.handle, |window, cx| {
-        window.click(("terminal-tab", INITIAL_STAGING_TERMINAL), cx)
-    });
-    wait_for_path(cx, fixture.handle, FILES + 1, "/home/tester").await;
+    // The other terminal's, made once 文件 is opened there too.
+    show_files(cx, &fixture, INITIAL_STAGING_TERMINAL, FILES + 1).await;
     in_frame(cx, fixture.handle, |window, _| {
         assert!(window.try_find(("remote-pane", FILES)).is_none());
     });

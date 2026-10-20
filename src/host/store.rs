@@ -7,6 +7,7 @@ use std::sync::Arc;
 use gpui_kit::{Context, EventEmitter, SharedString, Task};
 use zeroize::Zeroizing;
 
+use crate::app::ToolKind;
 use crate::i18n::t;
 use crate::secrets::{NoSecretStore, SecretRef, SharedSecretStore, TemporarySecretStore};
 
@@ -130,6 +131,7 @@ enum Change {
     DeleteGroup,
     Recent,
     HostOs,
+    SidebarTool,
     NewSnippet,
     SaveSnippet,
     DeleteSnippet,
@@ -167,6 +169,7 @@ impl Change {
             Change::DeleteGroup => t!("host.store.not_saved.delete_group", error = error),
             Change::Recent => t!("host.store.not_saved.recent", error = error),
             Change::HostOs => t!("host.store.not_saved.host_os", error = error),
+            Change::SidebarTool => t!("host.store.not_saved.sidebar_tool", error = error),
             Change::NewSnippet => t!("host.store.not_saved.new_snippet", error = error),
             Change::SaveSnippet => t!("host.store.not_saved.save_snippet", error = error),
             Change::DeleteSnippet => t!("host.store.not_saved.delete_snippet", error = error),
@@ -767,13 +770,14 @@ impl HostStore {
         };
         // The form owns none of these, so rebuilding from the draft must not
         // drop them.
-        let os = host.os;
+        let (os, sidebar_tool) = (host.os, host.sidebar_tool);
         let sort_order = host.sort_order;
         let old_group = host.group;
         let public_id = host.public_id.clone();
         *host = Host::new(id, draft);
         host.public_id = public_id;
         host.os = os;
+        host.sidebar_tool = sidebar_tool;
         host.sort_order = if host.group == old_group {
             sort_order
         } else {
@@ -837,14 +841,16 @@ impl HostStore {
         let ix = self.hosts.iter().position(|s| s.id == id)?;
         let mut draft = self.hosts[ix].draft();
         draft.name = t!("host.store.copy_name", name = draft.name);
-        // Same host, so the copy already knows what it will find there.
-        let os = self.hosts[ix].os;
+        // Same host, so the copy already knows what it will find there,
+        // and opens the sidebar as the original does.
+        let (os, sidebar_tool) = (self.hosts[ix].os, self.hosts[ix].sidebar_tool);
         let copy_id = HostId(self.next_host_id);
         self.next_host_id += 1;
         let mut copy = Host::new(copy_id, draft);
         // A copy is another host, so a third party must not confuse the two.
         copy.public_id = self.unused_public_id();
         copy.os = os;
+        copy.sidebar_tool = sidebar_tool;
         copy.sort_order = self.hosts[ix].sort_order + 1;
         for host in &mut self.hosts {
             if host.group == copy.group && host.sort_order >= copy.sort_order {
@@ -1619,6 +1625,37 @@ impl HostStore {
             return false;
         }
         host.os = os;
+        true
+    }
+
+    /// Remember the right sidebar's tool for the host's terminals, `None`
+    /// for hidden. Only a saved host keeps it for the next launch.
+    pub fn set_host_sidebar_tool(
+        &mut self,
+        id: HostId,
+        tool: Option<ToolKind>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.set_host_sidebar_tool_unnotified(id, tool) {
+            return;
+        }
+        if !self.is_temporary(id) {
+            self.persist(Change::SidebarTool, cx, |db| {
+                db.set_host_sidebar_tool(id, tool)
+            });
+        }
+        cx.notify();
+    }
+
+    /// Returns whether the remembered tool changed.
+    pub fn set_host_sidebar_tool_unnotified(&mut self, id: HostId, tool: Option<ToolKind>) -> bool {
+        let Some(host) = self.host_mut(id) else {
+            return false;
+        };
+        if host.sidebar_tool == tool {
+            return false;
+        }
+        host.sidebar_tool = tool;
         true
     }
 
@@ -2627,6 +2664,57 @@ mod tests {
 
         let copy = store.duplicate_unnotified(id).unwrap();
         assert_eq!(store.host(copy).unwrap().os, Some(HostOs::Alpine));
+    }
+
+    #[test]
+    fn the_sidebar_tool_survives_an_edit_and_goes_with_a_copy() {
+        use crate::app::ToolKind;
+
+        let mut store = HostStore::empty();
+        let id = store.insert_unnotified(draft("web", None));
+        assert_eq!(store.host(id).unwrap().sidebar_tool, None);
+        assert!(store.set_host_sidebar_tool_unnotified(id, Some(ToolKind::Files)));
+        assert!(!store.set_host_sidebar_tool_unnotified(id, Some(ToolKind::Files)));
+        assert!(!store.set_host_sidebar_tool_unnotified(HostId(99), Some(ToolKind::Files)));
+
+        store.update_unnotified(id, draft("web-renamed", None));
+        assert_eq!(store.host(id).unwrap().sidebar_tool, Some(ToolKind::Files));
+        let copy = store.duplicate_unnotified(id).unwrap();
+        assert_eq!(
+            store.host(copy).unwrap().sidebar_tool,
+            Some(ToolKind::Files)
+        );
+    }
+
+    #[gpui_kit::test]
+    fn only_a_saved_host_keeps_its_sidebar_tool_for_the_next_launch(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use crate::app::ToolKind;
+        use gpui_kit::AppContext as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shellrs.db");
+        let store = cx.new(|_| HostStore::load(HostDatabase::open(&path).unwrap()).unwrap());
+        let (saved, temporary) = store.update(cx, |store, cx| {
+            let saved = store.insert(draft("web", None), cx);
+            let temporary = store.insert_temporary(draft("quick", None), None, cx);
+            store.set_host_sidebar_tool(saved, Some(ToolKind::Files), cx);
+            store.set_host_sidebar_tool(temporary, Some(ToolKind::Docker), cx);
+            (saved, temporary)
+        });
+        let tool_of = |store: &HostStore, id| store.host(id).and_then(|host| host.sidebar_tool);
+        store.read_with(cx, |store, _| {
+            assert_eq!(tool_of(store, temporary), Some(ToolKind::Docker));
+        });
+        let reopened = HostStore::load(HostDatabase::open(&path).unwrap()).unwrap();
+        assert_eq!(tool_of(&reopened, saved), Some(ToolKind::Files));
+        assert!(reopened.host(temporary).is_none());
+
+        // Hidden is kept the same way.
+        store.update(cx, |store, cx| store.set_host_sidebar_tool(saved, None, cx));
+        let reopened = HostStore::load(HostDatabase::open(&path).unwrap()).unwrap();
+        assert_eq!(tool_of(&reopened, saved), None);
     }
 
     #[test]
