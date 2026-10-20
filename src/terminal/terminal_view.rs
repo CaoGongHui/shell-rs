@@ -1277,6 +1277,9 @@ impl Render for TerminalView {
             // The margin and the part of a cell the grid does not fill are
             // the terminal's too.
             .bg(TerminalColors::current(cx).background())
+            // An I-beam over the text, as in other terminals; the scrollbar
+            // and a link under the open key set their own pointer over it.
+            .cursor_text()
             .child(terminal)
             // Over the whole margin, so the thumb lies mostly beside the text.
             .child(
