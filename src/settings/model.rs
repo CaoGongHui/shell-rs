@@ -645,11 +645,8 @@ mod tests {
         let settings: AppSettings =
             serde_json::from_str(r#"{"file_size_format":"short"}"#).unwrap();
         assert_eq!(settings.file_size_format, FileSizeFormat::Short);
-        // The SFTP lists keep the app's monochrome icons unless asked.
-        assert_eq!(
-            AppSettings::default().file_icon_style,
-            FileIconStyle::Monochrome
-        );
+        // The SFTP lists show color icons, as in WinSCP, unless asked not to.
+        assert_eq!(AppSettings::default().file_icon_style, FileIconStyle::Color);
         // Hidden files are left out unless the file says otherwise, for
         // each side on its own.
         assert_eq!(

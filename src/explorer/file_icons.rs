@@ -14,14 +14,14 @@ use super::file_icons_table::{
 use super::{FileEntry, FileKind};
 use crate::app::CatalogIcon;
 
-/// 图标风格: monochrome, like every other icon in the app, until the user
-/// picks color, as in WinSCP and Xftp. A global, set from the settings like
-/// `FileSizeFormat`.
+/// 图标风格: color, as in WinSCP and Xftp, until the user picks
+/// monochrome, like every other icon in the app. A global, set from the
+/// settings like `FileSizeFormat`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FileIconStyle {
-    #[default]
     Monochrome,
+    #[default]
     Color,
 }
 

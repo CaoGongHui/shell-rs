@@ -332,12 +332,12 @@ async fn sftp_size_column_shows_kilobytes_until_another_format_is_chosen(cx: &mu
     }
 }
 
-/// 设置 › SFTP › 图标风格: the app's monochrome icons until color is chosen,
-/// then color ones in the lists, links included, and in the page's preview.
-/// Menus are not driven here: the dropdown's item writes the settings store,
-/// so the test writes it the same way.
+/// 设置 › SFTP › 图标风格: color icons in the lists, links included, until
+/// monochrome is chosen, then the app's own; and color ones in the page's
+/// preview. Menus are not driven here: the dropdown's item writes the
+/// settings store, so the test writes it the same way.
 #[gpui_kit::test]
-async fn sftp_lists_take_color_icons_once_chosen_in_the_settings(cx: &mut TestAppContext) {
+async fn sftp_lists_show_color_icons_until_monochrome_is_chosen(cx: &mut TestAppContext) {
     use shellrs::explorer::FileIconStyle;
     let provider = Arc::new(FakeSftpProvider::default());
     let (handle, workspace) = open_workspace_with_sftp(cx, provider);
@@ -353,21 +353,23 @@ async fn sftp_lists_take_color_icons_once_chosen_in_the_settings(cx: &mut TestAp
     };
     let rows = ["..", "目录", "链接目录", "文件 甲.txt"];
     for row in rows {
-        assert!(!colored(cx, row), "{row}");
+        assert!(colored(cx, row), "{row}");
     }
 
     let settings = cx.update(|cx| workspace.read(cx).settings().clone());
-    cx.update(|cx| {
-        settings.update(cx, |settings, cx| {
-            settings.update(
-                |settings| settings.file_icon_style = FileIconStyle::Color,
-                cx,
-            )
-        })
-    });
-    cx.run_until_parked();
-    for row in rows {
-        assert!(colored(cx, row), "{row}");
+    for (style, color) in [
+        (FileIconStyle::Monochrome, false),
+        (FileIconStyle::Color, true),
+    ] {
+        cx.update(|cx| {
+            settings.update(cx, |settings, cx| {
+                settings.update(|settings| settings.file_icon_style = style, cx)
+            })
+        });
+        cx.run_until_parked();
+        for row in rows {
+            assert_eq!(colored(cx, row), color, "{style:?} {row}");
+        }
     }
 
     in_frame(cx, handle, |window, cx| window.click("open-settings", cx));

@@ -58,7 +58,7 @@ fn the_window_coming_forward_is_reported_with_the_setup(cx: &mut TestAppContext)
     assert_eq!(snapshot.hosts, 6);
     assert_eq!(snapshot.appearance, "system");
     assert!(!snapshot.highlight);
-    assert_eq!(snapshot.file_icons, "monochrome");
+    assert_eq!(snapshot.file_icons, "color");
     // The tests' updater has no installer to tell.
     assert_eq!(snapshot.install, "other");
 }
