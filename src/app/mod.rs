@@ -49,6 +49,11 @@ pub const REMOTE_FILE_LIST_CONTEXT: &str = "RemoteFileList";
 /// The 查找文件 window of an SFTP tab.
 pub const FIND_FILES_CONTEXT: &str = "FindFiles";
 
+/// What Linux desktops match ShellRS's windows to its launcher by, for its
+/// icon in the dock: Wayland's app_id and X11's `WM_CLASS`, as
+/// `packaging/linux/shellrs.desktop` names them. Unused elsewhere.
+pub const DESKTOP_APP_ID: &str = "shellrs";
+
 /// The identity the system shows ShellRS's notifications and taskbar button
 /// under: the macOS bundle's, which the Windows setup gives its shortcuts
 /// too. A portable copy has one of its own, so that next to an installed
@@ -137,7 +142,17 @@ mod tests {
     use gpui_kit::TestAppContext;
     use gpui_kit::component::{ActiveTheme as _, Theme, ThemeMode};
 
-    use super::{deepen_list_hover, deepened_hover};
+    use super::{DESKTOP_APP_ID, deepen_list_hover, deepened_hover};
+
+    #[test]
+    fn windows_carry_the_linux_launchers_window_class() {
+        let desktop = include_str!("../../packaging/linux/shellrs.desktop");
+        assert!(
+            desktop
+                .lines()
+                .any(|line| line == format!("StartupWMClass={DESKTOP_APP_ID}"))
+        );
+    }
 
     #[gpui_kit::test]
     fn dark_hover_is_fainter_than_a_selected_row(cx: &mut TestAppContext) {

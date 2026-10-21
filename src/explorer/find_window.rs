@@ -1347,6 +1347,7 @@ impl ExplorerPanel {
             window_bounds: Some(WindowBounds::Windowed(Bounds { origin, size })),
             display_id: window.display(cx).map(|display| display.id()),
             window_min_size: Some(gpui_kit::size(px(520.), px(380.))),
+            app_id: Some(crate::app::DESKTOP_APP_ID.into()),
             ..TitleBar::window_options()
         };
         let mut view = None;

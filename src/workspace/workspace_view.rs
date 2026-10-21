@@ -127,6 +127,7 @@ pub fn window_options(
             width: px(960.),
             height: px(600.),
         }),
+        app_id: Some(crate::app::DESKTOP_APP_ID.into()),
         ..TitleBar::window_options()
     }
 }
