@@ -4,6 +4,13 @@
 
 One section per version, titled `## [version]`, optionally followed by a date. Each section is written in English here and in Chinese in [CHANGELOG.zh.md](CHANGELOG.zh.md), in the same change. The release workflow (`.github/workflows/release.yml`) takes the section with the tag’s version, as it is, for the GitHub release. The website’s changelog shows this file in English and Japanese and CHANGELOG.zh.md in Chinese (ShellRS’s update dialog opens it with What’s new). Written in Markdown, for users.
 
+## [0.1.14-beta.4]
+
+### Added
+
+- Projects in the right sidebar beside local terminals: keep local terminals in groups like hosts, and after reopening ShellRS carry on in the folders they were in.
+- Terminals in Projects keep their last 1,000 lines of output when closed or when ShellRS quits, and show them when opened again; you can turn this off in Settings.
+
 ## [0.1.14-beta.3]
 
 ### Improved
