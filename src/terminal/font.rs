@@ -9,6 +9,7 @@ use gpui_kit::*;
 use unicode_width::UnicodeWidthChar as _;
 
 use super::TerminalColors;
+use super::box_drawing::{self, CellMetrics};
 use crate::i18n::t;
 
 /// The size terminals had before it could be set: the theme's `mono_md`.
@@ -176,10 +177,34 @@ impl RenderOnce for TerminalFontPreview {
                             strikethrough: None,
                         };
                         let cell_width = cell_width(text_style.font(), size, window);
-                        lines
+                        let scale = window.scale_factor();
+                        let metrics = CellMetrics::new(cell_width, row_height, size, scale);
+                        // Box drawing as the terminal draws it, each a space
+                        // in its line.
+                        let mut drawn = Vec::new();
+                        let lines = lines
                             .iter()
-                            .map(|line| {
-                                let cells = in_cells(line);
+                            .enumerate()
+                            .map(|(row, line)| {
+                                let cells: String = in_cells(line)
+                                    .chars()
+                                    .enumerate()
+                                    .map(|(column, character)| {
+                                        match box_drawing::shapes(character, metrics) {
+                                            Some(shapes) => {
+                                                let origin = point(
+                                                    cell_width * column as f32,
+                                                    row_height * row as f32,
+                                                );
+                                                drawn.extend(box_drawing::quads(
+                                                    &shapes, origin, scale, color,
+                                                ));
+                                                ' '
+                                            }
+                                            None => character,
+                                        }
+                                    })
+                                    .collect();
                                 let len = cells.len();
                                 window.text_system().shape_line(
                                     cells.into(),
@@ -188,9 +213,14 @@ impl RenderOnce for TerminalFontPreview {
                                     Some(cell_width),
                                 )
                             })
-                            .collect::<Vec<_>>()
+                            .collect::<Vec<_>>();
+                        (lines, drawn)
                     },
-                    move |bounds, lines, window, cx| {
+                    move |bounds, (lines, drawn), window, cx| {
+                        for mut quad in drawn {
+                            quad.bounds.origin += bounds.origin;
+                            window.paint_quad(quad);
+                        }
                         for (row, line) in lines.iter().enumerate() {
                             let _ = line.paint(
                                 point(bounds.left(), bounds.top() + row_height * row as f32),

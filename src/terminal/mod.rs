@@ -1,5 +1,6 @@
 //! 终端: shared terminal emulation, transports and Dock panels.
 
+mod box_drawing;
 mod broadcast;
 mod directory;
 mod directory_setup;

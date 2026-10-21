@@ -30,6 +30,7 @@ use crate::app::{
 use crate::connection::{ConnectionPromptReply, Latency};
 use crate::i18n::{UiLocale, t};
 
+use super::box_drawing::{self, CellMetrics};
 use super::font;
 use super::mouse::{self, MouseReport, ReportButton, ReportKind};
 use super::scrollbar::ScrollbackHandle;
@@ -1426,6 +1427,8 @@ struct TerminalPaintState {
     viewport: TerminalViewport,
     lines: Vec<ShapedLine>,
     backgrounds: Vec<PaintQuad>,
+    /// Box drawing and blocks, each clipped to its cell.
+    drawn: Vec<(Bounds<Pixels>, PaintQuad)>,
     preedit: Vec<PreeditPaintCell>,
     cursor: Option<PaintQuad>,
     ime_cursor_bounds: Bounds<Pixels>,
@@ -1518,8 +1521,11 @@ impl Element for TerminalElement {
                 .get(row * self.snapshot.columns + column)?
                 .link
         });
+        let scale = window.scale_factor();
+        let metrics = CellMetrics::new(cell_width, line_height, font_size, scale);
         let mut lines = Vec::with_capacity(self.snapshot.rows);
         let mut backgrounds = Vec::new();
+        let mut drawn = Vec::new();
         for (row_index, row) in self
             .snapshot
             .cells
@@ -1563,8 +1569,6 @@ impl Element for TerminalElement {
 
                 let character = painted_cell_text(&cell.character, cell.flags);
                 let font = terminal_font(text_style.font(), cell.flags);
-                let len = character.len();
-                text.push_str(character);
                 // A rule's color, dimmed as the program dimmed the text.
                 let highlight = cell.highlight.map(|highlight| {
                     let color = highlight.hsla();
@@ -1582,16 +1586,36 @@ impl Element for TerminalElement {
                 // A rule colors a link's text too; the underline still says
                 // it is one.
                 let text_color = highlight.or(link).unwrap_or(foreground);
+                let color = if cell.selected {
+                    palette.foreground
+                } else if cell.search == SearchMark::Focused {
+                    cx.theme().warning_foreground
+                } else {
+                    text_color
+                };
+                // Drawn here, a space in the line keeps the cell.
+                let mut characters = character.chars();
+                let shapes = match (characters.next(), characters.next()) {
+                    (Some(character), None) => box_drawing::shapes(character, metrics),
+                    _ => None,
+                };
+                let character = match shapes {
+                    Some(shapes) => {
+                        let cell = geometry.cell_bounds(column, row_index, 1);
+                        drawn.extend(
+                            box_drawing::quads(&shapes, cell.origin, scale, color)
+                                .map(|quad| (cell, quad)),
+                        );
+                        " "
+                    }
+                    None => character,
+                };
+                let len = character.len();
+                text.push_str(character);
                 runs.push(TextRun {
                     len,
                     font,
-                    color: if cell.selected {
-                        palette.foreground
-                    } else if cell.search == SearchMark::Focused {
-                        cx.theme().warning_foreground
-                    } else {
-                        text_color
-                    },
+                    color,
                     background_color: None,
                     underline: match link {
                         Some(color) => Some(UnderlineStyle {
@@ -1680,6 +1704,7 @@ impl Element for TerminalElement {
             viewport,
             lines,
             backgrounds,
+            drawn,
             preedit,
             cursor,
             ime_cursor_bounds,
@@ -1723,6 +1748,11 @@ impl Element for TerminalElement {
                     window,
                     cx,
                 );
+            }
+            for (cell, quad) in state.drawn.drain(..) {
+                window.with_content_mask(Some(ContentMask { bounds: cell }), |window| {
+                    window.paint_quad(quad)
+                });
             }
             for cell in state.preedit.iter_mut() {
                 if let Some(background) = cell.background.take() {
