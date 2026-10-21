@@ -665,14 +665,14 @@ fn build_context_menu(
     }
 }
 
-#[cfg(test)]
+// Unix paths: Windows has its own home folder.
+#[cfg(all(test, unix))]
 mod tests {
     // Imported one by one: `use gpui_kit::*` above would shadow `#[test]`.
     use std::path::Path;
 
     use super::short_path;
 
-    #[cfg(unix)]
     #[test]
     fn the_home_folder_is_written_as_a_tilde() {
         let home = Some(Path::new("/Users/me"));
