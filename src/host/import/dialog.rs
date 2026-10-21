@@ -537,12 +537,14 @@ impl ImportDialog {
         // shows its values as text, like any other saved row.
         let editors = self.editors.get(&ix).filter(|_| !row.existing);
         let text = |id: &'static str, value: String| {
+            let full = value.clone();
             div()
                 .id((id, ix))
                 .test_support()
                 .aria_label(value.clone())
                 .truncate()
                 .text_color(muted)
+                .tooltip(move |window, cx| Tooltip::new(full.clone()).build(window, cx))
                 .child(value)
                 .into_any_element()
         };
@@ -634,6 +636,7 @@ impl ImportDialog {
             .when(row.existing, |status| status.text_color(muted))
             .child(status)
             .into_any_element();
+        let full_address = row.candidate.address.clone();
         let address = div()
             .id(("import-address", ix))
             .test_support()
@@ -641,6 +644,7 @@ impl ImportDialog {
             .truncate()
             .font_family(theme.mono_font_family.clone())
             .when(row.existing, |address| address.text_color(muted))
+            .tooltip(move |window, cx| Tooltip::new(full_address.clone()).build(window, cx))
             .child(row.candidate.address.clone())
             .into_any_element();
         let port = div()
