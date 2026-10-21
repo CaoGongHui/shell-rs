@@ -20,8 +20,9 @@ use super::{
     AuthKind, BookmarkSide, Credential, CredentialDraft, CredentialId, CredentialKind, DataBits,
     FlowControl, ForwardDraft, ForwardEndpoint, ForwardId, ForwardKind, ForwardRule, GroupDraft,
     GroupId, Host, HostDraft, HostGroup, HostId, HostOs, Parity, Protocol, ProxyKind,
-    ProxySettings, PublicId, Route, SerialSettings, Snippet, SnippetCategory, SnippetCategoryId,
-    SnippetDraft, SnippetId, SnippetScope, StopBits, TelnetSettings,
+    ProxySettings, PublicId, Route, SavedTerminal, SavedTerminalId, SavedTerminalTab,
+    SerialSettings, Snippet, SnippetCategory, SnippetCategoryId, SnippetDraft, SnippetId,
+    SnippetScope, StopBits, TelnetSettings, TerminalGroup, TerminalGroupId,
 };
 
 /// SQLite's only integer type is `i64`, so the `u64` ids cross the boundary
@@ -41,8 +42,8 @@ fn from_sql(id: i64) -> u64 {
 /// 13 is the schema as it was rebuilt before the first release. Versions up
 /// to 12 were development builds, and their files are refused. 14 adds the
 /// command snippets, 15 the serial hosts, 16 the Telnet hosts, 17 each
-/// host's right sidebar.
-const SCHEMA_VERSION: i64 = 17;
+/// host's right sidebar, 18 the saved local terminals.
+const SCHEMA_VERSION: i64 = 18;
 
 /// The whole schema, as a new database gets it.
 ///
@@ -88,6 +89,15 @@ const SCHEMA_VERSION: i64 = 17;
 ///   for every host, which every snippet is for now; one kept to a group or
 ///   a host will go with it. `run_on_click` runs it on a click rather than
 ///   only typing it.
+/// - **terminal_groups** are 项目's groups, which do not nest, and take
+///   their **saved_terminals** with them; a terminal of no group is at the
+///   top. `expanded` is as a host group's. A terminal `renamed` by hand
+///   keeps its name over the titles its shell gives it. A saved terminal's `directory` is
+///   the folder of this computer its shell was last in, `NULL` before it
+///   said.
+/// - **saved_terminal_tabs** lists the saved terminals open when ShellRS
+///   last had them, in tab order, rewritten whole: the next launch opens
+///   them again. They go with their terminal; one at most is `front`.
 ///
 /// A column added later goes after the table's last column here and is
 /// added to existing files with `ALTER TABLE ADD COLUMN`, which puts it in
@@ -203,7 +213,28 @@ CREATE TABLE snippets (
 ) STRICT;
 CREATE INDEX snippets_category_id ON snippets(category_id);
 CREATE INDEX snippets_scope_group_id ON snippets(scope_group_id);
-CREATE INDEX snippets_scope_host_id ON snippets(scope_host_id);";
+CREATE INDEX snippets_scope_host_id ON snippets(scope_host_id);
+CREATE TABLE terminal_groups (
+    id         INTEGER PRIMARY KEY,
+    name       TEXT NOT NULL CHECK (name <> ''),
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    expanded   INTEGER NOT NULL DEFAULT 1 CHECK (expanded IN (0, 1))
+) STRICT;
+CREATE TABLE saved_terminals (
+    id         INTEGER PRIMARY KEY,
+    group_id   INTEGER REFERENCES terminal_groups(id) ON DELETE CASCADE,
+    name       TEXT NOT NULL CHECK (name <> ''),
+    renamed    INTEGER NOT NULL DEFAULT 0 CHECK (renamed IN (0, 1)),
+    directory  TEXT CHECK (directory <> ''),
+    sort_order INTEGER NOT NULL DEFAULT 0
+) STRICT;
+CREATE INDEX saved_terminals_group_id ON saved_terminals(group_id);
+CREATE TABLE saved_terminal_tabs (
+    position    INTEGER PRIMARY KEY CHECK (position >= 0),
+    terminal_id INTEGER NOT NULL UNIQUE REFERENCES saved_terminals(id) ON DELETE CASCADE,
+    front       INTEGER NOT NULL DEFAULT 0 CHECK (front IN (0, 1))
+) STRICT;
+CREATE UNIQUE INDEX saved_terminal_tabs_front ON saved_terminal_tabs(front) WHERE front = 1;";
 
 /// One step from a version to the next: one transaction that ends by
 /// recording the version it reached.
@@ -220,7 +251,7 @@ enum Step {
 ///
 /// A step is history: it says what that version's change was, and stays as
 /// written when `SCHEMA` changes again.
-const STEPS: [(i64, Step); 4] = [
+const STEPS: [(i64, Step); 5] = [
     (
     13,
     // The command snippets.
@@ -276,6 +307,36 @@ COMMIT;",
             "BEGIN;
 ALTER TABLE hosts ADD COLUMN sidebar_tool      TEXT;
 PRAGMA user_version = 17;
+COMMIT;",
+        ),
+    ),
+    (
+        17,
+        // The saved local terminals.
+        Step::Sql(
+            "BEGIN;
+CREATE TABLE terminal_groups (
+    id         INTEGER PRIMARY KEY,
+    name       TEXT NOT NULL CHECK (name <> ''),
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    expanded   INTEGER NOT NULL DEFAULT 1 CHECK (expanded IN (0, 1))
+) STRICT;
+CREATE TABLE saved_terminals (
+    id         INTEGER PRIMARY KEY,
+    group_id   INTEGER REFERENCES terminal_groups(id) ON DELETE CASCADE,
+    name       TEXT NOT NULL CHECK (name <> ''),
+    renamed    INTEGER NOT NULL DEFAULT 0 CHECK (renamed IN (0, 1)),
+    directory  TEXT CHECK (directory <> ''),
+    sort_order INTEGER NOT NULL DEFAULT 0
+) STRICT;
+CREATE INDEX saved_terminals_group_id ON saved_terminals(group_id);
+CREATE TABLE saved_terminal_tabs (
+    position    INTEGER PRIMARY KEY CHECK (position >= 0),
+    terminal_id INTEGER NOT NULL UNIQUE REFERENCES saved_terminals(id) ON DELETE CASCADE,
+    front       INTEGER NOT NULL DEFAULT 0 CHECK (front IN (0, 1))
+) STRICT;
+CREATE UNIQUE INDEX saved_terminal_tabs_front ON saved_terminal_tabs(front) WHERE front = 1;
+PRAGMA user_version = 18;
 COMMIT;",
         ),
     ),
@@ -379,6 +440,12 @@ pub struct StoredData {
     pub snippet_categories: Vec<SnippetCategory>,
     /// Snippets in id order.
     pub snippets: Vec<Snippet>,
+    /// 项目's groups in id order.
+    pub terminal_groups: Vec<TerminalGroup>,
+    /// Saved local terminals in id order.
+    pub saved_terminals: Vec<SavedTerminal>,
+    /// The saved terminals open when ShellRS last had them, in tab order.
+    pub saved_terminal_tabs: Vec<SavedTerminalTab>,
 }
 
 pub struct HostDatabase {
@@ -688,6 +755,52 @@ impl HostDatabase {
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
 
+        let terminal_groups = self
+            .connection
+            .prepare("SELECT id, name, sort_order, expanded FROM terminal_groups ORDER BY id")?
+            .query_map([], |row| {
+                let name: String = row.get(1)?;
+                Ok(TerminalGroup {
+                    id: TerminalGroupId(from_sql(row.get(0)?)),
+                    name: name.into(),
+                    sort_order: row.get(2)?,
+                    expanded: row.get(3)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let saved_terminals = self
+            .connection
+            .prepare(
+                "SELECT id, group_id, name, renamed, directory, sort_order FROM saved_terminals \
+                 ORDER BY id",
+            )?
+            .query_map([], |row| {
+                let name: String = row.get(2)?;
+                Ok(SavedTerminal {
+                    id: SavedTerminalId(from_sql(row.get(0)?)),
+                    group: row
+                        .get::<_, Option<i64>>(1)?
+                        .map(|id| TerminalGroupId(from_sql(id))),
+                    name: name.into(),
+                    renamed: row.get(3)?,
+                    directory: row.get(4)?,
+                    sort_order: row.get(5)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let saved_terminal_tabs = self
+            .connection
+            .prepare("SELECT terminal_id, front FROM saved_terminal_tabs ORDER BY position")?
+            .query_map([], |row| {
+                Ok(SavedTerminalTab {
+                    terminal: SavedTerminalId(from_sql(row.get(0)?)),
+                    front: row.get(1)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
         Ok(StoredData {
             groups,
             hosts,
@@ -697,6 +810,9 @@ impl HostDatabase {
             credentials,
             snippet_categories,
             snippets,
+            terminal_groups,
+            saved_terminals,
+            saved_terminal_tabs,
         })
     }
 
@@ -1114,6 +1230,125 @@ impl HostDatabase {
         self.connection
             .execute("DELETE FROM snippets WHERE id = ?1", params![to_sql(id.0)])?;
         Ok(())
+    }
+
+    pub fn insert_terminal_group(&self, group: &TerminalGroup) -> rusqlite::Result<()> {
+        self.connection.execute(
+            "INSERT INTO terminal_groups (id, name, sort_order, expanded) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                to_sql(group.id.0),
+                group.name.as_ref(),
+                group.sort_order,
+                group.expanded
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_terminal_group(&self, group: &TerminalGroup) -> rusqlite::Result<()> {
+        self.connection.execute(
+            "UPDATE terminal_groups SET name = ?2, sort_order = ?3, expanded = ?4 WHERE id = ?1",
+            params![
+                to_sql(group.id.0),
+                group.name.as_ref(),
+                group.sort_order,
+                group.expanded
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a group with its terminals and their tabs: the foreign keys
+    /// cascade.
+    pub fn remove_terminal_group(&self, id: TerminalGroupId) -> rusqlite::Result<()> {
+        self.connection.execute(
+            "DELETE FROM terminal_groups WHERE id = ?1",
+            params![to_sql(id.0)],
+        )?;
+        Ok(())
+    }
+
+    pub fn insert_saved_terminal(&self, terminal: &SavedTerminal) -> rusqlite::Result<()> {
+        self.connection.execute(
+            "INSERT INTO saved_terminals (id, group_id, name, renamed, directory, sort_order) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                to_sql(terminal.id.0),
+                terminal.group.map(|group| to_sql(group.0)),
+                terminal.name.as_ref(),
+                terminal.renamed,
+                terminal.directory,
+                terminal.sort_order,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_saved_terminal(&self, terminal: &SavedTerminal) -> rusqlite::Result<()> {
+        self.connection.execute(
+            "UPDATE saved_terminals \
+             SET group_id = ?2, name = ?3, renamed = ?4, directory = ?5, sort_order = ?6 \
+             WHERE id = ?1",
+            params![
+                to_sql(terminal.id.0),
+                terminal.group.map(|group| to_sql(group.0)),
+                terminal.name.as_ref(),
+                terminal.renamed,
+                terminal.directory,
+                terminal.sort_order,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Save where every group and saved terminal of 项目 is, after a drag.
+    pub fn save_terminal_order(
+        &self,
+        groups: &[TerminalGroup],
+        terminals: &[SavedTerminal],
+    ) -> rusqlite::Result<()> {
+        self.atomically(|connection| {
+            let mut update_group =
+                connection.prepare("UPDATE terminal_groups SET sort_order = ?2 WHERE id = ?1")?;
+            for group in groups {
+                update_group.execute(params![to_sql(group.id.0), group.sort_order])?;
+            }
+            let mut update_terminal = connection.prepare(
+                "UPDATE saved_terminals SET group_id = ?2, sort_order = ?3 WHERE id = ?1",
+            )?;
+            for terminal in terminals {
+                update_terminal.execute(params![
+                    to_sql(terminal.id.0),
+                    terminal.group.map(|group| to_sql(group.0)),
+                    terminal.sort_order,
+                ])?;
+            }
+            Ok(())
+        })
+    }
+
+    /// Delete a saved terminal with its tab: the foreign key cascades.
+    pub fn remove_saved_terminal(&self, id: SavedTerminalId) -> rusqlite::Result<()> {
+        self.connection.execute(
+            "DELETE FROM saved_terminals WHERE id = ?1",
+            params![to_sql(id.0)],
+        )?;
+        Ok(())
+    }
+
+    /// Replace the saved terminals' tabs with `tabs`, in their order.
+    pub fn replace_saved_terminal_tabs(&self, tabs: &[SavedTerminalTab]) -> rusqlite::Result<()> {
+        self.atomically(|connection| {
+            connection.execute("DELETE FROM saved_terminal_tabs", [])?;
+            let mut insert = connection.prepare(
+                "INSERT INTO saved_terminal_tabs (position, terminal_id, front) \
+                 VALUES (?1, ?2, ?3)",
+            )?;
+            for (position, tab) in tabs.iter().enumerate() {
+                insert.execute(params![position as i64, to_sql(tab.terminal.0), tab.front])?;
+            }
+            Ok(())
+        })
     }
 
     /// Record the operating system a probe found on the host. `None` clears
@@ -1980,6 +2215,165 @@ INSERT INTO snippets (id, category_id, name, command, scope_host_id)
         assert_eq!(data.hosts[0].os, Some(HostOs::Debian));
         assert!(data.hosts[0].protocol.telnet().is_some());
         assert_eq!(data.hosts[0].sidebar_tool, None);
+    }
+
+    #[test]
+    fn a_version_17_file_gets_the_saved_terminals_and_keeps_its_hosts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shellrs.db");
+        {
+            // Version 17 as files of it have it: 15's schema, taken on by
+            // its steps.
+            let old = Connection::open(&path).unwrap();
+            old.execute_batch(&format!(
+                "BEGIN;\n{SCHEMA_15}\nPRAGMA user_version = 15;\nCOMMIT;"
+            ))
+            .unwrap();
+            add_telnet(&old).unwrap();
+            let Step::Sql(sidebar) = STEPS[3].1 else {
+                panic!("the sidebar column is a SQL step");
+            };
+            old.execute_batch(sidebar).unwrap();
+            old.execute(
+                "INSERT INTO hosts (id, name, address, port, auth, username, sidebar_tool) \
+                 VALUES (1, 'web', '10.0.0.1', 22, 'password', 'root', 'files')",
+                [],
+            )
+            .unwrap();
+        }
+
+        let db = HostDatabase::open(&path).unwrap();
+        let version: i64 = db
+            .connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        assert!(dir.path().join("shellrs.db.v17.bak").exists());
+        let fresh = HostDatabase::in_memory().unwrap();
+        assert_eq!(schema_of(&db.connection), schema_of(&fresh.connection));
+        let data = db.load().unwrap();
+        assert_eq!(data.hosts.len(), 1);
+        assert_eq!(data.hosts[0].sidebar_tool, Some(ToolKind::Files));
+        assert!(data.saved_terminals.is_empty());
+        assert!(data.saved_terminal_tabs.is_empty());
+    }
+
+    fn terminal(id: u64, group: u64, name: &str) -> SavedTerminal {
+        SavedTerminal {
+            id: SavedTerminalId(id),
+            group: Some(TerminalGroupId(group)),
+            name: name.into(),
+            renamed: false,
+            directory: None,
+            sort_order: 0,
+        }
+    }
+
+    fn terminal_group(id: u64, name: &str) -> TerminalGroup {
+        TerminalGroup {
+            id: TerminalGroupId(id),
+            name: name.into(),
+            sort_order: 0,
+            expanded: true,
+        }
+    }
+
+    fn saved_tab(terminal: u64, front: bool) -> SavedTerminalTab {
+        SavedTerminalTab {
+            terminal: SavedTerminalId(terminal),
+            front,
+        }
+    }
+
+    #[test]
+    fn saved_terminals_round_trip_and_go_with_their_group() {
+        let db = HostDatabase::in_memory().unwrap();
+        for (id, name) in [(1, "shellrs"), (2, "blog")] {
+            db.insert_terminal_group(&terminal_group(id, name)).unwrap();
+        }
+        let mut claude = terminal(1, 1, "claude");
+        claude.directory = Some("/code/shellrs".into());
+        claude.sort_order = 4;
+        db.insert_saved_terminal(&claude).unwrap();
+        db.insert_saved_terminal(&terminal(2, 1, "shellrs 2"))
+            .unwrap();
+        db.insert_saved_terminal(&terminal(3, 2, "blog 1")).unwrap();
+        db.replace_saved_terminal_tabs(&[saved_tab(1, false), saved_tab(3, true)])
+            .unwrap();
+
+        let data = db.load().unwrap();
+        assert_eq!(data.terminal_groups.len(), 2);
+        assert_eq!(data.saved_terminals[0], claude);
+        assert_eq!(
+            data.saved_terminal_tabs,
+            [saved_tab(1, false), saved_tab(3, true)]
+        );
+
+        claude.name = "cargo run".into();
+        claude.renamed = true;
+        claude.directory = Some("/code/shellrs/src".into());
+        db.update_saved_terminal(&claude).unwrap();
+        let mut site = terminal_group(2, "site");
+        site.expanded = false;
+        db.update_terminal_group(&site).unwrap();
+        // A drag's order.
+        let mut groups = [terminal_group(1, "shellrs"), terminal_group(2, "site")];
+        groups[1].sort_order = -1;
+        let mut moved = terminal(2, 1, "shellrs 2");
+        moved.sort_order = 7;
+        db.save_terminal_order(&groups, std::slice::from_ref(&moved))
+            .unwrap();
+        let data = db.load().unwrap();
+        assert_eq!(data.terminal_groups[1].sort_order, -1);
+        // A drag's order leaves it folded.
+        assert!(data.terminal_groups[0].expanded);
+        assert!(!data.terminal_groups[1].expanded);
+        assert_eq!(data.saved_terminals[1], moved);
+        // A group takes its terminals and their tabs.
+        db.remove_terminal_group(TerminalGroupId(2)).unwrap();
+        let data = db.load().unwrap();
+        assert_eq!(data.saved_terminals, [claude, moved]);
+        assert_eq!(data.saved_terminal_tabs, [saved_tab(1, false)]);
+        assert!(
+            data.terminal_groups
+                .iter()
+                .all(|group| group.name != "site")
+        );
+        db.remove_saved_terminal(SavedTerminalId(1)).unwrap();
+        assert!(db.load().unwrap().saved_terminal_tabs.is_empty());
+    }
+
+    #[test]
+    fn a_saved_terminal_has_one_tab_and_one_is_in_front() {
+        let db = HostDatabase::in_memory().unwrap();
+        db.insert_terminal_group(&terminal_group(1, "shellrs"))
+            .unwrap();
+        db.insert_saved_terminal(&terminal(1, 1, "a")).unwrap();
+        db.insert_saved_terminal(&terminal(2, 1, "b")).unwrap();
+        assert!(
+            db.replace_saved_terminal_tabs(&[saved_tab(1, true), saved_tab(2, true)])
+                .is_err()
+        );
+        assert!(
+            db.replace_saved_terminal_tabs(&[saved_tab(1, false), saved_tab(1, false)])
+                .is_err()
+        );
+        // A failed write leaves the list as it was.
+        db.replace_saved_terminal_tabs(&[saved_tab(1, true)])
+            .unwrap();
+        assert!(
+            db.replace_saved_terminal_tabs(&[saved_tab(9, false)])
+                .is_err()
+        );
+        assert_eq!(db.load().unwrap().saved_terminal_tabs, [saved_tab(1, true)]);
+        // A terminal is in a group that is there, or at the top.
+        assert!(db.insert_saved_terminal(&terminal(3, 7, "c")).is_err());
+        let top = SavedTerminal {
+            group: None,
+            ..terminal(4, 0, "终端 1")
+        };
+        db.insert_saved_terminal(&top).unwrap();
+        assert_eq!(db.load().unwrap().saved_terminals.last(), Some(&top));
     }
 
     #[test]
@@ -2856,6 +3250,9 @@ INSERT INTO snippets (id, category_id, name, command, scope_host_id)
             "bookmarks",
             "forwards",
             "credentials",
+            "terminal_groups",
+            "saved_terminals",
+            "saved_terminal_tabs",
         ] {
             assert!(tables.contains(&table.to_string()), "{table}");
         }

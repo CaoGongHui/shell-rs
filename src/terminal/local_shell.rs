@@ -60,6 +60,25 @@ impl LocalShell {
     }
 }
 
+/// How a local terminal starts: the shell, the folder it starts in (the
+/// home folder without one), and what it showed when it last closed, to
+/// draw again first.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LocalLaunch {
+    pub shell: LocalShell,
+    pub directory: Option<PathBuf>,
+    pub replay: Option<Vec<u8>>,
+}
+
+impl LocalLaunch {
+    pub fn new(shell: LocalShell) -> Self {
+        Self {
+            shell,
+            ..Self::default()
+        }
+    }
+}
+
 /// The system's default shell. On Unix the user's: `$SHELL`, or the one
 /// the passwd database names. On Windows PowerShell, as Windows Terminal
 /// and VS Code open: PowerShell 7 where it is installed, otherwise the

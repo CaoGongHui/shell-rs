@@ -321,3 +321,8 @@ workspace.zmodem.choose_folder:
 workspace.zmodem.files_only:
   zh-CN: ZMODEM 只能上传文件，文件夹请用 SFTP 上传
   en: ZMODEM uploads only files. Upload folders with SFTP.
+
+# 项目: the line under a terminal's kept output, drawn again as it opens.
+workspace.projects.kept_output:
+  zh-CN: 以上是上次关闭时的内容
+  en: Above is what this terminal showed when it last closed

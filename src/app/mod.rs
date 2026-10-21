@@ -15,8 +15,8 @@ pub use app_icon::show_logo_when_unbundled;
 pub use assets::{AppAssets, CatalogIcon, DOCKER_ICON};
 pub use paths::{
     PORTABLE_BIN, PORTABLE_DATA, SETUP_UNINSTALLER, analytics_path, cli_endpoint, cli_socket_path,
-    data_dir, database_path, keys_dir, portable_root, settings_path, updates_dir,
-    window_state_path,
+    data_dir, database_path, keys_dir, portable_root, settings_path, terminal_output_dir,
+    updates_dir, window_state_path,
 };
 pub use quit::{quit_held_back, set_quit_guard};
 pub use rendering::{SOFTWARE_FRAME_INTERVAL, frame_due, note_renderer, software_rendering};

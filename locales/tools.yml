@@ -24,6 +24,9 @@ tools.kind.connections:
 tools.kind.monitor:
   zh-CN: 系统监控
   en: Monitor
+tools.kind.projects:
+  zh-CN: 项目
+  en: Projects
 
 # Shared by the tools.
 tools.refresh:

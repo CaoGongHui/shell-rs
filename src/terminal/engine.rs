@@ -262,6 +262,9 @@ impl TerminalEngine {
                 }
             }
             TerminalUiEventKind::Latency(latency) => self.latency = Some(latency),
+            TerminalUiEventKind::WorkingDirectory(folder) => {
+                return Some(TerminalEvent::WorkingDirectory(folder));
+            }
             TerminalUiEventKind::Prompt(prompt) => {
                 return Some(TerminalEvent::PromptRequested(prompt));
             }
@@ -561,6 +564,12 @@ impl TerminalEngine {
         self.runtime.term.lock().selection_to_string()
     }
 
+    /// The last lines of output, to draw again when the terminal next
+    /// opens; `None` while a full-screen program has the screen.
+    pub fn kept_output(&self) -> Option<Vec<u8>> {
+        super::kept_output::kept_output(&self.runtime.term.lock(), super::KEPT_LINES)
+    }
+
     pub fn has_selection(&self) -> bool {
         self.selection_text().is_some_and(|text| !text.is_empty())
     }
@@ -841,6 +850,9 @@ pub enum TerminalEvent {
     Notice(TerminalNotice),
     /// The shell reported another folder than the last one.
     DirectoryChanged(ReportedDirectory),
+    /// A local shell is in another folder than the last one, as this
+    /// computer tells.
+    WorkingDirectory(PathBuf),
     /// `rz` or `sz` started on the other end: the user chooses the files
     /// to upload or the folder to download into, and the answer goes to
     /// [`TerminalEngine::zmodem_reply`].
@@ -959,6 +971,15 @@ impl TerminalRuntime {
                         }
                         TerminalTransportEvent::Latency(latency) => {
                             parser.proxy.send(TerminalUiEventKind::Latency(latency));
+                        }
+                        TerminalTransportEvent::WorkingDirectory(folder) => {
+                            parser
+                                .proxy
+                                .send(TerminalUiEventKind::WorkingDirectory(folder));
+                        }
+                        TerminalTransportEvent::Replay(bytes) => {
+                            parser.processor.advance(&mut *parser.term.lock(), &bytes);
+                            parser.proxy.wakeup();
                         }
                         TerminalTransportEvent::Prompt(prompt) => {
                             parser.proxy.send(TerminalUiEventKind::Prompt(prompt));
@@ -1234,6 +1255,8 @@ enum TerminalUiEventKind {
     Notice(ProgramNotice),
     /// The folder the shell reported, by OSC 7 or 1337.
     Directory(ReportedDirectory),
+    /// The folder a local shell is in, as this computer tells.
+    WorkingDirectory(PathBuf),
     Bell,
     /// A finished line that a 关键字高亮 rule tells of.
     Keyword(KeywordHit),
@@ -2222,6 +2245,17 @@ mod tests {
         assert!(screen_once_it_shows(&runtime, "before frame").contains("before frame"));
         // Held back meanwhile, as the update asked.
         assert!(started.elapsed() >= Duration::from_millis(150));
+    }
+
+    #[test]
+    fn what_a_terminal_kept_is_drawn_above_its_shell() {
+        let runtime = run_script(vec![
+            TerminalTransportEvent::Replay(b"$ ls\r\nsrc\r\n".to_vec()),
+            TerminalTransportEvent::Started,
+            TerminalTransportEvent::Output(b"$ ".to_vec()),
+        ]);
+        let screen = screen_once_it_shows(&runtime, "src\n$");
+        assert!(screen.starts_with("$ ls\nsrc\n$"), "{screen}");
     }
 
     #[test]

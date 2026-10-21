@@ -32,11 +32,24 @@ pub enum LocalTerminalPanelEvent {
     /// `rz` or `sz` started (a shell of this computer can ssh on): the
     /// user chooses, and the answer goes to [`LocalTerminalPanel::zmodem_reply`].
     ZmodemAsk(LocalTerminalId, ZmodemDirection),
+    /// The shell is in another folder now.
+    WorkingDirectory(LocalTerminalId, std::path::PathBuf),
+}
+
+/// What 项目 calls one of its terminals. Its tab shows the name until the
+/// shell or a program titles it, as a terminal app's tab does; a name
+/// `fixed` by hand shows over any title.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SavedName {
+    pub name: SharedString,
+    pub fixed: bool,
 }
 
 /// A local login-shell Dock tab backed by the shared terminal view.
 pub struct LocalTerminalPanel {
     id: LocalTerminalId,
+    /// Its name in 项目, for a terminal kept there.
+    name: Option<SavedName>,
     terminal: Entity<TerminalView>,
     tab_group: Option<WeakEntity<TabGroup>>,
     broadcast: Option<super::BroadcastSelection>,
@@ -47,13 +60,15 @@ impl LocalTerminalPanel {
     pub fn new(
         id: LocalTerminalId,
         factory: SharedTerminalTransportFactory,
+        name: Option<SavedName>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let fixed = name.as_ref().map(|name| name.name.clone());
         let terminal = cx.new(|cx| {
             TerminalView::new(
                 ("local-terminal", id.0),
-                move |_| default_title(id),
+                move |_| fixed.clone().unwrap_or_else(|| default_title(id)),
                 factory,
                 window,
                 cx,
@@ -76,6 +91,12 @@ impl LocalTerminalPanel {
                     TerminalEvent::ZmodemAsk(direction) => {
                         cx.emit(LocalTerminalPanelEvent::ZmodemAsk(id, *direction));
                     }
+                    TerminalEvent::WorkingDirectory(folder) => {
+                        cx.emit(LocalTerminalPanelEvent::WorkingDirectory(
+                            id,
+                            folder.clone(),
+                        ));
+                    }
                     _ => {}
                 },
             ),
@@ -83,6 +104,7 @@ impl LocalTerminalPanel {
 
         Self {
             id,
+            name,
             terminal,
             tab_group: None,
             broadcast: None,
@@ -90,10 +112,12 @@ impl LocalTerminalPanel {
         }
     }
 
-    /// 「本地终端 1」: what a notification calls it, whatever title the
-    /// shell gives the tab.
+    /// 「本地终端 1」, or its name in 项目: what a notification calls it,
+    /// whatever title the shell gives the tab.
     pub fn default_title(&self) -> SharedString {
-        default_title(self.id)
+        self.name
+            .as_ref()
+            .map_or_else(|| default_title(self.id), |name| name.name.clone())
     }
 
     pub fn tab_group(&self) -> Option<WeakEntity<TabGroup>> {
@@ -139,15 +163,30 @@ impl LocalTerminalPanel {
         window.focus(&focus, cx);
     }
 
-    pub(crate) fn display_title(&self, cx: &App) -> SharedString {
-        self.terminal.read(cx).title(cx).map_or_else(
-            || self.default_title(),
-            |title| {
-                short_title(&title, super::local_shell::host_name().as_deref())
-                    .into_owned()
-                    .into()
-            },
+    /// Call it by its name in 项目, renamed there.
+    pub fn set_name(&mut self, name: SavedName, cx: &mut Context<Self>) {
+        if self.name.as_ref() != Some(&name) {
+            self.name = Some(name);
+            cx.notify();
+        }
+    }
+
+    /// The title its shell or a program gives it, short: `None` before one
+    /// does. 项目 shows it for a terminal's name, as the tab does.
+    pub fn shell_title(&self, cx: &App) -> Option<SharedString> {
+        let title = self.terminal.read(cx).title(cx)?;
+        Some(
+            short_title(&title, super::local_shell::host_name().as_deref())
+                .into_owned()
+                .into(),
         )
+    }
+
+    pub(crate) fn display_title(&self, cx: &App) -> SharedString {
+        if let Some(name) = self.name.as_ref().filter(|name| name.fixed) {
+            return name.name.clone();
+        }
+        self.shell_title(cx).unwrap_or_else(|| self.default_title())
     }
 }
 

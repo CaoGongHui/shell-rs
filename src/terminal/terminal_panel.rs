@@ -149,6 +149,8 @@ impl TerminalPanel {
                     TerminalEvent::FilesDropped(files) => {
                         cx.emit(TerminalPanelEvent::FilesDropped(this.id, files.clone()));
                     }
+                    // Only a local transport tells.
+                    TerminalEvent::WorkingDirectory(_) => {}
                 },
             ),
         ];

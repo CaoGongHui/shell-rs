@@ -85,6 +85,7 @@ pub enum Counter {
     ToolMonitor,
     ToolGpu,
     ToolTmux,
+    ToolProjects,
     /// A snippet, or a command from the history, put into a terminal.
     CommandSnippet,
     CommandHistory,
@@ -111,10 +112,13 @@ pub enum Counter {
     ImportSshConfig,
     /// Hosts imported from `~/.ssh/known_hosts`, once per import.
     ImportKnownHosts,
+    /// A project's terminal opened from 项目 (not the ones a launch
+    /// opens again).
+    ProjectTerminal,
 }
 
 impl Counter {
-    pub const ALL: [Counter; 55] = [
+    pub const ALL: [Counter; 57] = [
         Self::Ssh,
         Self::SshJump,
         Self::SshProxy,
@@ -151,6 +155,7 @@ impl Counter {
         Self::ToolMonitor,
         Self::ToolGpu,
         Self::ToolTmux,
+        Self::ToolProjects,
         Self::CommandSnippet,
         Self::CommandHistory,
         Self::Find,
@@ -170,6 +175,7 @@ impl Counter {
         Self::ExternalCliOff,
         Self::ImportSshConfig,
         Self::ImportKnownHosts,
+        Self::ProjectTerminal,
     ];
 
     pub fn key(self) -> &'static str {
@@ -210,6 +216,7 @@ impl Counter {
             Self::ToolMonitor => "tool_monitor",
             Self::ToolGpu => "tool_gpu",
             Self::ToolTmux => "tool_tmux",
+            Self::ToolProjects => "tool_projects",
             Self::CommandSnippet => "command_snippet",
             Self::CommandHistory => "command_history",
             Self::Find => "find",
@@ -229,6 +236,7 @@ impl Counter {
             Self::ExternalCliOff => "external_cli_off",
             Self::ImportSshConfig => "import_ssh_config",
             Self::ImportKnownHosts => "import_known_hosts",
+            Self::ProjectTerminal => "project_terminal",
         }
     }
 

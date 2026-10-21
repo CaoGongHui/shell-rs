@@ -25,6 +25,7 @@ pub mod kubernetes;
 pub mod monitor;
 pub mod netstat;
 pub mod processes;
+pub mod project;
 pub mod secrets;
 pub mod serial;
 pub mod services;

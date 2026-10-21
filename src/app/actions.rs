@@ -12,7 +12,8 @@ use crate::{
     editor::EditorId,
     explorer::{ExplorerId, FileSizeFormat, PaneSide},
     host::{
-        CredentialId, ForwardId, GroupId, HostId, HostNode, NodeDrop, SnippetCategoryId, SnippetId,
+        CredentialId, ForwardId, GroupId, HostId, HostNode, NodeDrop, SavedTerminalId,
+        SnippetCategoryId, SnippetId, TerminalDrop, TerminalGroupId, TerminalNode,
     },
     kubernetes::KubernetesCommand,
     monitor::MonitorDetail,
@@ -109,6 +110,8 @@ gpui_kit::actions!(
         NewSnippet,
         /// Open the new-category dialog of 命令片段.
         NewSnippetCategory,
+        /// Open the new-group dialog of 项目.
+        NewTerminalGroup,
         /// Show the host list in the left dock.
         ShowHosts,
         /// Show the port-forwarding list in the left dock.
@@ -338,6 +341,27 @@ id_actions! {
     /// Fold a category of 命令片段 away, or unfold it; `None` is 未分类.
     ToggleSnippetCategory(Option<SnippetCategoryId>);
 
+    /// Keep a new local terminal in 项目, in a group or at the top, and
+    /// open it.
+    NewSavedTerminal(Option<TerminalGroupId>);
+    /// Hide a group's terminals in 项目, or show them again.
+    ToggleTerminalGroup(TerminalGroupId);
+    /// Open the rename dialog of a group of 项目.
+    RenameTerminalGroup(TerminalGroupId);
+    /// Ask for confirmation, then delete a group of 项目 with its
+    /// terminals; their open tabs stay.
+    DeleteTerminalGroup(TerminalGroupId);
+    /// Bring a saved terminal's tab to the front, or open it in the folder
+    /// it was last in.
+    OpenSavedTerminal(SavedTerminalId);
+    /// Close a saved terminal's tab; it stays in 项目.
+    CloseSavedTerminal(SavedTerminalId);
+    /// Open the rename dialog of a saved terminal.
+    RenameSavedTerminal(SavedTerminalId);
+    /// Ask for confirmation, then delete a saved terminal; its open tab
+    /// stays.
+    DeleteSavedTerminal(SavedTerminalId);
+
     /// Start a port forward over a connection of its own.
     StartForward(ForwardId);
     /// Stop a running port forward and log out its connection.
@@ -363,6 +387,15 @@ id_actions! {
 pub struct MoveHostNode {
     pub source: HostNode,
     pub destination: NodeDrop,
+}
+
+/// A row of 项目 dropped where it goes: a group among the groups, a
+/// terminal among a group's terminals.
+#[derive(Action, Clone, PartialEq, Eq)]
+#[action(namespace = shellrs, no_json)]
+pub struct MoveTerminalNode {
+    pub source: TerminalNode,
+    pub destination: TerminalDrop,
 }
 
 /// Ask for confirmation, then end a process of the host of the SSH terminal
@@ -475,10 +508,12 @@ pub enum ToolKind {
     Connections,
     Monitor,
     Gpu,
+    /// 项目, the one tool of local terminals.
+    Projects,
 }
 
 impl ToolKind {
-    pub const ALL: [ToolKind; 11] = [
+    pub const ALL: [ToolKind; 12] = [
         ToolKind::Snippets,
         ToolKind::History,
         ToolKind::Files,
@@ -490,6 +525,7 @@ impl ToolKind {
         ToolKind::Connections,
         ToolKind::Monitor,
         ToolKind::Gpu,
+        ToolKind::Projects,
     ];
 
     /// What `settings.json` calls the tool in 侧栏功能, and the database
@@ -508,6 +544,7 @@ impl ToolKind {
             ToolKind::Connections => "connections",
             ToolKind::Monitor => "monitor",
             ToolKind::Gpu => "gpu",
+            ToolKind::Projects => "projects",
         }
     }
 
@@ -536,6 +573,7 @@ impl ToolKind {
             ToolKind::Connections => t!("tools.kind.connections"),
             ToolKind::Monitor => t!("tools.kind.monitor"),
             ToolKind::Gpu => "GPU/NPU".into(),
+            ToolKind::Projects => t!("tools.kind.projects"),
         }
     }
 
@@ -555,6 +593,7 @@ impl ToolKind {
             ToolKind::Connections => CatalogIcon::Network,
             ToolKind::Monitor => CatalogIcon::Activity,
             ToolKind::Gpu => CatalogIcon::Gpu,
+            ToolKind::Projects => CatalogIcon::FolderCode,
         })
     }
 }

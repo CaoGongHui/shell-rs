@@ -428,26 +428,44 @@ fn terminal_groups(panel: &SettingsPanel, cx: &App) -> Vec<SettingGroup> {
     ]
 }
 
-/// 终端 → 本地终端: the program a local terminal runs. The row stacks, so a
-/// path with its arguments has the page's width.
+/// 终端 → 本地终端: the program a local terminal runs, and whether 项目's
+/// terminals keep their output. The shell's row stacks, so a path with its
+/// arguments has the page's width.
 fn local_terminal_group(panel: &SettingsPanel) -> SettingGroup {
     let (editor, reset) = (panel.local_shell.clone(), panel.local_shell.clone());
     let store = panel.store.clone();
+    let (reader, writer) = (panel.store.clone(), panel.store.clone());
     SettingGroup::new()
         .title(t!("settings.local_terminal.title"))
-        .items([SettingItem::new(
-            t!("settings.local_terminal.shell"),
-            SettingField::render(move |options, _, cx| local_shell_field(&editor, options, cx))
-                .on_reset(
-                    move |cx| store.read(cx).settings().local_terminal.shell.is_some(),
-                    move |window, cx| {
-                        reset.update(cx, |editor, cx| editor.choose(None, window, cx));
+        .items([
+            SettingItem::new(
+                t!("settings.local_terminal.shell"),
+                SettingField::render(move |options, _, cx| local_shell_field(&editor, options, cx))
+                    .on_reset(
+                        move |cx| store.read(cx).settings().local_terminal.shell.is_some(),
+                        move |window, cx| {
+                            reset.update(cx, |editor, cx| editor.choose(None, window, cx));
+                        },
+                    ),
+            )
+            .description(t!("settings.local_terminal.shell_description"))
+            .layout(Axis::Vertical)
+            .keywords(keywords(t!("settings.local_terminal.keywords"))),
+            SettingItem::new(
+                t!("settings.local_terminal.keep_output"),
+                SettingField::switch(
+                    move |cx| reader.read(cx).settings().local_terminal.keep_output,
+                    move |on, cx| {
+                        writer.update(cx, |store, cx| {
+                            store.update(|settings| settings.local_terminal.keep_output = on, cx)
+                        });
                     },
-                ),
-        )
-        .description(t!("settings.local_terminal.shell_description"))
-        .layout(Axis::Vertical)
-        .keywords(keywords(t!("settings.local_terminal.keywords")))])
+                )
+                .default_value(true),
+            )
+            .description(t!("settings.local_terminal.keep_output_description"))
+            .keywords(keywords(t!("settings.local_terminal.keep_output_keywords"))),
+        ])
 }
 
 /// 终端 → 终端交互: what the mouse does besides selecting.

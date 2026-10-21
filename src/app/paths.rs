@@ -53,6 +53,12 @@ pub fn keys_dir() -> PathBuf {
     data_dir().join("keys")
 }
 
+/// Where the saved local terminals' last output is kept, a file each,
+/// beside the database. Created when the first is kept.
+pub fn terminal_output_dir() -> PathBuf {
+    data_dir().join("terminal-output")
+}
+
 /// Where updates are downloaded to: the user's cache folder. With
 /// `SHELLRS_DATA_DIR` set it is beside the data instead, so a test or
 /// development instance never shares downloads with the installed app; so

@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 
 use anyhow::Result;
@@ -5,7 +6,7 @@ use async_channel::Sender;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::oneshot;
 
-use super::{LocalShell, TerminalSize};
+use super::{LocalLaunch, LocalShell, TerminalSize};
 use crate::connection::Latency;
 use crate::connection::{ConnectionPrompt, ConnectionPromptReply};
 use crate::host::{HostConnection, HostLogin, HostOs, SerialLine, TelnetLogin};
@@ -141,6 +142,13 @@ pub enum TerminalTransportEvent {
     /// A round trip measured on the live connection. Sent periodically while
     /// the shell runs; transports without a network hop never send it.
     Latency(Latency),
+    /// The folder a local terminal's shell is in now, sent when it changes;
+    /// only a local transport of a system that tells sends it.
+    WorkingDirectory(PathBuf),
+    /// What the terminal showed when it last closed, drawn before anything
+    /// else. Sent first, by a local transport given it; nothing watches it
+    /// as it would output (highlight rules, notices, ZMODEM).
+    Replay(Vec<u8>),
     Exited {
         code: u32,
         signal: Option<String>,
@@ -210,46 +218,55 @@ impl HostTerminalTransports {
     }
 }
 
-/// Creates the factory of a local terminal for the shell the settings name,
-/// asked when it opens and when it restarts, so a changed setting reaches
-/// the next one. Like the remote provider, the workspace owns this boundary
-/// and UI tests inject a fake.
+/// Creates the factory of a local terminal for the shell the settings name
+/// and, for a project's terminal, its folder; asked when it
+/// opens and when it restarts, so a changed setting reaches the next one.
+/// Like the remote provider, the workspace owns this boundary and UI tests
+/// inject a fake.
 pub trait LocalTerminalTransportProvider: Send + Sync + 'static {
-    fn factory_for(&self, shell: &LocalShell) -> SharedTerminalTransportFactory;
+    fn factory_for(&self, launch: &LocalLaunch) -> SharedTerminalTransportFactory;
 }
 
 pub type SharedLocalTerminalTransportProvider = Arc<dyn LocalTerminalTransportProvider>;
 
-/// For tests: every local terminal gets the same factory, and the shells
+/// For tests: every local terminal gets the same factory, and the launches
 /// asked for are kept.
 pub struct FixedLocalTerminalTransportProvider {
     factory: SharedTerminalTransportFactory,
-    shells: Mutex<Vec<LocalShell>>,
+    launches: Mutex<Vec<LocalLaunch>>,
 }
 
 impl FixedLocalTerminalTransportProvider {
     pub fn new(factory: SharedTerminalTransportFactory) -> Self {
         Self {
             factory,
-            shells: Default::default(),
+            launches: Default::default(),
         }
     }
 
-    /// The shell of each local terminal started, in order.
-    pub fn shells(&self) -> Vec<LocalShell> {
-        self.shells
+    /// How each local terminal started, in order.
+    pub fn launches(&self) -> Vec<LocalLaunch> {
+        self.launches
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone()
     }
+
+    /// The shell of each local terminal started, in order.
+    pub fn shells(&self) -> Vec<LocalShell> {
+        self.launches()
+            .into_iter()
+            .map(|launch| launch.shell)
+            .collect()
+    }
 }
 
 impl LocalTerminalTransportProvider for FixedLocalTerminalTransportProvider {
-    fn factory_for(&self, shell: &LocalShell) -> SharedTerminalTransportFactory {
-        self.shells
+    fn factory_for(&self, launch: &LocalLaunch) -> SharedTerminalTransportFactory {
+        self.launches
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .push(shell.clone());
+            .push(launch.clone());
         self.factory.clone()
     }
 }

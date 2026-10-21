@@ -686,6 +686,35 @@ host.store.not_saved.delete_snippet_category:
 host.store.not_saved.batch:
   zh-CN: 这批改动未能保存到本地数据库：%{error}
   en: "Couldn’t save these changes to the local database: %{error}"
+host.store.not_saved.new_terminal_group:
+  zh-CN: 新建分组未能保存到本地数据库：%{error}
+  en: "Couldn’t save the new group to the local database: %{error}"
+host.store.not_saved.save_terminal_group:
+  zh-CN: 重命名分组未能保存到本地数据库：%{error}
+  en: "Couldn’t save the group’s new name to the local database: %{error}"
+host.store.not_saved.delete_terminal_group:
+  zh-CN: 删除分组未能保存到本地数据库：%{error}
+  en: "Couldn’t delete the group from the local database: %{error}"
+host.store.not_saved.new_saved_terminal:
+  zh-CN: 新建的本地终端未能保存到本地数据库：%{error}
+  en: "Couldn’t save the new local terminal to the local database: %{error}"
+host.store.not_saved.save_saved_terminal:
+  zh-CN: 本地终端的名称或所在文件夹未能保存到本地数据库：%{error}
+  en: "Couldn’t save the local terminal’s name or folder to the local database: %{error}"
+host.store.not_saved.delete_saved_terminal:
+  zh-CN: 删除本地终端未能保存到本地数据库：%{error}
+  en: "Couldn’t delete the local terminal from the local database: %{error}"
+host.store.not_saved.move_terminal_node:
+  zh-CN: 项目的新顺序未能保存到本地数据库：%{error}
+  en: "Couldn’t save the new order of Projects to the local database: %{error}"
+host.store.not_saved.saved_terminal_tabs:
+  zh-CN: 打开的本地终端未能保存到本地数据库，下次启动不会恢复：%{error}
+  en: "Couldn’t save the open local terminals to the local database, so the next launch won’t reopen them: %{error}"
+
+# A new terminal of 项目 kept at the top, numbered: 「终端 1」.
+host.saved_terminal.name:
+  zh-CN: 终端
+  en: Terminal
 
 host.store.copy_name:
   zh-CN: "%{name} 副本"

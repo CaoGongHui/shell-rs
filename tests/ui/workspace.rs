@@ -945,7 +945,7 @@ fn a_tool_follows_the_terminal_in_front_and_leaves_it_the_keyboard(cx: &mut Test
 }
 
 #[gpui_kit::test]
-async fn the_tool_sidebar_goes_with_ssh_terminals_only(cx: &mut TestAppContext) {
+async fn the_tool_sidebar_goes_with_terminals_only(cx: &mut TestAppContext) {
     let (handle, _) = open_workspace_with_sftp(cx, Arc::new(FakeSftpProvider::default()));
     cx.run_until_parked();
     in_frame(cx, handle, |window, cx| {
@@ -967,19 +967,32 @@ async fn the_tool_sidebar_goes_with_ssh_terminals_only(cx: &mut TestAppContext) 
     open_test_explorer(cx, handle).await;
     assert_eq!(shown(cx), (false, false));
 
-    // Nor the settings, nor a local terminal, which the shortcut leaves
-    // alone too.
+    // Nor the settings.
     in_frame(cx, handle, |window, cx| {
         window.dispatch_action(Box::new(OpenSettings), cx)
     });
     assert_eq!(shown(cx), (false, false));
+    // A local terminal has the switch with 项目 alone, closed until opened;
+    // the shortcut opens it.
     in_frame(cx, handle, |window, cx| {
         window.dispatch_action(Box::new(NewLocalTerminal), cx)
+    });
+    assert_eq!(shown(cx), (true, false));
+    in_frame(cx, handle, |window, _| {
+        assert!(window.try_find("tool-projects").is_some());
+        assert!(window.try_find("tool-snippets").is_none());
+        assert!(window.try_find(("tool-sidebar-local", 1_u64)).is_none());
     });
     in_frame(cx, handle, |window, cx| {
         window.dispatch_action(Box::new(ToggleToolSidebar), cx)
     });
-    assert_eq!(shown(cx), (false, false));
+    in_frame(cx, handle, |window, _| {
+        assert_eq!(
+            window.find(("tool-sidebar-local", 1_u64)).label(),
+            Some("项目")
+        );
+        assert_eq!(window.find("tool-projects").checked(), Some(true));
+    });
 
     // Its host's terminal brings it back as it was.
     in_frame(cx, handle, |window, cx| {

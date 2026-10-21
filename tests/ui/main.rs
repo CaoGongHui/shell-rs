@@ -24,6 +24,7 @@ mod kubernetes;
 mod monitor;
 mod netstat;
 mod processes;
+mod projects;
 mod serial;
 mod services;
 mod settings;

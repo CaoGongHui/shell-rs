@@ -1,0 +1,71 @@
+_version: 2
+
+# 项目: the right sidebar's tool beside local terminals, which keeps local
+# terminals in groups.
+
+project.panel.empty:
+  zh-CN: 还没有本地终端
+  en: No local terminals yet
+project.panel.empty_description:
+  zh-CN: 在这里新建的本地终端会保存下来，可以放进分组；退出时开着的，下次启动会在原来的文件夹重新打开。
+  en: Local terminals you open here are kept, in groups if you like. Those open when you quit come back in the folders they were in next launch.
+# A terminal row's mark, as assistive technology reads it.
+project.panel.open:
+  zh-CN: 已打开
+  en: Open
+project.panel.closed:
+  zh-CN: 未打开
+  en: Closed
+
+project.menu.new_group:
+  zh-CN: 新建分组
+  en: New group
+project.menu.new_terminal:
+  zh-CN: 新建本地终端
+  en: New local terminal
+project.menu.open:
+  zh-CN: 打开
+  en: Open
+project.menu.close:
+  zh-CN: 关闭
+  en: Close
+project.menu.rename:
+  zh-CN: 重命名…
+  en: Rename…
+project.menu.delete:
+  zh-CN: 删除
+  en: Delete
+
+project.dialog.new_group:
+  zh-CN: 新建分组
+  en: New group
+project.dialog.rename_group:
+  zh-CN: 重命名分组
+  en: Rename group
+project.dialog.rename_terminal:
+  zh-CN: 重命名本地终端
+  en: Rename local terminal
+project.dialog.create:
+  zh-CN: 创建
+  en: Create
+project.dialog.name:
+  zh-CN: 名称
+  en: Name
+project.dialog.group_placeholder:
+  zh-CN: 例如 work
+  en: e.g. work
+project.dialog.terminal_placeholder:
+  zh-CN: 留空则跟随 shell 和程序设的标题
+  en: Leave empty to follow the title the shell or a program sets
+project.dialog.name_missing:
+  zh-CN: 请输入名称
+  en: Enter a name
+project.dialog.group_taken:
+  zh-CN: 已有同名分组
+  en: There’s already a group with this name
+
+project.delete_group.terminals.one:
+  en: This also deletes the local terminal in it. If it’s open, it stays open.
+project.delete_group.terminals.other:
+  zh-CN: 将同时删除其中的 %{count} 个本地终端，已打开的不受影响。
+  en: This also deletes the %{count} local terminals in it. Those open stay open.

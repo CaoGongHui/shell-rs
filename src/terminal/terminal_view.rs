@@ -493,6 +493,12 @@ impl TerminalView {
         self.engine.read(cx).title().map(str::to_owned)
     }
 
+    /// The last lines of output, to draw again when the terminal next
+    /// opens; `None` while a full-screen program has the screen.
+    pub fn kept_output(&self, cx: &App) -> Option<Vec<u8>> {
+        self.engine.read(cx).kept_output()
+    }
+
     pub fn latency(&self, cx: &App) -> Option<Latency> {
         self.engine.read(cx).latency()
     }

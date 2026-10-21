@@ -12,6 +12,8 @@ pub enum FakeBehavior {
     ReportsLatency(Latency),
     /// Prints this after its prompt line, as a program would.
     Prints(&'static str),
+    /// A local shell in this folder, as this computer tells.
+    InFolder(&'static str),
     /// Answers what `exec --terminal` types the way a shell whose program
     /// is `exe` would: the probe, then the command line, which prints
     /// `ran` and ends with 0 when `ends`, and runs on otherwise.
@@ -192,6 +194,9 @@ impl TerminalTransport for FakeTerminalTransport {
         }
         if let FakeBehavior::ReportsLatency(latency) = self.behavior {
             events.send_blocking(TerminalTransportEvent::Latency(latency))?;
+        }
+        if let FakeBehavior::InFolder(folder) = self.behavior {
+            events.send_blocking(TerminalTransportEvent::WorkingDirectory(folder.into()))?;
         }
         events.send_blocking(TerminalTransportEvent::Output(
             format!(

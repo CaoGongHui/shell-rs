@@ -17,16 +17,19 @@ use super::{
     AuthKind, BookmarkSide, Credential, CredentialDraft, CredentialId, CredentialKind,
     ForwardDraft, ForwardId, ForwardRule, GroupDraft, GroupId, GroupPathError, GroupPlan, Host,
     HostConnection, HostDatabase, HostDraft, HostGroup, HostId, HostLogin, HostNode, HostOs,
-    JumpLogin, LoginRoute, NodeDrop, Protocol, ProxyLogin, PublicId, Route, SerialLine, Snippet,
-    SnippetCategory, SnippetScope, SshLink, StoredData, TelnetLogin,
+    JumpLogin, LoginRoute, NodeDrop, Protocol, ProxyLogin, PublicId, Route, SavedTerminal,
+    SavedTerminalTab, SerialLine, Snippet, SnippetCategory, SnippetScope, SshLink, StoredData,
+    TelnetLogin, TerminalGroup,
 };
 
+mod saved_terminals;
 mod snippets;
 
 /// The single source of truth for hosts, groups, the rules that belong
-/// to hosts (bookmarks, port forwards), the credentials hosts log in with
-/// and the command snippets. Created once by the workspace and shared with every panel and
-/// dialog; consumers observe it.
+/// to hosts (bookmarks, port forwards), the credentials hosts log in with,
+/// the command snippets and the saved local terminals. Created once by
+/// the workspace and shared with every panel and dialog; consumers observe
+/// it.
 ///
 /// A host using a credential keeps a copy of the credential's user name,
 /// so everything that shows or keys by `user@host:port` reads the host
@@ -84,6 +87,14 @@ pub struct HostStore {
     next_snippet_id: u64,
     snippet_categories: Vec<SnippetCategory>,
     next_snippet_category_id: u64,
+    /// 项目's groups and the local terminals in them, each in the order
+    /// made.
+    terminal_groups: Vec<TerminalGroup>,
+    next_terminal_group_id: u64,
+    saved_terminals: Vec<SavedTerminal>,
+    next_saved_terminal_id: u64,
+    /// The saved terminals open as the workspace last said, in tab order.
+    saved_terminal_tabs: Vec<SavedTerminalTab>,
     /// `None` for a memory-only store, as used by tests.
     database: Option<HostDatabase>,
     /// Where passwords go: the keychain given to `with_secrets`, under a
@@ -94,6 +105,9 @@ pub struct HostStore {
     /// form are kept. `None` without a database to remember them, which is
     /// also how most tests run: the form then offers key files only.
     key_dir: Option<PathBuf>,
+    /// Where the saved terminals' kept output goes, a file each. `None`
+    /// without a database, as in most tests: nothing is kept then.
+    terminal_output_dir: Option<PathBuf>,
     /// Inside [`Self::capture_failures`], the failures reported so far,
     /// besides the events that report them.
     capturing: RefCell<Option<Vec<SharedString>>>,
@@ -138,6 +152,14 @@ enum Change {
     NewSnippetCategory,
     RenameSnippetCategory,
     DeleteSnippetCategory,
+    NewTerminalGroup,
+    SaveTerminalGroup,
+    DeleteTerminalGroup,
+    NewSavedTerminal,
+    SaveSavedTerminal,
+    DeleteSavedTerminal,
+    MoveTerminalNode,
+    SavedTerminalTabs,
     Batch,
 }
 
@@ -184,6 +206,30 @@ impl Change {
                 "host.store.not_saved.delete_snippet_category",
                 error = error
             ),
+            Change::NewTerminalGroup => {
+                t!("host.store.not_saved.new_terminal_group", error = error)
+            }
+            Change::SaveTerminalGroup => {
+                t!("host.store.not_saved.save_terminal_group", error = error)
+            }
+            Change::DeleteTerminalGroup => {
+                t!("host.store.not_saved.delete_terminal_group", error = error)
+            }
+            Change::NewSavedTerminal => {
+                t!("host.store.not_saved.new_saved_terminal", error = error)
+            }
+            Change::SaveSavedTerminal => {
+                t!("host.store.not_saved.save_saved_terminal", error = error)
+            }
+            Change::DeleteSavedTerminal => {
+                t!("host.store.not_saved.delete_saved_terminal", error = error)
+            }
+            Change::MoveTerminalNode => {
+                t!("host.store.not_saved.move_terminal_node", error = error)
+            }
+            Change::SavedTerminalTabs => {
+                t!("host.store.not_saved.saved_terminal_tabs", error = error)
+            }
             Change::Batch => t!("host.store.not_saved.batch", error = error),
         }
     }
@@ -257,9 +303,15 @@ impl HostStore {
             next_snippet_id: 1,
             snippet_categories: Vec::new(),
             next_snippet_category_id: 1,
+            terminal_groups: Vec::new(),
+            next_terminal_group_id: 1,
+            saved_terminals: Vec::new(),
+            next_saved_terminal_id: 1,
+            saved_terminal_tabs: Vec::new(),
             database: None,
             secrets: Arc::new(TemporarySecretStore::new(Arc::new(NoSecretStore))),
             key_dir: None,
+            terminal_output_dir: None,
             capturing: RefCell::new(None),
             batch: RefCell::new(None),
         }
@@ -276,6 +328,15 @@ impl HostStore {
     /// beside the database; UI tests use a temporary directory.
     pub fn with_key_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.key_dir = Some(dir.into());
+        self
+    }
+
+    /// Keep the saved terminals' output in `dir`. `main` puts it beside
+    /// the database; UI tests use a temporary directory. What is kept there
+    /// for terminals no longer saved goes.
+    pub fn with_terminal_output_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.terminal_output_dir = Some(dir.into());
+        self.forget_kept_outputs_but_saved();
         self
     }
 
@@ -318,6 +379,9 @@ impl HostStore {
             credentials,
             snippet_categories,
             snippets,
+            terminal_groups,
+            saved_terminals,
+            saved_terminal_tabs,
         } = database.load()?;
         recent.truncate(MAX_RECENT);
         let mut bookmarks: HashMap<_, Vec<String>> = HashMap::new();
@@ -344,10 +408,15 @@ impl HostStore {
                 .max()
                 .unwrap_or(0)
                 + 1,
+            next_terminal_group_id: terminal_groups.iter().map(|g| g.id.0).max().unwrap_or(0) + 1,
+            next_saved_terminal_id: saved_terminals.iter().map(|t| t.id.0).max().unwrap_or(0) + 1,
             forwards,
             credentials,
             snippets,
             snippet_categories,
+            terminal_groups,
+            saved_terminals,
+            saved_terminal_tabs,
             groups,
             hosts,
             temporary: Vec::new(),
@@ -358,6 +427,7 @@ impl HostStore {
             database: Some(database),
             secrets: Arc::new(TemporarySecretStore::new(Arc::new(NoSecretStore))),
             key_dir: None,
+            terminal_output_dir: None,
             capturing: RefCell::new(None),
             batch: RefCell::new(None),
         })

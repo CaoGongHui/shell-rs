@@ -845,6 +845,8 @@ mod tests {
                 TerminalTransportEvent::Exited { .. } => panic!("unexpected early exit"),
                 TerminalTransportEvent::HostOsDetected(_)
                 | TerminalTransportEvent::Latency(_)
+                | TerminalTransportEvent::WorkingDirectory(_)
+                | TerminalTransportEvent::Replay(_)
                 | TerminalTransportEvent::Output(_) => {}
             }
         }
@@ -948,7 +950,10 @@ mod tests {
                     ConnectionPromptKind::HostKeyChanged(_) => panic!("unexpected changed key"),
                 },
                 TerminalTransportEvent::Started => started = true,
-                TerminalTransportEvent::HostOsDetected(_) | TerminalTransportEvent::Latency(_) => {}
+                TerminalTransportEvent::HostOsDetected(_)
+                | TerminalTransportEvent::Latency(_)
+                | TerminalTransportEvent::WorkingDirectory(_)
+                | TerminalTransportEvent::Replay(_) => {}
                 TerminalTransportEvent::Output(bytes) => {
                     ready |= String::from_utf8_lossy(&bytes).contains("ready")
                 }

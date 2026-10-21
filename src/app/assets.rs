@@ -26,6 +26,7 @@ icon_assets!(
         Unplug,
         FolderTree,
         FolderPlus,
+        FolderCode,
         Eraser,
         ClipboardPaste,
         ClipboardCopy,

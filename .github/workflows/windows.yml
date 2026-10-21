@@ -35,6 +35,7 @@ on:
       - "src/credential/credential_dialog.rs"
       - "src/settings/settings_panel.rs"
       - "src/terminal/local_shell.rs"
+      - "src/terminal/local_pty.rs"
       - "src/terminal/zmodem.rs"
       - "src/serial/**"
       - "src/app/shortcuts.rs"

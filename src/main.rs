@@ -116,7 +116,8 @@ fn open_store() -> (HostStore, Option<SharedString>) {
         Ok(store) => {
             let mut store = store
                 .with_secrets(secrets)
-                .with_key_dir(shellrs::app::keys_dir());
+                .with_key_dir(shellrs::app::keys_dir())
+                .with_terminal_output_dir(shellrs::app::terminal_output_dir());
             let problem = store.adopt_moved_keys();
             (store, problem)
         }

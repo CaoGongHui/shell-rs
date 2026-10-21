@@ -1,7 +1,8 @@
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use gpui_kit::component::{
-    ActiveTheme as _, Placement, Selectable as _, Sizable as _,
+    ActiveTheme as _, Icon, IconName, Placement, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
     dock::{BasePanel, Panel, PanelControl, PanelEvent},
     h_flex, v_flex,
@@ -9,19 +10,21 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 
-use crate::app::{ToggleTool, ToolKind};
+use crate::app::{CatalogIcon, NewSavedTerminal, NewTerminalGroup, ToggleTool, ToolKind};
 use crate::docker::{Container, DockerObject, DockerPanel, ObjectSummary};
 use crate::explorer::ExplorerPanel;
 use crate::gpu::GpuPanel;
 use crate::history::HistoryPanel;
-use crate::host::{HostId, HostOs, HostStore, SnippetCategoryId};
+use crate::host::{HostId, HostOs, HostStore, SavedTerminalId, SnippetCategoryId};
+use crate::i18n::t;
 use crate::kubernetes::{KubernetesCommand, KubernetesPanel};
 use crate::monitor::{MonitorDetail, MonitorPanel};
 use crate::netstat::NetstatPanel;
 use crate::processes::{Process, ProcessDetails, ProcessPanel, ProcessSort};
+use crate::project::ProjectPanel;
 use crate::services::{Service, ServicePanel};
 use crate::snippets::SnippetPanel;
-use crate::terminal::{ExecTarget, RemoteTerminalId, TerminalView};
+use crate::terminal::{ExecTarget, LocalTerminalId, RemoteTerminalId, TerminalView};
 use crate::tmux::{TmuxPanel, TmuxTable};
 
 impl ToolKind {
@@ -29,7 +32,12 @@ impl ToolKind {
     /// the terminal, which a terminal a bastion host opened cannot have.
     /// Command snippets only type into the terminal.
     pub fn runs_commands(self) -> bool {
-        !matches!(self, ToolKind::Snippets)
+        !matches!(self, ToolKind::Snippets | ToolKind::Projects)
+    }
+
+    /// Whether the tool goes with local terminals rather than remote ones.
+    pub fn is_local(self) -> bool {
+        matches!(self, ToolKind::Projects)
     }
 
     /// Whether the tool works on a host running `os`. A host not identified
@@ -41,7 +49,7 @@ impl ToolKind {
             | ToolKind::Connections
             | ToolKind::Monitor
             | ToolKind::Gpu => os.is_none_or(HostOs::is_linux),
-            ToolKind::Snippets | ToolKind::Files => true,
+            ToolKind::Snippets | ToolKind::Files | ToolKind::Projects => true,
             // Wherever `sh` runs `docker`, `kubectl` or `tmux`: Linux, and a
             // Mac with Docker Desktop, kubectl or tmux; and bash's history
             // file wherever `sh` reads it.
@@ -65,6 +73,7 @@ impl ToolKind {
             ToolKind::Connections => "tool-connections",
             ToolKind::Monitor => "tool-monitor",
             ToolKind::Gpu => "tool-gpu",
+            ToolKind::Projects => "tool-projects",
         }
     }
 }
@@ -85,8 +94,16 @@ pub struct ToolTerminal {
     pub view: WeakEntity<TerminalView>,
 }
 
+/// The terminal the right sidebar goes with: an SSH terminal, whose tools
+/// work on its host, or a local terminal, which has 项目 alone.
+#[derive(Clone, PartialEq)]
+pub enum SidebarTarget {
+    Remote(ToolTerminal),
+    Local(LocalTerminalId),
+}
+
 /// The right dock's one panel: the tool the switch at the window's edge
-/// picked, working on the SSH terminal in front. It is there only while one
+/// picked, working on the terminal in front. It is there only while one
 /// is; the workspace hides it, switch and all, with any other tab.
 ///
 /// One panel showing either tool, like the left dock's `Sidebar`, rather
@@ -101,7 +118,7 @@ pub struct ToolSidebar {
     tool: ToolKind,
     /// The terminal in front; `None` while the sidebar is hidden for
     /// another kind of tab.
-    terminal: Option<ToolTerminal>,
+    target: Option<SidebarTarget>,
     /// Whether the right dock is open.
     shown: bool,
     monitor: Entity<MonitorPanel>,
@@ -120,6 +137,7 @@ pub struct ToolSidebar {
     netstat: Entity<NetstatPanel>,
     dispatch: FocusHandle,
     gpu: Entity<GpuPanel>,
+    projects: Entity<ProjectPanel>,
     focus_handle: FocusHandle,
 }
 
@@ -134,9 +152,10 @@ impl ToolSidebar {
     ) -> Self {
         Self {
             tool: ToolKind::default(),
-            terminal: None,
+            target: None,
             shown: false,
             monitor: cx.new(|_| MonitorPanel::new(dispatch.clone())),
+            projects: cx.new(|cx| ProjectPanel::new(store.clone(), dispatch.clone(), cx)),
             snippets: cx.new(|cx| SnippetPanel::new(store, dispatch.clone(), window, cx)),
             history: cx.new(|cx| HistoryPanel::new(dispatch.clone(), window, cx)),
             files: None,
@@ -174,20 +193,51 @@ impl ToolSidebar {
         }
     }
 
-    /// Work on the SSH terminal now in front, and say whether the dock is
+    /// Work on the terminal now in front, and say whether the dock is
     /// open: a tool reads the host only while it is on screen.
-    pub fn set_terminal(
+    pub fn set_target(
         &mut self,
-        terminal: Option<ToolTerminal>,
+        target: Option<SidebarTarget>,
         shown: bool,
         cx: &mut Context<Self>,
     ) {
-        if self.terminal != terminal || self.shown != shown {
-            self.terminal = terminal;
+        if self.target != target || self.shown != shown {
+            self.target = target;
             self.shown = shown;
             self.sync_tools(cx);
             cx.notify();
         }
+    }
+
+    /// The SSH terminal in front, when that is what the sidebar goes with.
+    fn remote(&self) -> Option<&ToolTerminal> {
+        match &self.target {
+            Some(SidebarTarget::Remote(terminal)) => Some(terminal),
+            _ => None,
+        }
+    }
+
+    /// Which of 项目's terminals have their tab open, and which is in
+    /// front.
+    pub fn set_open_terminals(
+        &mut self,
+        open: HashSet<SavedTerminalId>,
+        front: Option<SavedTerminalId>,
+        cx: &mut Context<Self>,
+    ) {
+        self.projects
+            .update(cx, |projects, cx| projects.set_open(open, front, cx));
+    }
+
+    /// The title the shell of one of 项目's open terminals gives it now.
+    pub fn set_terminal_title(
+        &mut self,
+        id: SavedTerminalId,
+        title: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) {
+        self.projects
+            .update(cx, |projects, cx| projects.set_title(id, title, cx));
     }
 
     pub fn toggle_monitor_detail(&mut self, detail: MonitorDetail, cx: &mut Context<Self>) {
@@ -328,9 +378,10 @@ impl ToolSidebar {
         self.processes.read(cx).details(pid)
     }
 
-    /// Point each tool at the terminal, running only the one on screen.
+    /// Point each tool at the SSH terminal, running only the one on screen;
+    /// at none beside a local terminal.
     fn sync_tools(&mut self, cx: &mut Context<Self>) {
-        let target = self.terminal.as_ref().map(|terminal| ExecTarget {
+        let target = self.remote().map(|terminal| ExecTarget {
             terminal: terminal.id,
             view: terminal.view.clone(),
         });
@@ -437,7 +488,7 @@ impl Panel for ToolSidebar {
     /// The tool, and the host it works on: with the center split, more than
     /// one SSH terminal may show.
     fn title(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let host = self.terminal.as_ref().map(|terminal| terminal.name.clone());
+        let host = self.remote().map(|terminal| terminal.name.clone());
         let muted = cx.theme().muted_foreground;
         h_flex()
             .id("tool-sidebar-title")
@@ -463,6 +514,28 @@ impl Panel for ToolSidebar {
             })
     }
 
+    /// 项目's 新建 buttons, beside the 「…」 menu as the host list's are.
+    fn toolbar_buttons(&mut self, _: &mut Window, _: &mut Context<Self>) -> Option<Vec<Button>> {
+        if self.tool != ToolKind::Projects || self.target.is_none() {
+            return None;
+        }
+        let (terminal, group) = (self.dispatch.clone(), self.dispatch.clone());
+        Some(vec![
+            Button::new("new-project-terminal")
+                .icon(IconName::Plus)
+                .tooltip(t!("project.menu.new_terminal"))
+                .on_click(move |_, window, cx| {
+                    terminal.dispatch_action(&NewSavedTerminal(None), window, cx)
+                }),
+            Button::new("new-terminal-group")
+                .icon(Icon::new(CatalogIcon::FolderPlus))
+                .tooltip(t!("project.menu.new_group"))
+                .on_click(move |_, window, cx| {
+                    group.dispatch_action(&NewTerminalGroup, window, cx)
+                }),
+        ])
+    }
+
     fn zoom_control(&self, _: &App) -> Option<PanelControl> {
         None
     }
@@ -475,16 +548,20 @@ impl Panel for ToolSidebar {
 impl Render for ToolSidebar {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Named after the terminal it works on.
-        let id = self.terminal.as_ref().map_or(0, |terminal| terminal.id.0);
+        let id: ElementId = match &self.target {
+            Some(SidebarTarget::Local(id)) => ("tool-sidebar-local", id.0).into(),
+            Some(SidebarTarget::Remote(terminal)) => ("tool-sidebar", terminal.id.0).into(),
+            None => ("tool-sidebar", 0_u64).into(),
+        };
         v_flex()
-            .id(("tool-sidebar", id))
+            .id(id)
             .test_support()
             .aria_label(self.tool.label())
             .track_focus(&self.focus_handle)
             .size_full()
             .bg(cx.theme().sidebar)
             .text_color(cx.theme().sidebar_foreground)
-            .when(self.terminal.is_some(), |sidebar| {
+            .when(self.target.is_some(), |sidebar| {
                 let panel = match self.tool {
                     ToolKind::Snippets => self.snippets.clone().into_any_element(),
                     ToolKind::History => self.history.clone().into_any_element(),
@@ -503,6 +580,7 @@ impl Render for ToolSidebar {
                     ToolKind::Connections => self.netstat.clone().into_any_element(),
                     ToolKind::Monitor => self.monitor.clone().into_any_element(),
                     ToolKind::Gpu => self.gpu.clone().into_any_element(),
+                    ToolKind::Projects => self.projects.clone().into_any_element(),
                 };
                 sidebar.child(div().flex_1().min_h_0().child(panel))
             })
@@ -510,7 +588,7 @@ impl Render for ToolSidebar {
 }
 
 /// The switch at the window's right edge: a button per tool `offered` for
-/// the host in front, the one the sidebar is showing marked, none while it
+/// the terminal in front, the one the sidebar is showing marked, none while it
 /// is hidden.
 ///
 /// The workspace draws it beside the dock area rather than in the right

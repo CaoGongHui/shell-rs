@@ -131,6 +131,7 @@ impl Workspace {
             ToolKind::Monitor => Counter::ToolMonitor,
             ToolKind::Gpu => Counter::ToolGpu,
             ToolKind::Tmux => Counter::ToolTmux,
+            ToolKind::Projects => Counter::ToolProjects,
         });
     }
 

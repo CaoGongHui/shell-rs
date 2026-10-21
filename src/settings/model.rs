@@ -31,6 +31,11 @@ pub struct AppSettings {
     pub terminal_interaction: TerminalInteraction,
     /// 终端 → 侧栏功能: which tools the right sidebar offers.
     pub sidebar_tools: SidebarTools,
+    /// The right sidebar beside local terminals, switched from its tool
+    /// buttons: the tool it shows, `None` while hidden. One for every local
+    /// terminal, as a host keeps its own for its terminals.
+    #[serde(with = "tool_by_key")]
+    pub local_sidebar_tool: Option<ToolKind>,
     /// 终端 → 本地终端.
     pub local_terminal: LocalTerminalSettings,
     pub external_cli: ExternalCliSettings,
@@ -168,6 +173,29 @@ impl SidebarTools {
     }
 }
 
+/// A tool by its `ToolKind::key`. A key this version does not know, or a
+/// value that is not a key, reads as no tool: one stray value must not
+/// cost the rest of the file.
+mod tool_by_key {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use crate::app::ToolKind;
+
+    pub fn serialize<S: Serializer>(
+        tool: &Option<ToolKind>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        tool.map(ToolKind::key).serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<ToolKind>, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Ok(value.as_str().and_then(ToolKind::from_key))
+    }
+}
+
 /// 应用 → 窗口: what the next launch restores of the main window. Both on
 /// until the user turns them off.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -294,13 +322,25 @@ fn readable_rules<'de, D: Deserializer<'de>>(
 }
 
 /// 终端 → 本地终端.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LocalTerminalSettings {
     /// The program new and restarted local terminals run, a path or a
     /// command with any arguments, as typed. `None` is the system's default
     /// shell, found anew each time.
     pub shell: Option<String>,
+    /// 保留终端内容: a 项目 terminal's last lines of output, kept when it
+    /// closes and drawn again when it opens. On until the user turns it off.
+    pub keep_output: bool,
+}
+
+impl Default for LocalTerminalSettings {
+    fn default() -> Self {
+        Self {
+            shell: None,
+            keep_output: true,
+        }
+    }
 }
 
 /// 终端 → 通知: what a terminal may tell the user about while they look
@@ -716,6 +756,42 @@ mod tests {
         );
     }
 
+    /// The sidebar beside local terminals: hidden until opened, by key in
+    /// the file, and hidden again for a value it does not know.
+    #[test]
+    fn the_local_sidebar_keeps_its_tool_by_key() {
+        assert_eq!(AppSettings::default().local_sidebar_tool, None);
+        assert!(ToolKind::Projects.shown_by_default());
+        let settings = AppSettings {
+            local_sidebar_tool: Some(ToolKind::Projects),
+            ..AppSettings::default()
+        };
+        let json = serde_json::to_value(&settings).unwrap();
+        assert_eq!(json["local_sidebar_tool"], "projects");
+        let read: AppSettings = serde_json::from_value(json).unwrap();
+        assert_eq!(read, settings);
+        for stray in [r#""notes""#, "3", "{}", "null"] {
+            let read: AppSettings = serde_json::from_str(&format!(
+                r#"{{"local_sidebar_tool":{stray},"sidebar_tools":{{"gpu":true}}}}"#
+            ))
+            .unwrap();
+            assert_eq!(read.local_sidebar_tool, None, "{stray}");
+            assert!(read.sidebar_tools.shows(ToolKind::Gpu));
+        }
+    }
+
+    /// 保留终端内容 is on in a file from before it, as in a new one.
+    #[test]
+    fn terminal_output_is_kept_unless_turned_off() {
+        assert!(AppSettings::default().local_terminal.keep_output);
+        let read: AppSettings =
+            serde_json::from_str(r#"{"local_terminal":{"shell":"/bin/zsh"}}"#).unwrap();
+        assert!(read.local_terminal.keep_output);
+        let read: AppSettings =
+            serde_json::from_str(r#"{"local_terminal":{"keep_output":false}}"#).unwrap();
+        assert!(!read.local_terminal.keep_output);
+    }
+
     /// 界面字号: gpui-kit's 16 until changed, whole pixels within 12–20.
     #[test]
     fn the_interface_font_stays_as_it_was_until_changed() {
@@ -769,6 +845,7 @@ mod tests {
         let blank = AppSettings {
             local_terminal: LocalTerminalSettings {
                 shell: Some("  ".into()),
+                ..LocalTerminalSettings::default()
             },
             ..AppSettings::default()
         };
