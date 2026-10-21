@@ -4,7 +4,7 @@
 //!
 //! A saved terminal is one tab at most. Closing the tab keeps it in its
 //! group; a click opens it again in the folder its shell was last in.
-//! Deleting it, or its group, leaves an open tab alone. The saved terminals
+//! Deleting it, or its group, closes its tab too. The saved terminals
 //! open are saved as they change, in tab order with the one last in front,
 //! so a launch after a quit, a crash or an update brings them back. Plain
 //! local terminals are not among them.
@@ -32,6 +32,7 @@ use crate::host::{HostStore, SavedTerminal, SavedTerminalId, SavedTerminalTab};
 use crate::i18n::t;
 use crate::project::{NameDialog, confirm_delete_terminal_group, open_name_dialog};
 use crate::settings::AppSettings;
+use crate::shared::confirm_delete;
 use crate::terminal::{LocalLaunch, LocalShell, LocalTerminalId, LocalTerminalPanel, SavedName};
 
 use super::workspace_view::Workspace;
@@ -62,8 +63,8 @@ impl Workspace {
         }
     }
 
-    /// Delete a group with its terminals, after asking. Their open tabs
-    /// stay.
+    /// Delete a group with its terminals, and their open tabs, after
+    /// asking.
     pub(super) fn on_delete_terminal_group(
         &mut self,
         action: &DeleteTerminalGroup,
@@ -75,15 +76,29 @@ impl Workspace {
         let Some(name) = store.terminal_group(id).map(|group| group.name.clone()) else {
             return;
         };
-        let terminals = store.terminals_in(Some(id)).len();
-        let store = self.store.clone();
+        let terminals: Vec<_> = store
+            .terminals_in(Some(id))
+            .iter()
+            .map(|terminal| terminal.id)
+            .collect();
+        let open = terminals
+            .iter()
+            .filter(|terminal| self.tab_of(**terminal).is_some())
+            .count();
+        let workspace = cx.entity().downgrade();
         confirm_delete_terminal_group(
             &name,
-            terminals,
-            Rc::new(move |_, cx| {
-                store.update(cx, |store, cx| {
-                    store.remove_terminal_group(id, cx);
-                });
+            terminals.len(),
+            open,
+            Rc::new(move |window, cx| {
+                workspace
+                    .update(cx, |this, cx| {
+                        this.close_saved_terminals(&terminals, window, cx);
+                        this.store.update(cx, |store, cx| {
+                            store.remove_terminal_group(id, cx);
+                        });
+                    })
+                    .ok();
             }),
             window,
             cx,
@@ -155,17 +170,59 @@ impl Workspace {
         }
     }
 
-    /// Delete a saved terminal, without asking: there is little to it. Its
-    /// open tab stays.
+    /// Delete a saved terminal with its tab. Closed, it goes without asking:
+    /// there is little to it. Open, only after asking, for whatever runs in
+    /// it ends.
     pub(super) fn on_delete_saved_terminal(
         &mut self,
         action: &DeleteSavedTerminal,
-        _: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.store.update(cx, |store, cx| {
-            store.remove_saved_terminal(action.0, cx);
-        });
+        let id = action.0;
+        let Some(panel) = self
+            .tab_of(id)
+            .and_then(|tab| self.local_terminals.get(&tab))
+        else {
+            self.store.update(cx, |store, cx| {
+                store.remove_saved_terminal(id, cx);
+            });
+            return;
+        };
+        let name = panel.read(cx).display_title(cx);
+        let workspace = cx.entity().downgrade();
+        confirm_delete(
+            &name,
+            Some(t!("project.delete_terminal.open")),
+            Rc::new(move |window, cx| {
+                workspace
+                    .update(cx, |this, cx| {
+                        this.close_saved_terminals(&[id], window, cx);
+                        this.store.update(cx, |store, cx| {
+                            store.remove_saved_terminal(id, cx);
+                        });
+                    })
+                    .ok();
+            }),
+            window,
+            cx,
+        );
+    }
+
+    /// Close the tabs of saved terminals about to be deleted, keeping
+    /// nothing of what they show.
+    fn close_saved_terminals(
+        &mut self,
+        terminals: &[SavedTerminalId],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for terminal in terminals {
+            if let Some(tab) = self.tab_of(*terminal) {
+                self.saved_terminals.remove(&tab);
+                self.on_close_local_terminal(&CloseLocalTerminal(tab), window, cx);
+            }
+        }
     }
 
     /// A group's heading: hide its terminals, or show them again, for the
@@ -258,8 +315,8 @@ impl Workspace {
             .update(cx, |tools, cx| tools.set_terminal_title(id, title, cx));
     }
 
-    /// The store changed: tabs of terminals deleted are plain terminals
-    /// now, and those renamed are called so.
+    /// The store changed: tabs of terminals deleted elsewhere are plain
+    /// terminals now, and those renamed are called so.
     pub(super) fn on_saved_terminals_changed(&mut self, cx: &mut Context<Self>) {
         let store = self.store.read(cx);
         let before = self.saved_terminals.len();

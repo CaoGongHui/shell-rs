@@ -441,7 +441,7 @@ async fn a_terminals_last_title_names_it_closed_and_at_the_next_launch(cx: &mut 
 }
 
 #[gpui_kit::test]
-async fn renaming_names_the_tab_and_deleting_leaves_it_open(cx: &mut TestAppContext) {
+async fn renaming_names_the_tab_and_deleting_closes_it(cx: &mut TestAppContext) {
     let (handle, workspace) = open_with_local(cx, projects_store(), fake_local_terminals());
     dispatch(cx, handle, OpenSavedTerminal(FIRST));
     dispatch(cx, handle, OpenSavedTerminal(BLOG_FIRST));
@@ -464,26 +464,32 @@ async fn renaming_names_the_tab_and_deleting_leaves_it_open(cx: &mut TestAppCont
         );
     });
 
-    // Deleted, at once, it leaves its tab open, and the list the next
-    // launch opens.
+    // Deleted while open, only after asking, for what runs in it ends;
+    // its tab closes with it.
     focus_a_tab(cx, handle);
     dispatch(cx, handle, DeleteSavedTerminal(FIRST));
     let store = cx.update(|cx| workspace.read(cx).store().clone());
+    assert!(cx.update(|cx| store.read(cx).saved_terminal(FIRST).is_some()));
+    in_frame(cx, handle, |window, cx| window.click("ok", cx));
+    cx.run_until_parked();
     assert!(cx.update(|cx| store.read(cx).saved_terminal(FIRST).is_none()));
-    assert!(cx.update(|cx| workspace.read(cx).local_terminal(first).is_some()));
+    assert!(cx.update(|cx| workspace.read(cx).local_terminal(first).is_none()));
     assert_eq!(saved(&workspace, cx), [tab(BLOG_FIRST, true)]);
 
-    // A group goes with its terminals, their tabs left open.
-    focus_a_tab(cx, handle);
+    // A group goes with its terminals, their tabs too.
+    in_frame(cx, handle, |window, cx| {
+        window.click(("local-terminal", 2_u64), cx)
+    });
     dispatch(cx, handle, DeleteTerminalGroup(BLOG));
     in_frame(cx, handle, |window, cx| window.click("ok", cx));
+    cx.run_until_parked();
     assert!(cx.update(|cx| store.read(cx).terminal_group(BLOG).is_none()));
     assert!(cx.update(|cx| store.read(cx).saved_terminal(BLOG_FIRST).is_none()));
     assert!(cx.update(|cx| {
         workspace
             .read(cx)
             .local_terminal(LocalTerminalId(2))
-            .is_some()
+            .is_none()
     }));
     assert!(saved(&workspace, cx).is_empty());
 }
@@ -533,7 +539,7 @@ async fn rows_are_dragged_into_order_and_deleted_from_their_hover_button(cx: &mu
             .hover(("saved-terminal-row", SECOND.0), cx)
     });
     assert!(shown(cx));
-    // Gone at once: nothing to ask about.
+    // Not open, it goes at once: nothing to ask about.
     in_frame(cx, handle, |window, cx| {
         window
             .within("project-tree")
@@ -940,8 +946,11 @@ async fn a_closed_terminal_draws_again_what_it_showed(cx: &mut TestAppContext) {
     dispatch(cx, handle, CloseLocalTerminal(LocalTerminalId(3)));
     assert_eq!(std::fs::read_dir(&outputs).unwrap().count(), 1);
 
-    // Deleted, it takes what it kept with it.
+    // Deleted, open, it takes what it kept with it, keeping nothing as its
+    // tab closes.
     dispatch(cx, handle, DeleteSavedTerminal(FIRST));
+    in_frame(cx, handle, |window, cx| window.click("ok", cx));
+    cx.run_until_parked();
     assert_eq!(std::fs::read_dir(&outputs).unwrap().count(), 0);
 }
 

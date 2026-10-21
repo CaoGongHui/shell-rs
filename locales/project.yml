@@ -64,8 +64,16 @@ project.dialog.group_taken:
   zh-CN: 已有同名分组
   en: There’s already a group with this name
 
+project.delete_terminal.open:
+  zh-CN: 删除会关闭它的标签。
+  en: Deleting it closes its tab.
 project.delete_group.terminals.one:
-  en: This also deletes the local terminal in it. If it’s open, it stays open.
+  en: This also deletes the local terminal in it.
 project.delete_group.terminals.other:
-  zh-CN: 将同时删除其中的 %{count} 个本地终端，已打开的不受影响。
-  en: This also deletes the %{count} local terminals in it. Those open stay open.
+  zh-CN: 将同时删除其中的 %{count} 个本地终端。
+  en: This also deletes the %{count} local terminals in it.
+project.delete_group.open_terminals.one:
+  en: This also deletes the local terminal in it and closes its tab.
+project.delete_group.open_terminals.other:
+  zh-CN: 将同时删除其中的 %{count} 个本地终端，开着的会关闭标签。
+  en: This also deletes the %{count} local terminals in it and closes the tabs of those open.

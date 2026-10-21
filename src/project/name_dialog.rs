@@ -155,14 +155,20 @@ pub fn open_name_dialog(
     });
 }
 
-/// Ask before deleting a group, which takes its terminals with it.
+/// Ask before deleting a group, which takes its terminals with it, and the
+/// tabs of the `open` ones.
 pub fn confirm_delete_terminal_group(
     name: &str,
     terminals: usize,
+    open: usize,
     on_delete: DeleteHandler,
     window: &mut Window,
     cx: &mut App,
 ) {
-    let description = (terminals > 0).then(|| tn!("project.delete_group.terminals", terminals));
+    let description = match (terminals, open) {
+        (0, _) => None,
+        (_, 0) => Some(tn!("project.delete_group.terminals", terminals)),
+        _ => Some(tn!("project.delete_group.open_terminals", terminals)),
+    };
     confirm_delete(name, description, on_delete, window, cx);
 }
