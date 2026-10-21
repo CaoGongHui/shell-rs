@@ -4,6 +4,32 @@
 
 One section per version, titled `## [version]`, optionally followed by a date. Each section is written in English here and in Chinese in [CHANGELOG.zh.md](CHANGELOG.zh.md), in the same change. The release workflow (`.github/workflows/release.yml`) takes the section with the tag’s version, as it is, for the GitHub release. The website’s changelog shows this file in English and Japanese and CHANGELOG.zh.md in Chinese (ShellRS’s update dialog opens it with What’s new). Written in Markdown, for users.
 
+## [0.1.14]
+
+### Added
+
+- Projects in the right sidebar beside local terminals: keep local terminals in groups like hosts, and after reopening ShellRS carry on in the folders they were in.
+- Terminals in Projects keep their last 1,000 lines of output when closed or when ShellRS quits, and show them when opened again; you can turn this off in Settings.
+- Shift+Enter takes a new line in programs that support it, such as Claude Code, in local and remote terminals.
+- Maximize window ⌃⌘↑ and Restore window ⌃⌘↓ shortcuts (macOS).
+- A system-wide Show or hide ShellRS shortcut that works from any app; it has no keys until you set them in Settings › Keyboard shortcuts.
+
+### Improved
+
+- The right sidebar remembers for each host whether it’s open and which tool it shows: open Files on a host, and it opens by itself whenever you connect to that host.
+- In a terminal on Windows and Linux, Ctrl with a letter (such as tmux’s Ctrl+B) goes to the shell instead of triggering a ShellRS shortcut.
+- The mouse pointer is an I-beam over a terminal’s text.
+- A local terminal tab with a long title shows just the folder’s name.
+- A long tab name ends in “…” instead of making the tab very wide.
+- When importing hosts, hovering over a name, address or other value cut short shows all of it.
+
+### Fixed
+
+- Box drawing such as the lines between tmux panes came apart into dashes in terminals.
+- On small screens, such as a laptop at 150% scaling, the window ran off the screen the first time it opened.
+- On Linux, GNOME and other desktops showed a generic app icon in the dock instead of ShellRS’s.
+- When importing hosts, a long authentication name covered the Status column.
+
 ## [0.1.14-beta.4]
 
 ### Added
