@@ -39,6 +39,9 @@ pub struct SavedTerminal {
     /// Named by hand: the name shows over any title its shell or a program
     /// gives its tab. A name it was given (`shellrs 2`) gives way to one.
     pub renamed: bool,
+    /// The title its shell or a program gave its tab last, kept as the tab
+    /// closed: shown for the name, as a title is, until another comes.
+    pub title: Option<SharedString>,
     /// The folder its shell was last in, `None` before it said: the home
     /// folder then.
     pub directory: Option<String>,

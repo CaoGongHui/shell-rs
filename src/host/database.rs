@@ -43,7 +43,7 @@ fn from_sql(id: i64) -> u64 {
 /// to 12 were development builds, and their files are refused. 14 adds the
 /// command snippets, 15 the serial hosts, 16 the Telnet hosts, 17 each
 /// host's right sidebar, 18 the saved local terminals.
-const SCHEMA_VERSION: i64 = 18;
+const SCHEMA_VERSION: i64 = 19;
 
 /// The whole schema, as a new database gets it.
 ///
@@ -92,7 +92,8 @@ const SCHEMA_VERSION: i64 = 18;
 /// - **terminal_groups** are 项目's groups, which do not nest, and take
 ///   their **saved_terminals** with them; a terminal of no group is at the
 ///   top. `expanded` is as a host group's. A terminal `renamed` by hand
-///   keeps its name over the titles its shell gives it. A saved terminal's `directory` is
+///   keeps its name over the titles its shell gives it; `title` is the
+///   last of those, `NULL` before one. A saved terminal's `directory` is
 ///   the folder of this computer its shell was last in, `NULL` before it
 ///   said.
 /// - **saved_terminal_tabs** lists the saved terminals open when ShellRS
@@ -226,7 +227,8 @@ CREATE TABLE saved_terminals (
     name       TEXT NOT NULL CHECK (name <> ''),
     renamed    INTEGER NOT NULL DEFAULT 0 CHECK (renamed IN (0, 1)),
     directory  TEXT CHECK (directory <> ''),
-    sort_order INTEGER NOT NULL DEFAULT 0
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    title      TEXT CHECK (title <> '')
 ) STRICT;
 CREATE INDEX saved_terminals_group_id ON saved_terminals(group_id);
 CREATE TABLE saved_terminal_tabs (
@@ -251,7 +253,7 @@ enum Step {
 ///
 /// A step is history: it says what that version's change was, and stays as
 /// written when `SCHEMA` changes again.
-const STEPS: [(i64, Step); 5] = [
+const STEPS: [(i64, Step); 6] = [
     (
     13,
     // The command snippets.
@@ -337,6 +339,16 @@ CREATE TABLE saved_terminal_tabs (
 ) STRICT;
 CREATE UNIQUE INDEX saved_terminal_tabs_front ON saved_terminal_tabs(front) WHERE front = 1;
 PRAGMA user_version = 18;
+COMMIT;",
+        ),
+    ),
+    (
+        18,
+        // A saved terminal's last title.
+        Step::Sql(
+            "BEGIN;
+ALTER TABLE saved_terminals ADD COLUMN title      TEXT CHECK (title <> '');
+PRAGMA user_version = 19;
 COMMIT;",
         ),
     ),
@@ -772,8 +784,8 @@ impl HostDatabase {
         let saved_terminals = self
             .connection
             .prepare(
-                "SELECT id, group_id, name, renamed, directory, sort_order FROM saved_terminals \
-                 ORDER BY id",
+                "SELECT id, group_id, name, renamed, title, directory, sort_order \
+                 FROM saved_terminals ORDER BY id",
             )?
             .query_map([], |row| {
                 let name: String = row.get(2)?;
@@ -784,8 +796,9 @@ impl HostDatabase {
                         .map(|id| TerminalGroupId(from_sql(id))),
                     name: name.into(),
                     renamed: row.get(3)?,
-                    directory: row.get(4)?,
-                    sort_order: row.get(5)?,
+                    title: row.get::<_, Option<String>>(4)?.map(Into::into),
+                    directory: row.get(5)?,
+                    sort_order: row.get(6)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1270,13 +1283,15 @@ impl HostDatabase {
 
     pub fn insert_saved_terminal(&self, terminal: &SavedTerminal) -> rusqlite::Result<()> {
         self.connection.execute(
-            "INSERT INTO saved_terminals (id, group_id, name, renamed, directory, sort_order) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO saved_terminals \
+             (id, group_id, name, renamed, title, directory, sort_order) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 to_sql(terminal.id.0),
                 terminal.group.map(|group| to_sql(group.0)),
                 terminal.name.as_ref(),
                 terminal.renamed,
+                terminal.title.as_deref(),
                 terminal.directory,
                 terminal.sort_order,
             ],
@@ -1287,13 +1302,15 @@ impl HostDatabase {
     pub fn update_saved_terminal(&self, terminal: &SavedTerminal) -> rusqlite::Result<()> {
         self.connection.execute(
             "UPDATE saved_terminals \
-             SET group_id = ?2, name = ?3, renamed = ?4, directory = ?5, sort_order = ?6 \
+             SET group_id = ?2, name = ?3, renamed = ?4, title = ?5, directory = ?6, \
+                 sort_order = ?7 \
              WHERE id = ?1",
             params![
                 to_sql(terminal.id.0),
                 terminal.group.map(|group| to_sql(group.0)),
                 terminal.name.as_ref(),
                 terminal.renamed,
+                terminal.title.as_deref(),
                 terminal.directory,
                 terminal.sort_order,
             ],
@@ -2258,12 +2275,54 @@ INSERT INTO snippets (id, category_id, name, command, scope_host_id)
         assert!(data.saved_terminal_tabs.is_empty());
     }
 
+    #[test]
+    fn a_version_18_file_gets_the_title_column_and_keeps_its_terminals() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shellrs.db");
+        {
+            // Version 18 as files of it have it: 15's schema, taken on by
+            // its steps.
+            let old = Connection::open(&path).unwrap();
+            old.execute_batch(&format!(
+                "BEGIN;\n{SCHEMA_15}\nPRAGMA user_version = 15;\nCOMMIT;"
+            ))
+            .unwrap();
+            add_telnet(&old).unwrap();
+            for (_, step) in &STEPS[3..5] {
+                let Step::Sql(sql) = step else {
+                    panic!("versions 17 and 18 are SQL steps");
+                };
+                old.execute_batch(sql).unwrap();
+            }
+            old.execute_batch(
+                "INSERT INTO terminal_groups (id, name) VALUES (1, 'shellrs');
+INSERT INTO saved_terminals (id, group_id, name, directory) \
+ VALUES (1, 1, 'shellrs 1', '/code/shellrs');",
+            )
+            .unwrap();
+        }
+
+        let db = HostDatabase::open(&path).unwrap();
+        let version: i64 = db
+            .connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        assert!(dir.path().join("shellrs.db.v18.bak").exists());
+        let fresh = HostDatabase::in_memory().unwrap();
+        assert_eq!(schema_of(&db.connection), schema_of(&fresh.connection));
+        let mut first = terminal(1, 1, "shellrs 1");
+        first.directory = Some("/code/shellrs".into());
+        assert_eq!(db.load().unwrap().saved_terminals, [first]);
+    }
+
     fn terminal(id: u64, group: u64, name: &str) -> SavedTerminal {
         SavedTerminal {
             id: SavedTerminalId(id),
             group: Some(TerminalGroupId(group)),
             name: name.into(),
             renamed: false,
+            title: None,
             directory: None,
             sort_order: 0,
         }
@@ -2311,6 +2370,7 @@ INSERT INTO snippets (id, category_id, name, command, scope_host_id)
 
         claude.name = "cargo run".into();
         claude.renamed = true;
+        claude.title = Some("✳ Claude Code".into());
         claude.directory = Some("/code/shellrs/src".into());
         db.update_saved_terminal(&claude).unwrap();
         let mut site = terminal_group(2, "site");

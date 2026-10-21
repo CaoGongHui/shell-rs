@@ -9,9 +9,11 @@
 //! so a launch after a quit, a crash or an update brings them back. Plain
 //! local terminals are not among them.
 //!
-//! With 保留终端内容 on, a saved terminal's last lines of output are kept
-//! when its tab closes and when the window goes (ShellRS quitting), and
-//! drawn again, above a line saying so, when it next opens.
+//! A saved terminal's last title is kept when its tab closes and when the
+//! window goes (ShellRS quitting), and stands for the title until its
+//! shell or a program gives another. With 保留终端内容 on, its last lines
+//! of output are kept then too, and drawn again, above a line saying so,
+//! when it next opens.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -279,16 +281,23 @@ impl Workspace {
         }
     }
 
-    /// Keep what a saved terminal's tab shows, for the next time it opens.
-    pub(super) fn keep_output_of(
+    /// Keep what a saved terminal's tab shows, its title and output, for
+    /// the next time it opens. Not on every new title: a program may change
+    /// it several times a second.
+    pub(super) fn keep_what_it_shows(
         &self,
         tab: LocalTerminalId,
         panel: &Entity<LocalTerminalPanel>,
-        cx: &App,
+        cx: &mut App,
     ) {
         let Some(id) = self.saved_terminals.get(&tab).copied() else {
             return;
         };
+        if let Some(title) = panel.read(cx).shell_title(cx) {
+            self.store.update(cx, |store, cx| {
+                store.set_saved_terminal_title(id, title, cx);
+            });
+        }
         if !self
             .settings()
             .read(cx)
@@ -303,9 +312,9 @@ impl Workspace {
     }
 
     /// The window is going: keep what every saved terminal open shows.
-    pub(super) fn keep_outputs_on_close(&self, cx: &App) {
+    pub(super) fn keep_on_close(&self, cx: &mut App) {
         for (tab, panel) in &self.local_terminals {
-            self.keep_output_of(*tab, panel, cx);
+            self.keep_what_it_shows(*tab, panel, cx);
         }
     }
 
@@ -351,6 +360,7 @@ pub(super) fn saved_name(saved: &SavedTerminal) -> SavedName {
     SavedName {
         name: saved.name.clone(),
         fixed: saved.renamed,
+        title: saved.title.clone(),
     }
 }
 

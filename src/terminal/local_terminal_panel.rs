@@ -37,12 +37,14 @@ pub enum LocalTerminalPanelEvent {
 }
 
 /// What 项目 calls one of its terminals. Its tab shows the name until the
-/// shell or a program titles it, as a terminal app's tab does; a name
-/// `fixed` by hand shows over any title.
+/// shell or a program titles it, as a terminal app's tab does, or the
+/// `title` it had last time until then; a name `fixed` by hand shows over
+/// any title.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SavedName {
     pub name: SharedString,
     pub fixed: bool,
+    pub title: Option<SharedString>,
 }
 
 /// A local login-shell Dock tab backed by the shared terminal view.
@@ -186,7 +188,9 @@ impl LocalTerminalPanel {
         if let Some(name) = self.name.as_ref().filter(|name| name.fixed) {
             return name.name.clone();
         }
-        self.shell_title(cx).unwrap_or_else(|| self.default_title())
+        self.shell_title(cx)
+            .or_else(|| self.name.as_ref().and_then(|name| name.title.clone()))
+            .unwrap_or_else(|| self.default_title())
     }
 }
 

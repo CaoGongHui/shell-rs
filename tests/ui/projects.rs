@@ -372,6 +372,74 @@ async fn a_programs_title_names_the_terminal_until_it_is_named_by_hand(cx: &mut 
     assert_eq!(first_names(cx, handle), claude());
 }
 
+/// What 项目's row of `id` and local terminal `tab`'s tab are called.
+fn names(
+    cx: &mut TestAppContext,
+    handle: WindowHandle<Root>,
+    id: SavedTerminalId,
+    tab: u64,
+) -> (String, String) {
+    let mut names = (String::new(), String::new());
+    in_frame(cx, handle, |window, _| {
+        let row = window
+            .within("project-tree")
+            .find(("saved-terminal-row", id.0));
+        let tab = window.find(("local-terminal-tab", tab));
+        names = (
+            row.label().unwrap_or_default().to_owned(),
+            tab.label().unwrap_or_default().to_owned(),
+        );
+    });
+    names
+}
+
+#[gpui_kit::test]
+async fn a_terminals_last_title_names_it_closed_and_at_the_next_launch(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("shellrs.db");
+    let database = HostDatabase::open(&path).unwrap();
+    let store = projects_store();
+    for group in store.terminal_groups() {
+        database.insert_terminal_group(group).unwrap();
+    }
+    for terminal in store.saved_terminals() {
+        database.insert_saved_terminal(terminal).unwrap();
+    }
+    let local = Arc::new(FixedLocalTerminalTransportProvider::new(Arc::new(
+        FakeTerminalFactory::printing("\x1b]0;✳ Claude Code\x07"),
+    )));
+    let (handle, workspace) = open_with_local(cx, HostStore::load(database).unwrap(), local);
+    dispatch(cx, handle, OpenSavedTerminal(FIRST));
+    dispatch(cx, handle, OpenSavedTerminal(BLOG_FIRST));
+    in_frame(cx, handle, |window, cx| window.click("tool-projects", cx));
+    cx.wait_for(handle.into(), Duration::from_secs(2), |window, _| {
+        let tree = window.within("project-tree");
+        [FIRST, BLOG_FIRST].into_iter().all(|id| {
+            tree.try_find(("saved-terminal-row", id.0))
+                .is_some_and(|row| row.label() == Some("✳ Claude Code"))
+        })
+    })
+    .await;
+
+    // Closed, it is called by its last title still.
+    dispatch(cx, handle, CloseSavedTerminal(FIRST));
+    assert_eq!(names(cx, handle, FIRST, 2).0, "✳ Claude Code");
+
+    // So is blog 1, open at quit, at the next launch, before its shell
+    // titles it; and shellrs 1, opened again.
+    drop(workspace);
+    cx.update_window(handle.into(), |_, window, _| window.remove_window())
+        .unwrap();
+    cx.run_until_parked();
+    let store = HostStore::load(HostDatabase::open(&path).unwrap()).unwrap();
+    let (handle, _workspace) = open_with_local(cx, store, fake_local_terminals());
+    in_frame(cx, handle, |window, cx| window.click("tool-projects", cx));
+    let claude = ("✳ Claude Code".to_owned(), "✳ Claude Code".to_owned());
+    assert_eq!(names(cx, handle, BLOG_FIRST, 1), claude);
+    dispatch(cx, handle, OpenSavedTerminal(FIRST));
+    assert_eq!(names(cx, handle, FIRST, 2), claude);
+}
+
 #[gpui_kit::test]
 async fn renaming_names_the_tab_and_deleting_leaves_it_open(cx: &mut TestAppContext) {
     let (handle, workspace) = open_with_local(cx, projects_store(), fake_local_terminals());

@@ -204,6 +204,7 @@ impl HostStore {
             group,
             name: name.into(),
             renamed: false,
+            title: None,
             directory,
             sort_order,
         });
@@ -284,6 +285,33 @@ impl HostStore {
             return false;
         }
         terminal.directory = Some(directory);
+        let terminal = terminal.clone();
+        self.persist(Change::SaveSavedTerminal, cx, |db| {
+            db.update_saved_terminal(&terminal)
+        });
+        cx.notify();
+        true
+    }
+
+    /// Remember the title its shell or a program gave a terminal's tab
+    /// last.
+    pub fn set_saved_terminal_title(
+        &mut self,
+        id: SavedTerminalId,
+        title: SharedString,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(terminal) = self
+            .saved_terminals
+            .iter_mut()
+            .find(|terminal| terminal.id == id)
+        else {
+            return false;
+        };
+        if terminal.title.as_ref() == Some(&title) {
+            return false;
+        }
+        terminal.title = Some(title);
         let terminal = terminal.clone();
         self.persist(Change::SaveSavedTerminal, cx, |db| {
             db.update_saved_terminal(&terminal)
@@ -753,6 +781,7 @@ mod tests {
             group: Some(group.id),
             name: "claude".into(),
             renamed: true,
+            title: Some("✳ Claude Code".into()),
             directory: Some("/code/shellrs".into()),
             sort_order: 5,
         };

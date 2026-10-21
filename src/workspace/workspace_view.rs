@@ -394,7 +394,7 @@ impl Workspace {
             // What the saved terminals show, for the next launch to draw: the
             // workspace goes with its window, as ShellRS quits (and on
             // Windows and Linux as the window closes, before it quits).
-            cx.on_release(|this, cx| this.keep_outputs_on_close(cx)),
+            cx.on_release(|this, cx| this.keep_on_close(cx)),
             // The right sidebar is never dragged narrower than it opens.
             cx.observe_in(&dock_area, window, |this, _, window, cx| {
                 this.hold_tool_sidebar_width(window, cx)
@@ -2755,7 +2755,7 @@ fn new_local_terminal_panel(
                 cx.notify();
             }
             LocalTerminalPanelEvent::Closed(id) => {
-                this.keep_output_of(*id, panel, cx);
+                this.keep_what_it_shows(*id, panel, cx);
                 this.local_terminals.remove(id);
                 this.saved_terminals.remove(id);
                 if this.front_saved_terminal == Some(*id) {

@@ -48,7 +48,8 @@ pub struct ProjectPanel {
     open: HashSet<SavedTerminalId>,
     front: Option<SavedTerminalId>,
     /// What the shells or programs of open terminals title them, shown for
-    /// the names they were given, as their tabs show it.
+    /// the names they were given, as their tabs show it. The title a
+    /// terminal had when its tab last closed shows until then.
     titles: HashMap<SavedTerminalId, SharedString>,
     /// Which row the last right click landed on, `None` for the blank space
     /// below the rows. Shared with the row renderer and the menu builder.
@@ -222,7 +223,11 @@ impl Render for ProjectPanel {
                         None => ("~".into(), None),
                     };
                     // A name given by hand shows over the titles.
-                    let title = self.titles.get(&terminal.id).filter(|_| !terminal.renamed);
+                    let title = self
+                        .titles
+                        .get(&terminal.id)
+                        .or(terminal.title.as_ref())
+                        .filter(|_| !terminal.renamed);
                     (
                         terminal.id,
                         TerminalOf {
