@@ -276,6 +276,44 @@ async fn hosts_from_known_hosts_log_in_as_root_and_hashed_ones_are_counted(
 }
 
 #[gpui_kit::test]
+async fn a_long_auth_label_stays_in_its_column(cx: &mut TestAppContext) {
+    let home = ssh_home(&[
+        (
+            "config",
+            "\
+Host web-01
+  HostName 10.0.1.1
+  IdentityFile ~/.ssh/id_ed25519_a_rather_long_name_for_work
+",
+        ),
+        ("id_ed25519_a_rather_long_name_for_work", "not really a key"),
+    ]);
+    let (handle, workspace) = open_workspace_with_store(cx, HostStore::empty());
+    open_import(
+        cx,
+        handle,
+        &workspace,
+        &ssh_dir(&home),
+        Box::new(ImportSshConfig),
+    )
+    .await;
+
+    in_frame(cx, handle, |window, _| {
+        let auth = window.find(("import-auth", 0usize));
+        assert_eq!(
+            auth.label(),
+            Some("id_ed25519_a_rather_long_name_for_work（新建凭据）")
+        );
+        let status = window.find(("import-status", 0usize)).bounds();
+        assert!(
+            auth.bounds().right() <= status.left(),
+            "{:?} runs into {status:?}",
+            auth.bounds()
+        );
+    });
+}
+
+#[gpui_kit::test]
 async fn without_a_file_or_a_selection_nothing_can_be_imported(cx: &mut TestAppContext) {
     let home = ssh_home(&[(
         "known_hosts",
