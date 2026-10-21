@@ -174,22 +174,12 @@ fn placement(
         .iter()
         .find(|screen| Some(screen.id) == primary)
         .or(screens.first());
-    let centered = |screen: Option<&Screen>, size: Size<Pixels>| match screen {
-        Some(screen) => Bounds::centered_at(screen.bounds.center(), size),
-        None => Bounds::new(point(px(0.), px(0.)), size),
-    };
-    let Some(saved) = saved.filter(|_| settings.remember_size || settings.remember_position) else {
-        return (
-            WindowBounds::Windowed(centered(primary, default_size())),
-            None,
-        );
-    };
+    let saved = saved.filter(|_| settings.remember_size || settings.remember_position);
 
     // The screen it was on, if remembered and still there; else the main
     // one.
     let remembered = saved
-        .display
-        .as_ref()
+        .and_then(|saved| saved.display.as_ref())
         .filter(|_| settings.remember_position)
         .and_then(|uuid| {
             screens
@@ -197,26 +187,36 @@ fn placement(
                 .find(|screen| screen.uuid.as_ref() == Some(uuid))
         });
     let screen = remembered.or(primary);
-    let size = if settings.remember_size {
-        // Taken from a larger screen, it shrinks to fit this one.
-        match screen {
-            Some(screen) => size(
-                saved.bounds.size.width.min(screen.visible.size.width),
-                saved.bounds.size.height.min(screen.visible.size.height),
-            ),
-            None => saved.bounds.size,
-        }
-    } else {
-        default_size()
+    let sized = saved.filter(|_| settings.remember_size);
+    // Taken from a larger screen, it shrinks to fit this one.
+    let size = sized.map_or(default_size(), |saved| saved.bounds.size);
+    let size = match screen {
+        Some(screen) => size.min(&screen.visible.size),
+        None => size,
     };
-    let bounds = match remembered {
-        Some(screen) if reachable(Bounds::new(saved.bounds.origin, size), screen.bounds) => {
+    let bounds = match (saved, remembered) {
+        (Some(saved), Some(screen))
+            if reachable(Bounds::new(saved.bounds.origin, size), screen.bounds) =>
+        {
             Bounds::new(saved.bounds.origin, size)
         }
-        _ => centered(screen, size),
+        // Clear of the menu bar, Dock and taskbar.
+        _ => match screen {
+            Some(screen) => Bounds::centered_at(screen.visible.center(), size),
+            None => Bounds::new(point(px(0.), px(0.)), size),
+        },
     };
     let display = remembered.map(|screen| screen.id);
-    if settings.remember_size && saved.maximized {
+    let maximized = match sized {
+        Some(saved) => saved.maximized,
+        // A new window's size that the screen has no room for, as on a
+        // laptop at 150%: maximized, and it restores to as much as fits.
+        None => screen.is_some_and(|screen| {
+            default_size().width > screen.visible.size.width
+                || default_size().height > screen.visible.size.height
+        }),
+    };
+    if maximized {
         return match screen {
             Some(screen) if macos => (WindowBounds::Windowed(screen.visible), display),
             _ => (WindowBounds::Maximized(bounds), display),
@@ -290,9 +290,20 @@ mod tests {
 
     fn centered_on_laptop(size: gpui_kit::Size<Pixels>) -> WindowBounds {
         WindowBounds::Windowed(Bounds::centered_at(
-            rect(0., 0., 1512., 982.).center(),
+            rect(0., 33., 1512., 890.).center(),
             size,
         ))
+    }
+
+    /// A 1920 × 1080 laptop screen at 150%, the taskbar taken from its
+    /// visible part: no room for a new window's size.
+    fn small_screen() -> Vec<Screen> {
+        vec![Screen {
+            id: DisplayId::new(1),
+            uuid: Some("laptop".into()),
+            bounds: rect(0., 0., 1280., 720.),
+            visible: rect(0., 0., 1280., 672.),
+        }]
     }
 
     #[test]
@@ -371,6 +382,42 @@ mod tests {
             place(Some(&state), remember(false, true), true).0,
             WindowBounds::Windowed(bounds) if bounds.size == default_size()
         ));
+    }
+
+    #[test]
+    fn a_new_window_too_large_for_the_screen_opens_maximized() {
+        let place = |saved: Option<&WindowState>, settings, macos| {
+            placement(
+                saved,
+                settings,
+                &small_screen(),
+                Some(DisplayId::new(1)),
+                macos,
+            )
+        };
+        // Restored, it fills the screen but the taskbar.
+        let fitted = rect(0., 0., 1280., 672.);
+        assert_eq!(
+            place(None, WindowSettings::default(), false),
+            (WindowBounds::Maximized(fitted), None)
+        );
+        assert_eq!(
+            place(None, WindowSettings::default(), true),
+            (WindowBounds::Windowed(fitted), None)
+        );
+        // So does one whose size is not remembered.
+        let state = saved("laptop", rect(0., 0., 1000., 600.), false);
+        assert_eq!(
+            place(Some(&state), remember(false, true), false),
+            (WindowBounds::Maximized(fitted), Some(DisplayId::new(1)))
+        );
+        // A remembered size shrinks to fit, clear of the taskbar, and stays
+        // as it was.
+        let state = saved("monitor", rect(1700., 120., 1600., 1000.), false);
+        assert_eq!(
+            place(Some(&state), WindowSettings::default(), false),
+            (WindowBounds::Windowed(fitted), None)
+        );
     }
 
     #[test]
