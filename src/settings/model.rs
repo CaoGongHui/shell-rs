@@ -69,8 +69,9 @@ pub struct AppSettings {
 
 /// What 界面字号 offers, in pixels.
 pub const INTERFACE_FONT_SIZE_RANGE: std::ops::RangeInclusive<f32> = 12.0..=20.0;
-/// gpui-kit's own base font, which the interface had before it could change.
-pub const DEFAULT_INTERFACE_FONT_SIZE: f32 = 16.0;
+/// gpui-kit's own base font, which the interface had before it could change;
+/// on Windows 14, where its body text then is the system's own 9 points.
+pub const DEFAULT_INTERFACE_FONT_SIZE: f32 = if cfg!(windows) { 14.0 } else { 16.0 };
 
 /// 外观 → 常规.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -795,18 +796,20 @@ mod tests {
         assert!(!read.local_terminal.keep_output);
     }
 
-    /// 界面字号: gpui-kit's 16 until changed, whole pixels within 12–20.
+    /// 界面字号: gpui-kit's 16 (14 on Windows) until changed, whole pixels
+    /// within 12–20.
     #[test]
     fn the_interface_font_stays_as_it_was_until_changed() {
-        assert_eq!(AppSettings::default().interface.font_size, 16.);
+        let default = if cfg!(windows) { 14. } else { 16. };
+        assert_eq!(AppSettings::default().interface.font_size, default);
         let settings: AppSettings = serde_json::from_str(r#"{"interface":{}}"#).unwrap();
-        assert_eq!(settings.interface.font_size, 16.);
+        assert_eq!(settings.interface.font_size, default);
         for (written, kept) in [
             (14., 14.),
             (14.6, 15.),
             (8., 12.),
             (30., 20.),
-            (f32::NAN, 16.),
+            (f32::NAN, default),
         ] {
             let settings = AppSettings {
                 interface: InterfaceSettings { font_size: written },
