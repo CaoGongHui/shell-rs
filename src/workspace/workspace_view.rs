@@ -78,7 +78,8 @@ use crate::terminal::{
 use crate::update::{UpdateServices, Updater, UpdaterEvent};
 
 use super::{
-    broadcast_bar::BroadcastBar,
+    compose::COMPOSE_HEIGHT,
+    compose_pane::ComposePane,
     dock_skin::WorkspaceDockSkin,
     recent_hosts::RecentHosts,
     sidebar::Sidebar,
@@ -148,8 +149,10 @@ pub(super) enum PromptOwner {
 /// panels, and handles every application action.
 pub struct Workspace {
     pub(super) broadcast: super::terminal_groups::TerminalBroadcast,
-    /// 命令广播's command bar, shown by the dock skin above the terminals.
-    pub(super) broadcast_bar: Entity<BroadcastBar>,
+    /// 撰写窗格, in the bottom dock while it shows.
+    pub(super) compose: Entity<ComposePane>,
+    /// How tall 撰写窗格 was last: it opens again so.
+    pub(super) compose_height: Pixels,
     pub(super) store: Entity<HostStore>,
     pub(super) dock_area: Entity<DockArea>,
     pub(super) skin: Rc<WorkspaceDockSkin>,
@@ -349,13 +352,12 @@ impl Workspace {
             serial: serial_terminal_provider,
         };
         let recent = cx.new(|cx| RecentHosts::new(store.clone(), focus_handle.clone(), cx));
-        let broadcast_bar =
-            cx.new(|cx| BroadcastBar::new(store.clone(), focus_handle.clone(), window, cx));
+        let compose =
+            cx.new(|cx| ComposePane::new(store.clone(), focus_handle.clone(), window, cx));
         let (dock_area, skin) = WorkspaceDockSkin::dock_area(
             DOCK_ID,
             Some(DOCK_VERSION),
             recent.clone().into(),
-            broadcast_bar.clone().into(),
             focus_handle.clone(),
             window,
             cx,
@@ -396,9 +398,11 @@ impl Workspace {
             // workspace goes with its window, as ShellRS quits (and on
             // Windows and Linux as the window closes, before it quits).
             cx.on_release(|this, cx| this.keep_on_close(cx)),
-            // The right sidebar is never dragged narrower than it opens.
+            // The right sidebar is never dragged narrower than it opens, nor
+            // 撰写窗格 lower than a line or two.
             cx.observe_in(&dock_area, window, |this, _, window, cx| {
-                this.hold_tool_sidebar_width(window, cx)
+                this.hold_tool_sidebar_width(window, cx);
+                this.hold_compose_height(window, cx);
             }),
             cx.observe_in(&store, window, |this, _, window, cx| {
                 this.sync_cli_server(cx);
@@ -626,7 +630,8 @@ impl Workspace {
             next_explorer_id: 1,
             active_tab: None,
             broadcast: Default::default(),
-            broadcast_bar,
+            compose,
+            compose_height: COMPOSE_HEIGHT,
             tool_target_choice: None,
             deleted_host_tools: HashMap::new(),
             prompt_queue: VecDeque::new(),
@@ -864,6 +869,7 @@ impl Workspace {
         // A tab dragged into another group may hide the one in front.
         self.sync_front(window, cx);
         self.sync_broadcast(cx);
+        self.sync_compose(window, cx);
         // Tabs reordered, moved, opened or closed: what the next launch
         // opens again.
         self.sync_saved_terminals(cx);
@@ -2518,6 +2524,7 @@ fn new_terminal_panel(
                 this.close_file_sidebar(*terminal_id, window, cx);
                 this.directory_follow.remove(terminal_id);
                 this.sync_broadcast(cx);
+                this.sync_compose(window, cx);
                 if this.active_tab == Some(CenterTab::Terminal(*terminal_id)) {
                     this.set_active_tab(None, window, cx);
                 }
@@ -2525,6 +2532,7 @@ fn new_terminal_panel(
             }
             TerminalPanelEvent::StatusChanged(..) => {
                 this.sync_broadcast(cx);
+                this.sync_compose(window, cx);
                 cx.notify();
             }
             TerminalPanelEvent::Connected(terminal_id, host_id) => {
@@ -2763,6 +2771,7 @@ fn new_local_terminal_panel(
                     this.front_saved_terminal = None;
                 }
                 this.sync_broadcast(cx);
+                this.sync_compose(window, cx);
                 if this.active_tab == Some(CenterTab::LocalTerminal(*id)) {
                     this.set_active_tab(None, window, cx);
                 }
@@ -2772,6 +2781,7 @@ fn new_local_terminal_panel(
             LocalTerminalPanelEvent::StatusChanged(id) => {
                 this.on_local_terminal_retitled(*id, cx);
                 this.sync_broadcast(cx);
+                this.sync_compose(window, cx);
                 cx.notify();
             }
             LocalTerminalPanelEvent::WorkingDirectory(id, folder) => {
@@ -2854,9 +2864,10 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_new_local_terminal))
             .on_action(cx.listener(Self::on_toggle_terminal_broadcast))
             .on_action(cx.listener(Self::on_set_broadcast_target))
-            .on_action(cx.listener(Self::on_send_broadcast_command))
-            .on_action(cx.listener(Self::on_broadcast_snippet))
-            .on_action(cx.listener(Self::on_interrupt_broadcast))
+            .on_action(cx.listener(Self::on_toggle_compose_pane))
+            .on_action(cx.listener(Self::on_send_compose))
+            .on_action(cx.listener(Self::on_send_compose_snippet))
+            .on_action(cx.listener(Self::on_send_compose_interrupt))
             .on_action(cx.listener(Self::on_toggle_broadcast_keys))
             .on_action(cx.listener(Self::on_edit_host))
             .on_action(cx.listener(Self::on_duplicate_host))

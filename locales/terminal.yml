@@ -116,6 +116,9 @@ terminal.menu.find:
 terminal.menu.clear:
   zh-CN: 清屏
   en: Clear screen
+terminal.menu.compose:
+  zh-CN: 撰写窗格
+  en: Compose pane
 
 # Links
 terminal.link.open_hint:

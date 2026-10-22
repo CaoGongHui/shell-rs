@@ -76,8 +76,7 @@ impl TabBarControls {
 }
 
 /// The workspace's dock appearance: gpui-kit's `DockSkin`, plus a view that
-/// fills the center while it holds no tab, and 命令广播's command bar above
-/// the center's tab groups while terminals are checked.
+/// fills the center while it holds no tab.
 ///
 /// The dock draws nothing for an empty center and `DockAreaRenderer` has no
 /// empty-center hook, so the placeholder rides on `center_frame`. It is drawn
@@ -94,20 +93,16 @@ pub(super) struct WorkspaceDockSkin {
     area: WeakEntity<DockArea>,
     placeholder: AnyView,
     center_empty: Cell<bool>,
-    command_bar: AnyView,
-    command_bar_shown: Cell<bool>,
 }
 
 impl WorkspaceDockSkin {
     /// Build a `DockArea` wearing this skin, together with the handle its
     /// settings are changed through. `placeholder` is what the center shows
-    /// while it is empty, `command_bar` what it shows above its tab groups
-    /// while 命令广播 has terminals checked.
+    /// while it is empty.
     pub(super) fn dock_area(
         id: &'static str,
         version: Option<usize>,
         placeholder: AnyView,
-        command_bar: AnyView,
         target: FocusHandle,
         window: &mut Window,
         cx: &mut App,
@@ -122,8 +117,6 @@ impl WorkspaceDockSkin {
                 area: cx.weak_entity(),
                 placeholder,
                 center_empty: Cell::new(false),
-                command_bar,
-                command_bar_shown: Cell::new(false),
             });
             skin = Some(this.clone());
             DockArea::new(id, version, window, cx).with_renderer(this)
@@ -157,13 +150,6 @@ impl WorkspaceDockSkin {
         }
     }
 
-    /// Show (`true`) or hide 命令广播's command bar.
-    pub(super) fn set_command_bar_shown(&self, shown: bool, cx: &mut App) {
-        if self.command_bar_shown.replace(shown) != shown {
-            _ = self.area.update(cx, |_, cx| cx.notify());
-        }
-    }
-
     /// Show (`true`) or hide the placeholder. The skin is not an entity, so
     /// it redraws the area itself when the value changes.
     pub(super) fn set_center_empty(&self, empty: bool, cx: &mut App) {
@@ -192,12 +178,6 @@ impl DockAreaRenderer for WorkspaceDockSkin {
         self.skin
             .center_frame(window, cx)
             .relative()
-            // The dock puts the center's tab groups after what the frame
-            // holds, in a column: the bar sits above all of them.
-            .when(
-                self.command_bar_shown.get() && !self.center_empty.get(),
-                |frame| frame.child(self.command_bar.clone()),
-            )
             .when(self.center_empty.get(), |frame| {
                 // Deferred, so it paints after the empty layout's own
                 // background, which the dock draws later in the same frame.
@@ -267,6 +247,12 @@ impl TabGroupRenderer for WorkspaceTabBar {
         window: &mut Window,
         cx: &mut App,
     ) -> AnyElement {
+        // 撰写窗格 draws its own title bar.
+        if let [panel] = group.panels()
+            && panel.panel_name(cx) == "ComposePane"
+        {
+            return Empty.into_any_element();
+        }
         let state = self.broadcast.get();
         if state.node != Some(group.node()) {
             return self.skin.render_tab_bar(group, window, cx);

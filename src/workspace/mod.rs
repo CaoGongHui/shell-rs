@@ -3,8 +3,9 @@
 //! the center shows while no tab is open.
 
 mod analytics;
-mod broadcast_bar;
 mod cli_changes;
+mod compose;
+mod compose_pane;
 mod credentials;
 mod dock_skin;
 mod editors;

@@ -60,7 +60,8 @@ pub use search::{SearchDirection, SearchMark, SearchPosition};
 pub use terminal_panel::{TerminalPanel, TerminalPanelEvent};
 pub(crate) use terminal_view::terminal_key_bindings;
 pub use terminal_view::{
-    TERMINAL_FIND_KEY_CONTEXT, TERMINAL_KEY_CONTEXT, TerminalMenuItems, TerminalView,
+    ComposePaneShown, TERMINAL_FIND_KEY_CONTEXT, TERMINAL_KEY_CONTEXT, TerminalMenuItems,
+    TerminalView,
 };
 pub use theme::{TerminalColors, TerminalTheme};
 pub(crate) use transport::send_event;

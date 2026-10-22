@@ -43,10 +43,13 @@ gpui_kit::actions!(
         /// Start 命令广播, which turns terminal tab marks into checkboxes,
         /// or end it.
         ToggleTerminalBroadcast,
-        /// Send the command bar's line to every terminal of 命令广播.
-        SendBroadcastCommand,
-        /// Send Ctrl+C to every terminal of 命令广播.
-        InterruptBroadcast,
+        /// Show or hide 撰写窗格, the compose pane below the terminals.
+        ToggleComposePane,
+        /// Run what 撰写窗格 holds in the terminal in front, or in every
+        /// terminal of 命令广播.
+        SendCompose,
+        /// Send Ctrl+C where 撰写窗格 sends.
+        SendComposeInterrupt,
         /// Whether typing in one terminal of 命令广播 goes to the others too.
         ToggleBroadcastKeys,
         /// Copy the active terminal selection.
@@ -330,9 +333,9 @@ id_actions! {
     EditSnippet(SnippetId);
     /// Ask for confirmation, then delete a snippet.
     DeleteSnippet(SnippetId);
-    /// Send a snippet to every terminal of 命令广播, as a click on it in
-    /// 命令片段 would to one.
-    BroadcastSnippet(SnippetId);
+    /// Send a snippet where 撰写窗格 sends: the terminal in front, or every
+    /// terminal of 命令广播.
+    SendComposeSnippet(SnippetId);
     /// Open the rename dialog of a snippet category.
     RenameSnippetCategory(SnippetCategoryId);
     /// Ask for confirmation, then delete a snippet category with the

@@ -15,38 +15,50 @@ workspace.broadcast.target:
 workspace.broadcast.unavailable:
   zh-CN: 终端连接后可加入命令广播
   en: Connect this terminal to include it in input broadcast
-# The command bar above the checked terminals.
-workspace.broadcast.placeholder:
-  zh-CN: 输入命令，回车发送到勾选的终端
-  en: Type a command. Enter runs it in the checked terminals
-workspace.broadcast.snippets:
-  zh-CN: 片段
-  en: Snippets
-workspace.broadcast.snippets_tooltip:
-  zh-CN: 把命令片段发送到勾选的终端
-  en: Send a snippet to the checked terminals
-workspace.broadcast.no_snippets:
-  zh-CN: 还没有命令片段
-  en: No snippets yet
-workspace.broadcast.keys:
-  zh-CN: 同步按键
-  en: Sync keys
-workspace.broadcast.keys_tooltip:
-  zh-CN: 在任一勾选的终端里打字时，同时发给其他勾选的终端
-  en: Typing in one checked terminal goes to the others too
-workspace.broadcast.send:
-  zh-CN: 发送到全部
-  en: Send to all
-workspace.broadcast.send_tooltip:
-  zh-CN: 在勾选的终端里执行这一行（回车）
-  en: Run this line in the checked terminals (Enter)
-workspace.broadcast.interrupt:
-  zh-CN: 向勾选的终端发送 Ctrl+C
-  en: Send Ctrl+C to the checked terminals
 workspace.broadcast.end:
   zh-CN: 结束命令广播
   en: Stop broadcasting
-workspace.broadcast.refused:
+# 撰写窗格 below the terminals, the broadcast's command bar while it is on.
+workspace.compose.title:
+  zh-CN: 撰写窗格
+  en: Compose
+workspace.compose.broadcast_target:
+  zh-CN: "勾选的 %{count} 个终端"
+  en: "%{count} checked terminals"
+workspace.compose.placeholder:
+  zh-CN: 输入命令，回车执行，Shift+Enter 换行
+  en: Type commands. Enter runs them, Shift+Enter starts a new line
+workspace.compose.snippets:
+  zh-CN: 片段
+  en: Snippets
+workspace.compose.snippets_tooltip:
+  zh-CN: 发送一条命令片段
+  en: Send a snippet
+workspace.compose.no_snippets:
+  zh-CN: 还没有命令片段
+  en: No snippets yet
+workspace.compose.keys:
+  zh-CN: 同步按键
+  en: Sync keys
+workspace.compose.keys_tooltip:
+  zh-CN: 在任一勾选的终端里打字时，同时发给其他勾选的终端
+  en: Typing in one checked terminal goes to the others too
+workspace.compose.send:
+  zh-CN: 发送
+  en: Send
+workspace.compose.send_all:
+  zh-CN: 发送到全部
+  en: Send to all
+workspace.compose.send_tooltip:
+  zh-CN: 执行撰写的命令（回车）
+  en: Run the commands (Enter)
+workspace.compose.interrupt:
+  zh-CN: 发送 Ctrl+C
+  en: Send Ctrl+C
+workspace.compose.close:
+  zh-CN: 关闭撰写窗格
+  en: Close compose pane
+workspace.compose.refused:
   zh-CN: "没有发送到 %{names}：%{error}"
   en: "Not sent to %{names}: %{error}"
 

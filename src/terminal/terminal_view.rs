@@ -26,6 +26,7 @@ use unicode_width::UnicodeWidthChar as _;
 use crate::app::{
     CatalogIcon, ClearTerminal, CopyTerminal, DismissTerminalFind, FindInTerminal,
     FindNextInTerminal, FindPreviousInTerminal, PasteTerminal, SelectAllTerminal,
+    ToggleComposePane,
 };
 use crate::connection::{ConnectionPromptReply, Latency};
 use crate::i18n::{UiLocale, t};
@@ -121,6 +122,13 @@ pub struct TerminalMenuItems {
 
 pub type CopyItems = Rc<dyn Fn(PopupMenu, &App) -> PopupMenu>;
 pub type CommandItems = Rc<dyn Fn(PopupMenu, &TerminalLifecycle) -> PopupMenu>;
+
+/// Whether 撰写窗格 shows, for the check of its item in the context menu.
+/// The workspace owns the pane and keeps this in step.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ComposePaneShown(pub bool);
+
+impl Global for ComposePaneShown {}
 
 /// The open find bar of one terminal.
 struct FindBar {
@@ -1036,6 +1044,9 @@ impl TerminalView {
                 .is_some();
         let action_context = self.focus_handle.clone();
         let owner_items = self.menu_items.clone();
+        let compose_shown = cx
+            .try_global::<ComposePaneShown>()
+            .is_some_and(|shown| shown.0);
         let menu = PopupMenu::build(window, cx, move |menu, _, cx| {
             let menu = menu
                 .action_context(action_context)
@@ -1072,6 +1083,11 @@ impl TerminalView {
                     Icon::new(CatalogIcon::Eraser),
                     Box::new(ClearTerminal),
                     !can_clear,
+                )
+                .menu_with_check(
+                    t!("terminal.menu.compose"),
+                    compose_shown,
+                    Box::new(ToggleComposePane),
                 );
             match &owner_items {
                 Some(items) => (items.commands)(menu.separator(), &lifecycle),
