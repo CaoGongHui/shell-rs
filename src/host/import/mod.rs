@@ -78,7 +78,7 @@ pub fn read_source(source: ImportSource, path: &Path, ssh_dir: &Path) -> ImportL
         Err(error) => return ImportLoad::Failed(error.to_string()),
     };
     let home = home_of(ssh_dir);
-    let scan = match source {
+    let mut scan = match source {
         ImportSource::SshConfig => {
             let config = ssh_config::SshConfig::parse_with_includes(&text, ssh_dir, &home);
             let local_user = local_user_name();
@@ -99,7 +99,36 @@ pub fn read_source(source: ImportSource, path: &Path, ssh_dir: &Path) -> ImportL
         }
         ImportSource::KnownHosts => known_hosts::parse(&text),
     };
+    scan.candidates.retain(|candidate| !is_git_host(candidate));
     ImportLoad::Loaded(scan)
+}
+
+/// Git hosting services' SSH addresses: they push and pull, no shell.
+const GIT_HOSTS: &[&str] = &[
+    "github.com",
+    "ssh.github.com",
+    "gitlab.com",
+    "altssh.gitlab.com",
+    "bitbucket.org",
+    "altssh.bitbucket.org",
+    "ssh.dev.azure.com",
+    "vs-ssh.visualstudio.com",
+    "codeberg.org",
+    "git.sr.ht",
+    "gitee.com",
+    "gitcode.com",
+    "jihulab.com",
+    "e.coding.net",
+    "codeup.aliyun.com",
+];
+
+/// Whether a host is for Git, not for logging in: it logs in as `git`, or
+/// is a Git hosting service.
+fn is_git_host(candidate: &ImportCandidate) -> bool {
+    candidate.user == "git"
+        || GIT_HOSTS
+            .iter()
+            .any(|host| candidate.address.eq_ignore_ascii_case(host))
 }
 
 /// A file's text, read up to [`MAX_FILE_SIZE`] and decoded leniently.
@@ -218,6 +247,36 @@ mod tests {
         assert!(!usable_identity(&ssh.join("id_ed25519"), &ssh));
         assert!(!usable_identity(&ssh.join("missing"), &ssh));
         assert!(!usable_identity(&ssh, &ssh));
+    }
+
+    #[test]
+    fn git_hosts_are_left_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let ssh = dir.path().join(".ssh");
+        std::fs::create_dir(&ssh).unwrap();
+        std::fs::write(
+            ssh.join("config"),
+            "Host github.com\n  User git\nHost gitea\n  User git\n\
+             Host gl\n  HostName GitLab.com\nHost web\n  User deploy\n",
+        )
+        .unwrap();
+        std::fs::write(
+            ssh.join("known_hosts"),
+            "github.com,140.82.112.3 ssh-ed25519 AAAA\n\
+             [ssh.github.com]:443 ssh-ed25519 AAAA\n\
+             10.0.0.1 ssh-ed25519 AAAA\n",
+        )
+        .unwrap();
+        let names = |source| match read_source(source, &source.default_path(&ssh), &ssh) {
+            ImportLoad::Loaded(scan) => scan
+                .candidates
+                .into_iter()
+                .map(|host| host.name)
+                .collect::<Vec<_>>(),
+            load => panic!("{load:?}"),
+        };
+        assert_eq!(names(ImportSource::SshConfig), ["web"]);
+        assert_eq!(names(ImportSource::KnownHosts), ["10.0.0.1"]);
     }
 
     #[test]
