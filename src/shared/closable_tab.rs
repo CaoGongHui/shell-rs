@@ -106,9 +106,12 @@ impl RenderOnce for ClosableTabTitle {
             .child(
                 div()
                     // A long title, such as a command line a shell names the
-                    // tab after, gives way rather than the tab bar.
+                    // tab after, gives way rather than the tab bar. The
+                    // ellipsis cuts it to width; clipping would also cut
+                    // the descenders of g and p, as the tab sets the line
+                    // height to the font size.
                     .max_w(rems(20.))
-                    .overflow_hidden()
+                    .min_w_0()
                     .whitespace_nowrap()
                     .text_ellipsis()
                     .when(offline, |label| {
