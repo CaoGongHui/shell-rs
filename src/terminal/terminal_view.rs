@@ -1453,7 +1453,7 @@ struct TerminalPaintState {
 struct PreeditPaintCell {
     bounds: Bounds<Pixels>,
     line: ShapedLine,
-    background: Option<PaintQuad>,
+    background: PaintQuad,
 }
 
 impl IntoElement for TerminalElement {
@@ -1770,10 +1770,8 @@ impl Element for TerminalElement {
                     window.paint_quad(quad)
                 });
             }
-            for cell in state.preedit.iter_mut() {
-                if let Some(background) = cell.background.take() {
-                    window.paint_quad(background);
-                }
+            for cell in state.preedit.drain(..) {
+                window.paint_quad(cell.background);
                 let _ = cell.line.paint(
                     cell.bounds.origin,
                     cell.bounds.size.height,
@@ -2119,10 +2117,18 @@ fn build_preedit(
                 &[run],
                 Some(viewport.geometry.cell_width * width as f32),
             );
+            // The composition covers the cells it lies on, as other
+            // terminals draw it: with the cursor back inside a line, the
+            // text after it would otherwise show through (#64).
+            let background = if selected {
+                selection_color
+            } else {
+                palette.background
+            };
             painted.push(PreeditPaintCell {
                 bounds: cell_bounds,
                 line,
-                background: selected.then(|| fill(cell_bounds, selection_color)),
+                background: fill(cell_bounds, background),
             });
         }
 
