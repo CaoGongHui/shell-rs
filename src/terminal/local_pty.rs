@@ -357,7 +357,6 @@ mod tests {
                 "/bin/sh"
             };
             let script = "printf '%s' \"${ARGV0-gone}|${APPIMAGE-gone}|${APPDIR-gone}|${OWD-gone}\"; \
-                 printf '|argv0=%s' \"$0\"; \
                  if command -v rustup >/dev/null 2>&1; then \
                  printf '|rustup=%s' \"$(rustup --version 2>&1 | head -1)\"; fi";
             let (commands, command_receiver) = mpsc::channel();
@@ -375,21 +374,13 @@ mod tests {
             // readable without a window.
             println!("the shell saw: {output}");
             assert!(
-                output.starts_with("gone|gone|gone|gone|"),
+                output.starts_with("gone|gone|gone|gone"),
                 "the shell sees the packaging: {output}"
             );
-            // The shell's own name, not the AppImage's: zsh would take
-            // ARGV0 for its argv[0] if it were there.
-            let argv0 = output
-                .split_once("|argv0=")
-                .and_then(|(_, rest)| rest.split('|').next())
-                .unwrap_or_default();
-            assert!(
-                !argv0.contains("ShellRS") && !argv0.contains("AppImage"),
-                "the shell's argv[0] is the AppImage's: {output}"
-            );
             // And rustup, which is one binary that tells its tools apart
-            // by its own argv[0], still knows what it is.
+            // by its own argv[0], still knows what it is. `ARGV0` names the
+            // commands the shell starts, not the shell: its `$0` would not
+            // tell.
             assert!(
                 !output.contains("unknown proxy name"),
                 "rustup does not know itself: {output}"
@@ -400,7 +391,8 @@ mod tests {
             return;
         }
         // The parent: the same test, in a child whose environment has them.
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+        child
             .args([
                 "--exact",
                 "terminal::local_pty::tests::the_shell_does_not_see_the_packaging",
@@ -410,9 +402,11 @@ mod tests {
             .env("ARGV0", APPIMAGE)
             .env("APPIMAGE", APPIMAGE)
             .env("APPDIR", "/tmp/.mount_ShellRSxxxx")
-            .env("OWD", "/tmp")
-            .output()
-            .expect("the test runs again");
+            .env("OWD", "/tmp");
+        let output = {
+            let _forks = crate::testing::no_forks();
+            child.output().expect("the test runs again")
+        };
         let text = String::from_utf8_lossy(&output.stdout);
         // What the shell saw, said out loud: this is the acceptance,
         // readable without a window.
