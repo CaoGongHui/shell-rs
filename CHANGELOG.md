@@ -4,6 +4,23 @@
 
 One section per version, titled `## [version]`, optionally followed by a date. Each section is written in English here and in Chinese in [CHANGELOG.zh.md](CHANGELOG.zh.md), in the same change. The release workflow (`.github/workflows/release.yml`) takes the section with the tag’s version, as it is, for the GitHub release. The website’s changelog shows this file in English and Japanese and CHANGELOG.zh.md in Chinese (ShellRS’s update dialog opens it with What’s new). Written in Markdown, for users.
 
+## [0.1.15-beta.1]
+
+### Added
+
+- Compose pane: write and edit commands below the terminal, several lines if you like, before sending them. Open it with ⌘⇧E (Ctrl+Shift+E on Windows and Linux) or from the terminal’s context menu. Command broadcast’s command bar is now the compose pane.
+
+### Improved
+
+- On Windows the interface font size defaults to 14, the same size as the system’s own text.
+- Importing hosts no longer lists hosts whose username is git, or the addresses of GitHub, GitLab and other code hosting services, which are for pushing and pulling code, not for logging in.
+
+### Fixed
+
+- On Windows, the dialog of “Upload…” showed only folders, so no file could be chosen.
+- The borders around the buttons at either end of the tab bar didn’t line up with the tab bar’s bottom line.
+- The bottoms of letters such as g and p were cut off in tab names.
+
 ## [0.1.14]
 
 ### Added
