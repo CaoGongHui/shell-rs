@@ -4,6 +4,28 @@
 
 One section per version, titled `## [version]`, optionally followed by a date. Each section is written in English here and in Chinese in [CHANGELOG.zh.md](CHANGELOG.zh.md), in the same change. The release workflow (`.github/workflows/release.yml`) takes the section with the tag’s version, as it is, for the GitHub release. The website’s changelog shows this file in English and Japanese and CHANGELOG.zh.md in Chinese (ShellRS’s update dialog opens it with What’s new). Written in Markdown, for users.
 
+## [0.1.15]
+
+### Added
+
+- Compose pane: write and edit commands below the terminal, several lines if you like, before sending them. Open it with ⌘⇧E (Ctrl+Shift+E on Windows and Linux) or from the terminal’s context menu. Command broadcast’s command bar is now the compose pane.
+- Middle-click a tab to close it, as × does.
+
+### Improved
+
+- On Windows the interface font size defaults to 14, the same size as the system’s own text.
+- Importing hosts no longer lists hosts whose username is git, or the addresses of GitHub, GitLab and other code hosting services, which are for pushing and pulling code, not for logging in.
+- With only one tab left, it still looks like a selected tab, as it does among others.
+
+### Fixed
+
+- On Windows, the dialog of “Upload…” showed only folders, so no file could be chosen.
+- In the Linux AppImage, commands such as cargo and rustc failed with “unknown proxy name” in a local terminal running zsh.
+- When the computer was busy, files dropped on a remote terminal were sometimes asked for in a dialog instead of going up at once.
+- In a terminal, typing with an input method after moving the cursor back into text already typed put the composition on top of the text after it, so neither could be read.
+- The borders around the buttons at either end of the tab bar didn’t line up with the tab bar’s bottom line.
+- The bottoms of letters such as g and p were cut off in tab names.
+
 ## [0.1.15-beta.2]
 
 ### Improved
