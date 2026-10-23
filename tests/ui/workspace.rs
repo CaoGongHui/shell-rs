@@ -482,6 +482,43 @@ async fn double_clicking_a_tab_toggles_the_host_sidebar(cx: &mut TestAppContext)
     assert!(sidebar_shown(cx));
 }
 
+/// A middle click on a tab's title closes the tab, as its × does; the
+/// other tabs stay.
+#[gpui_kit::test]
+async fn middle_clicking_a_tab_closes_it(cx: &mut TestAppContext) {
+    let (handle, workspace) = open_workspace(cx);
+    cx.run_until_parked();
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.render_frame(cx);
+        let title = window
+            .find(("terminal-tab", INITIAL_WEB_TERMINAL))
+            .bounds()
+            .center();
+        button_click_at(
+            window,
+            title,
+            MouseButton::Middle,
+            gpui_kit::Modifiers::default(),
+            cx,
+        );
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update(|cx| {
+        let workspace = workspace.read(cx);
+        assert!(
+            workspace
+                .remote_terminal(RemoteTerminalId(INITIAL_WEB_TERMINAL))
+                .is_none()
+        );
+        assert!(
+            workspace
+                .remote_terminal(RemoteTerminalId(INITIAL_STAGING_TERMINAL))
+                .is_some()
+        );
+    });
+}
+
 #[gpui_kit::test]
 async fn a_terminal_tab_can_be_renamed_and_follow_the_host_again(cx: &mut TestAppContext) {
     let (handle, workspace) = open_workspace(cx);
