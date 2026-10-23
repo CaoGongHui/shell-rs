@@ -993,6 +993,12 @@ mod tests {
             serde_json::from_str(r#"{"terminal_interaction":{"right_click":"paste"}}"#).unwrap();
         assert!(!settings.terminal_interaction.copy_on_select);
         assert_eq!(settings.terminal_interaction.right_click, RightClick::Paste);
+        // 中键粘贴 is on for a settings file from before it existed.
+        assert!(settings.terminal_interaction.middle_click_paste);
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"terminal_interaction":{"middle_click_paste":false}}"#)
+                .unwrap();
+        assert!(!settings.terminal_interaction.middle_click_paste);
     }
 
     #[test]

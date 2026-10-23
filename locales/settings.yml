@@ -124,6 +124,12 @@ settings.interaction.right_click:
 settings.interaction.right_click_description:
   zh-CN: 设置鼠标右键在终端中的行为。
   en: What right-clicking in a terminal does.
+settings.interaction.middle_click_paste:
+  zh-CN: 中键粘贴
+  en: Middle-click to paste
+settings.interaction.middle_click_paste_description:
+  zh-CN: 在终端里按鼠标中键，粘贴系统剪贴板的内容。程序自己接管鼠标时（如 vim、htop）中键交给程序。
+  en: Pressing the middle button in a terminal pastes the clipboard. A program that takes the mouse, such as vim or htop, gets the button instead.
 settings.right_click.nothing:
   zh-CN: 无动作
   en: Do nothing

@@ -1837,6 +1837,12 @@ impl Element for TerminalElement {
                 });
                 if reported {
                     cx.stop_propagation();
+                } else if button == ReportButton::Middle {
+                    // 中键粘贴, unless turned off.
+                    if TerminalInteraction::current(cx).middle_click_paste {
+                        view.update(cx, |view, cx| view.paste_clipboard(cx));
+                        cx.stop_propagation();
+                    }
                 } else if button == ReportButton::Left {
                     let (point, side) = viewport.grid_point(event.position);
                     let selection_type = match event.click_count {

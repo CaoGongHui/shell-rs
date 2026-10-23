@@ -146,7 +146,7 @@ impl TerminalStatus {
 
 /// 终端 → 终端交互: what the mouse does in terminals besides selecting. A
 /// global, set from the settings, because terminals do not depend on them.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TerminalInteraction {
     /// 选中复制: what a selection takes in goes to the clipboard once the
@@ -154,6 +154,20 @@ pub struct TerminalInteraction {
     pub copy_on_select: bool,
     /// 右键行为.
     pub right_click: RightClick,
+    /// 中键粘贴: the middle button pastes the clipboard, as PuTTY's and
+    /// Xshell's do. On unless turned off. A program that asked for the
+    /// mouse hears the button instead.
+    pub middle_click_paste: bool,
+}
+
+impl Default for TerminalInteraction {
+    fn default() -> Self {
+        Self {
+            copy_on_select: false,
+            right_click: RightClick::default(),
+            middle_click_paste: true,
+        }
+    }
 }
 
 impl Global for TerminalInteraction {}
