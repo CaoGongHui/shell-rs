@@ -4,6 +4,16 @@
 
 One section per version, titled `## [version]`, optionally followed by a date. Each section is written in English here and in Chinese in [CHANGELOG.zh.md](CHANGELOG.zh.md), in the same change. The release workflow (`.github/workflows/release.yml`) takes the section with the tag’s version, as it is, for the GitHub release. The website’s changelog shows this file in English and Japanese and CHANGELOG.zh.md in Chinese (ShellRS’s update dialog opens it with What’s new). Written in Markdown, for users.
 
+## [0.1.15-beta.2]
+
+### Improved
+
+- With only one tab left, it still looks like a selected tab, as it does among others.
+
+### Fixed
+
+- In a terminal, typing with an input method after moving the cursor back into text already typed put the composition on top of the text after it, so neither could be read.
+
 ## [0.1.15-beta.1]
 
 ### Added
