@@ -206,6 +206,10 @@ async fn the_toggle_puts_checkboxes_ahead_of_the_tab_marks(cx: &mut TestAppConte
     });
     in_frame(cx, handle, |window, cx| {
         assert!(window.find("toggle-terminal-broadcast").visible());
+        // A lone tab is still a tab, selected as it is among others,
+        // rather than a plain title.
+        let tab = window.within("center-tab-bar").find(0usize);
+        assert_eq!(tab.selected(), Some(true));
         window.click(("close-terminal", INITIAL_STAGING_TERMINAL), cx)
     });
     in_frame(cx, handle, |window, _| {

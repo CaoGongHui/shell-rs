@@ -1,10 +1,14 @@
-use std::{cell::Cell, rc::Rc, sync::Arc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::Arc,
+};
 
 use crate::app::{CatalogIcon, ToggleHostPanel, ToggleTerminalBroadcast};
 use crate::i18n::t;
 use gpui_kit::component::dock::{
     BasePanelView, DockArea, DockAreaRenderer, DockContext, DockSkin, DropIndicator, NodeId,
-    PanelState, TabGroupContext, TabGroupRenderer, TilesRenderer,
+    PanelState, PanelStyle, TabGroupContext, TabGroupRenderer, TilesRenderer,
 };
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Selectable as _, Sizable as _,
@@ -94,9 +98,14 @@ impl TabBarControls {
 /// workspace keeps that in step with `DockEvent::LayoutChanged`.
 pub(super) struct WorkspaceDockSkin {
     skin: Rc<DockSkin>,
-    // Only the leading center bar replaces the built-in sidebar toggle, so
-    // its two controls can sit together. Other dock bars keep their skin.
+    // The center's bars: always tabs, so a lone tab looks selected as it
+    // does among others, while the sidebars keep their plain title. The
+    // leading one replaces the built-in sidebar toggle, so its two
+    // controls can sit together; no other center bar shows a toggle.
     center_skin: Rc<DockSkin>,
+    /// The center's tab groups, which the workspace keeps in step with the
+    /// layout (`set_center_groups`).
+    center_groups: Rc<RefCell<Vec<NodeId>>>,
     broadcast: Rc<Cell<TabBarControls>>,
     target: FocusHandle,
     area: WeakEntity<DockArea>,
@@ -121,6 +130,7 @@ impl WorkspaceDockSkin {
             let this = Rc::new(Self {
                 skin: DockSkin::new(cx),
                 center_skin: DockSkin::new(cx),
+                center_groups: Rc::default(),
                 broadcast: Rc::default(),
                 target,
                 area: cx.weak_entity(),
@@ -133,6 +143,7 @@ impl WorkspaceDockSkin {
         // The closure above runs before `cx.new` returns.
         let skin = skin.expect("the skin is built inside the constructor");
         skin.center_skin.set_toggle_button_visible(false, cx);
+        skin.center_skin.set_panel_style(PanelStyle::TabBar, cx);
         (area, skin)
     }
 
@@ -155,6 +166,13 @@ impl WorkspaceDockSkin {
             count,
         };
         if self.broadcast.replace(state) != state {
+            _ = self.area.update(cx, |_, cx| cx.notify());
+        }
+    }
+
+    pub(super) fn set_center_groups(&self, groups: Vec<NodeId>, cx: &mut App) {
+        if *self.center_groups.borrow() != groups {
+            self.center_groups.replace(groups);
             _ = self.area.update(cx, |_, cx| cx.notify());
         }
     }
@@ -219,6 +237,7 @@ impl DockAreaRenderer for WorkspaceDockSkin {
         Rc::new(WorkspaceTabBar {
             skin: self.skin.tab_group_renderer(),
             center_skin: self.center_skin.tab_group_renderer(),
+            center_groups: self.center_groups.clone(),
             broadcast: self.broadcast.clone(),
             target: self.target.clone(),
         })
@@ -234,6 +253,7 @@ impl DockAreaRenderer for WorkspaceDockSkin {
 struct WorkspaceTabBar {
     skin: Rc<dyn TabGroupRenderer>,
     center_skin: Rc<dyn TabGroupRenderer>,
+    center_groups: Rc<RefCell<Vec<NodeId>>>,
     broadcast: Rc<Cell<TabBarControls>>,
     target: FocusHandle,
 }
@@ -264,7 +284,11 @@ impl TabGroupRenderer for WorkspaceTabBar {
         }
         let state = self.broadcast.get();
         if state.node != Some(group.node()) {
-            return self.skin.render_tab_bar(group, window, cx);
+            return if self.center_groups.borrow().contains(&group.node()) {
+                self.center_skin.render_tab_bar(group, window, cx)
+            } else {
+                self.skin.render_tab_bar(group, window, cx)
+            };
         }
         let tabs = self.center_skin.render_tab_bar(group, window, cx);
         h_flex()
