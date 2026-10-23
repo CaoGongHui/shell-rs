@@ -267,6 +267,12 @@ fn secret_failure(secret: &SecretRef, writing: bool) -> fn(&str) -> SharedString
         (SecretRef::Temporary { .. }, _) => {
             |error| t!("host.store.secret.temporary", error = error)
         }
+        (SecretRef::LoginScript { .. }, true) => {
+            |error| t!("host.store.secret.login_script_write", error = error)
+        }
+        (SecretRef::LoginScript { .. }, false) => {
+            |error| t!("host.store.secret.login_script_delete", error = error)
+        }
     }
 }
 
@@ -861,11 +867,19 @@ impl HostStore {
     /// not drop a working connection behind it.
     pub fn remove(&mut self, id: HostId, cx: &mut Context<Self>) -> bool {
         let connection = self.connection(id);
+        // The 登录脚本 is the host's alone: it goes with it.
+        let script = self
+            .host(id)
+            .filter(|host| host.is_ssh() && !self.is_temporary(host.id))
+            .map(Host::login_script_secret);
         let removed = self.remove_unnotified(id);
         if removed {
             self.persist(Change::DeleteHost, cx, |db| db.remove_host(id));
             if let Some(connection) = connection {
                 self.forget_passwords_of(&connection, cx);
+            }
+            if let Some(script) = script {
+                self.save_secret(script, None, cx);
             }
             cx.notify();
         }
@@ -1272,6 +1286,11 @@ impl HostStore {
             login.password = SecretRef::temporary(host.id.0);
         }
         login.shell_only = self.is_external(host.id);
+        // A saved host's 登录脚本 runs on its terminal. A temporary host has
+        // none: it never had a form to write one in.
+        if !self.is_temporary(host.id) {
+            login.login_script = Some(host.login_script_secret());
+        }
         login
     }
 

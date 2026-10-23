@@ -9,6 +9,7 @@ mod host_dialog;
 mod host_panel;
 mod import;
 mod login;
+pub mod login_script;
 mod model;
 mod outline;
 mod private_key;

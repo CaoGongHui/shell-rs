@@ -79,6 +79,9 @@ Reads one JSON object from stdin. Every field may be left out; `update` changes 
               {\"type\": \"proxy\", \"kind\": \"http\" | \"socks5\", \"host\": ..., \"port\": ...,
                \"user\": ..., \"password\": ...}
   notes       Free text.
+  login_script  An SSH host's wait-and-send rules, run in order once the shell is up, Enter after each:
+              [{\"expect\": \"Opt>\", \"send\": \"10.0.0.5\"}, {\"expect\": \"password:\", \"send\": \"...\"}]
+              Saved to the keychain and never printed; null or [] deletes it.
   protocol    \"ssh\" (the default), \"telnet\" or \"serial\". Changed by update, the host keeps
               its name, group and notes (between SSH and Telnet, its address and route too)
               and takes the new protocol's defaults for the rest; not away from SSH while

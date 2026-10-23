@@ -20,7 +20,7 @@ use crate::cli::{
     find_host, find_saved_host, host_details, host_info, host_secrets, plan_credential, plan_host,
     with_saved_credential_secrets, with_saved_passwords,
 };
-use crate::host::{CredentialId, HostId, HostStore};
+use crate::host::{CredentialId, Host, HostId, HostStore};
 use crate::i18n::t;
 use crate::secrets::{SecretRef, SharedSecretStore};
 use crate::terminal::{RunFailure, RunHandle, TerminalLifecycle, TerminalPanel};
@@ -188,6 +188,7 @@ impl Workspace {
             // the store may delete the entry it moves from.
             let password = secret_value(plan.password, &secrets, cx).await;
             let proxy_password = secret_value(plan.proxy_password, &secrets, cx).await;
+            let login_script = plan.login_script;
             let (id, mut failures, writes) = store.update(cx, |store, cx| {
                 let (id, failures) = store.capture_failures(cx, |store, cx| {
                     let mut draft = plan.draft;
@@ -200,7 +201,13 @@ impl Workspace {
                         None => store.insert(draft, cx),
                     }
                 });
-                let writes: Vec<_> = [password, proxy_password]
+                // The 登录脚本 is the host's own, so it is written under the
+                // id the host has now.
+                let script = login_script.and_then(|value| {
+                    let secret = store.host(id).map(Host::login_script_secret)?;
+                    Some((secret, value))
+                });
+                let writes: Vec<_> = [password, proxy_password, script]
                     .into_iter()
                     .flatten()
                     .map(|(secret, value)| store.write_secret(secret, value, cx))

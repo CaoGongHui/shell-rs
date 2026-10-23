@@ -171,6 +171,10 @@ pub struct HostLogin {
     /// session per connection and ends it when another channel comes and
     /// goes, as Xshell and OpenSSH never make it do.
     pub shell_only: bool,
+    /// Where the host's 登录脚本 is kept, for a saved host: its rules run
+    /// on the shell once it is up. `None` for a jump host, a temporary host
+    /// and a test, which run none.
+    pub login_script: Option<SecretRef>,
 }
 
 /// How a connection reaches a host, with every jump host's login looked up.
@@ -277,6 +281,7 @@ impl HostLogin {
             key_path: None,
             route: LoginRoute::Direct,
             shell_only: false,
+            login_script: None,
         }
     }
 
@@ -306,6 +311,7 @@ impl HostLogin {
             password,
             route: LoginRoute::Direct,
             shell_only: false,
+            login_script: None,
         }
     }
 

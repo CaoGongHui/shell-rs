@@ -7,8 +7,12 @@ use super::{
 };
 use crate::{
     connection::Latency,
-    host::HostLogin,
+    host::{
+        HostLogin,
+        login_script::{LoginScript, decode_rules},
+    },
     i18n::t,
+    secrets::SecretRef,
     terminal::{
         ExecRequest, RemoteTerminalTransportProvider, SftpChannel, SftpChannelRequest,
         SharedTerminalTransportFactory, TerminalSize, TerminalTransport, TerminalTransportCommand,
@@ -26,8 +30,11 @@ use std::{
     time::Duration,
 };
 use tokio::sync::mpsc as tokio_mpsc;
-use tokio::time::MissedTickBehavior;
+use tokio::time::{Instant, MissedTickBehavior};
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long the shell has to stop printing before the 登录脚本 answers a
+/// prompt: one is the last thing on its line while the server waits.
+const SCRIPT_SETTLE: Duration = Duration::from_millis(150);
 /// How long a command run beside the shell may take. Generous: a slow disk
 /// can hold `df` up for seconds.
 const EXEC_TIMEOUT: Duration = Duration::from_secs(10);
@@ -49,6 +56,7 @@ impl RemoteTerminalTransportProvider for SshTerminalTransportProvider {
         Arc::new(SshTerminalTransport {
             config: SshConnectionConfig::from(login),
             connector: self.connector.clone(),
+            login_script: login.login_script.clone(),
         })
     }
 }
@@ -59,6 +67,8 @@ impl RemoteTerminalTransportProvider for SshTerminalTransportProvider {
 struct SshTerminalTransport {
     config: SshConnectionConfig,
     connector: SshConnector,
+    /// Where the host's 登录脚本 is kept, read on each launch.
+    login_script: Option<SecretRef>,
 }
 
 impl TerminalTransportFactory for SshTerminalTransport {
@@ -74,8 +84,17 @@ impl TerminalTransport for SshTerminalTransport {
         commands: mpsc::Receiver<TerminalTransportCommand>,
         events: Sender<TerminalTransportEvent>,
     ) -> Result<()> {
+        // The keychain blocks, so the script is read here, on the
+        // transport's thread, before anything connects. One that cannot
+        // be read is none: the user types the answers.
+        let script = self
+            .login_script
+            .as_ref()
+            .and_then(|secret| self.connector.secrets().get(secret).ok().flatten())
+            .map(|text| LoginScript::new(decode_rules(&text)))
+            .filter(|script| !script.is_done());
         run_terminal_worker(commands, events.clone(), |broker, io_rx| {
-            self.run_async(initial_size, broker, io_rx, events)
+            self.run_async(initial_size, script, broker, io_rx, events)
         })
     }
 }
@@ -84,6 +103,7 @@ impl SshTerminalTransport {
     async fn run_async(
         &self,
         initial_size: TerminalSize,
+        mut script: Option<LoginScript>,
         broker: Arc<SshPrompts>,
         mut io_rx: tokio_mpsc::UnboundedReceiver<TerminalTransportCommand>,
         events: Sender<TerminalTransportEvent>,
@@ -159,6 +179,10 @@ impl SshTerminalTransport {
         let mut side_queue: VecDeque<Side<'_>> = VecDeque::new();
         let mut side: Option<Side<'_>> = None;
 
+        // When the 登录脚本 answers the prompt the output ends with, unless
+        // more output comes first.
+        let mut settle: Option<Instant> = None;
+
         let mut exit_code = 0;
         let mut exit_signal = None;
         loop {
@@ -167,7 +191,19 @@ impl SshTerminalTransport {
             }
             tokio::select! {
                 command = io_rx.recv() => match command {
-                    Some(TerminalTransportCommand::Write(bytes) | TerminalTransportCommand::WriteData(bytes)) => {
+                    Some(TerminalTransportCommand::Write(bytes)) => {
+                        // Keys: the user takes over the login from here.
+                        if let Some(running) = &mut script {
+                            running.typed(&bytes);
+                            if running.is_done() {
+                                script = None;
+                                settle = None;
+                            }
+                        }
+                        channel.data_bytes(bytes).await.map_err(|_| anyhow!(t!("ssh.terminal.write_failed")))?;
+                    }
+                    // A file transfer's bytes, not keys.
+                    Some(TerminalTransportCommand::WriteData(bytes)) => {
                         channel.data_bytes(bytes).await.map_err(|_| anyhow!(t!("ssh.terminal.write_failed")))?;
                     }
                     Some(TerminalTransportCommand::Resize(size)) => {
@@ -242,8 +278,21 @@ impl SshTerminalTransport {
                     ping = None;
                     let _ = events.send(TerminalTransportEvent::Latency(latency)).await;
                 },
+                () = tokio::time::sleep_until(settle.unwrap_or_else(Instant::now)), if settle.is_some() => {
+                    settle = None;
+                    if let Some(answer) = script.as_mut().and_then(LoginScript::answer) {
+                        channel.data_bytes(answer.to_vec()).await.map_err(|_| anyhow!(t!("ssh.terminal.write_failed")))?;
+                    }
+                    if script.as_ref().is_some_and(LoginScript::is_done) {
+                        script = None;
+                    }
+                },
                 message = channel.wait() => match message {
                     Some(ChannelMsg::Data { data }) | Some(ChannelMsg::ExtendedData { data, .. }) => {
+                        if let Some(running) = &mut script {
+                            running.output(&data);
+                            settle = running.waiting().then(|| Instant::now() + SCRIPT_SETTLE);
+                        }
                         if events.send(TerminalTransportEvent::Output(data.to_vec())).await.is_err() {
                             break;
                         }
@@ -900,6 +949,102 @@ mod tests {
             .unwrap();
         worker.join().unwrap();
         report
+    }
+
+    #[test]
+    fn the_login_script_answers_what_the_shell_prints_until_the_user_types() {
+        let Some(server) = start_server(TestAuth::Password) else {
+            eprintln!(
+                "loopback sockets are unavailable in this sandbox; skipping integration body"
+            );
+            return;
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let keychain = Arc::new(InMemorySecretStore::default());
+        let host = password_host(server.port);
+        keychain
+            .set(&host.password_secret(), TEST_PASSWORD)
+            .unwrap();
+        let script = host.login_script_secret();
+        // The server prints `ready` on a line of its own, then echoes what
+        // it is sent: the first rule, waiting for nothing, answers the
+        // first output; the second waits for a prompt the user types.
+        keychain
+            .set(
+                &script,
+                &crate::host::login_script::encode_rules(&[
+                    crate::host::login_script::LoginRule {
+                        expect: String::new(),
+                        send: "asset".into(),
+                    },
+                    crate::host::login_script::LoginRule {
+                        expect: "never".into(),
+                        send: "no".into(),
+                    },
+                ])
+                .unwrap(),
+            )
+            .unwrap();
+        let provider = SshTerminalTransportProvider::with_connector(SshConnector::new(
+            directory.path().join("known_hosts"),
+            keychain,
+        ));
+        let mut login = HostLogin::of(&host, None);
+        login.login_script = Some(script);
+        let factory = provider.factory_for(&login);
+        let (command_tx, command_rx) = mpsc::channel();
+        let (event_tx, event_rx) = async_channel::unbounded();
+        let worker = thread::spawn(move || {
+            let _ = factory
+                .create()
+                .run(TerminalSize::new(90, 30, 9, 18), command_rx, event_tx);
+        });
+
+        let mut output = String::new();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while std::time::Instant::now() < deadline && !output.contains("asset\r") {
+            let Ok(event) = event_rx.recv_blocking() else {
+                break;
+            };
+            match event {
+                TerminalTransportEvent::Prompt(prompt) => {
+                    if let ConnectionPromptKind::UnknownHost(_) = prompt.kind() {
+                        command_tx
+                            .send(TerminalTransportCommand::PromptReply {
+                                request_id: prompt.request_id(),
+                                reply: ConnectionPromptReply::TrustAndSave,
+                            })
+                            .unwrap();
+                    }
+                }
+                TerminalTransportEvent::Output(bytes) => {
+                    output.push_str(&String::from_utf8_lossy(&bytes));
+                }
+                TerminalTransportEvent::Failed(error) => panic!("SSH failed: {error}"),
+                _ => {}
+            }
+        }
+        assert!(output.contains("asset\r"), "{output:?}");
+
+        // Typing takes over: the last rule never answers, even when its
+        // prompt comes.
+        command_tx
+            .send(TerminalTransportCommand::Write(b"x".to_vec()))
+            .unwrap();
+        command_tx
+            .send(TerminalTransportCommand::Write(b"never".to_vec()))
+            .unwrap();
+        let until = std::time::Instant::now() + Duration::from_secs(1);
+        while std::time::Instant::now() < until {
+            if let Ok(TerminalTransportEvent::Output(bytes)) = event_rx.try_recv() {
+                output.push_str(&String::from_utf8_lossy(&bytes));
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(output.contains("xnever"), "{output:?}");
+        assert!(!output.contains("no\r"), "{output:?}");
+        command_tx.send(TerminalTransportCommand::Shutdown).unwrap();
+        worker.join().unwrap();
     }
 
     #[test]

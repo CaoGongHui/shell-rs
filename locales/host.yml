@@ -310,6 +310,30 @@ host.dialog.telnet_password_prompt:
 host.dialog.telnet_prompt_note:
   zh-CN: 留空使用常见提示，匹配时忽略大小写。用户名可留空以支持仅密码登录。
   en: Leave a prompt empty for the usual ones; matching ignores case. Leave the username empty for a device that asks only for a password.
+host.dialog.login_script:
+  zh-CN: 登录脚本
+  en: Login script
+host.dialog.login_script_enabled:
+  zh-CN: 登录后执行「等待并发送」规则
+  en: After logging in, wait for prompts and answer them
+host.dialog.login_script_placeholder:
+  zh-CN: "Opt> => 10.0.0.5\npassword: => 资产口令"
+  en: "Opt> => 10.0.0.5\npassword: => the asset’s password"
+host.dialog.login_script_note:
+  zh-CN: 每行一条：等待的文本 => 发送的文本，发送后自动回车。按顺序各执行一次，匹配忽略大小写；等待留空表示连上后立即发送。你一开始打字，剩下的规则就不再执行。整份脚本保存在系统钥匙串。
+  en: "One rule per line: text to wait for => text to send, followed by Enter. Rules run once each, in order, ignoring case; leave the left side empty to send right after connecting. Typing yourself stops the rules left. The whole script is kept in the system keychain."
+host.dialog.login_script_no_keychain:
+  zh-CN: 系统钥匙串不可用，这台机器上无法保存登录脚本。
+  en: The system keychain isn’t available, so a login script can’t be saved on this computer.
+host.dialog.login_script_no_separator:
+  zh-CN: 登录脚本第 %{line} 行缺少「=>」，请写成「等待的文本 => 发送的文本」
+  en: "Line %{line} of the login script has no “=>”. Write it as “text to wait for => text to send”."
+host.dialog.login_script_too_long:
+  zh-CN: 登录脚本第 %{line} 行太长，最多 %{limit} 个字符
+  en: "Line %{line} of the login script is too long: %{limit} characters at most."
+host.dialog.login_script_too_many:
+  zh-CN: 登录脚本最多 %{limit} 条规则
+  en: "A login script has %{limit} rules at most."
 host.dialog.next_connection_note:
   zh-CN: 已打开的连接不受影响，下次连接时使用新的设置。
   en: Open connections stay as they are; the new settings apply the next time you connect.
@@ -753,6 +777,12 @@ host.store.secret.proxy_delete:
 host.store.secret.temporary:
   zh-CN: 这次连接的密码未能记下：%{error}
   en: "Couldn’t keep the password for this connection: %{error}"
+host.store.secret.login_script_write:
+  zh-CN: 登录脚本未能写入系统钥匙串：%{error}
+  en: "Couldn’t save the login script to the system keychain: %{error}"
+host.store.secret.login_script_delete:
+  zh-CN: 登录脚本未能从系统钥匙串删除：%{error}
+  en: "Couldn’t delete the login script from the system keychain: %{error}"
 
 # 导入主机: the dialog that adds the hosts ~/.ssh/config or known_hosts names.
 host.import.title.ssh_config:

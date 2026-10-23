@@ -47,6 +47,9 @@ pub enum SecretRef {
     /// 不保存的连接（外部连接，以后还有临时连接）的密码，按这台临时主机的 id
     /// 归属。只在 [`TemporarySecretStore`] 的内存里，从不进钥匙串。
     Temporary { host: u64 },
+    /// 某台 SSH 主机的登录脚本（「等待并发送」规则，JSON），按主机永不复用的
+    /// `public_id` 归属：规则里常有密码，所以整份脚本都只进钥匙串。
+    LoginScript { host: String },
 }
 
 impl SecretRef {
@@ -82,6 +85,12 @@ impl SecretRef {
         Self::Temporary { host }
     }
 
+    pub fn login_script(public_id: impl Into<String>) -> Self {
+        Self::LoginScript {
+            host: public_id.into(),
+        }
+    }
+
     /// 钥匙串条目的账户名。前缀区分种类，在 Keychain Access 里直接可读。
     pub fn account(&self) -> String {
         match self {
@@ -90,6 +99,7 @@ impl SecretRef {
             Self::Credential { keychain_id } => format!("credential:{keychain_id}"),
             Self::Proxy { user, host, port } => format!("proxy:{user}@{host}:{port}"),
             Self::Temporary { host } => format!("temporary:{host}"),
+            Self::LoginScript { host } => format!("login-script:{host}"),
         }
     }
 }
@@ -157,6 +167,7 @@ mod tests {
             SecretRef::credential("root@10.0.1.12:22"),
             SecretRef::proxy("root", "10.0.1.12", 22),
             SecretRef::temporary(22),
+            SecretRef::login_script("root@10.0.1.12:22"),
         ]
         .map(|secret| secret.account());
         for (ix, account) in accounts.iter().enumerate() {

@@ -10,8 +10,9 @@ use gpui_kit::SharedString;
 use crate::host::{
     AuthKind, Credential, CredentialDraft, CredentialId, CredentialKind, DataBits, FlowControl,
     GroupId, GroupPathError, GroupPlan, Host, HostConnection, HostDraft, HostId, HostStore, Parity,
-    PastedKey, Protocol, ProxyKind, ProxySettings, Route, SSH_PORT, SerialSettings, StopBits,
-    TELNET_PORT,
+    PastedKey, Protocol, ProtocolKind, ProxyKind, ProxySettings, Route, SSH_PORT, SerialSettings,
+    StopBits, TELNET_PORT,
+    login_script::{LoginRule, MAX_RULE_LEN, MAX_RULES, encode_rules},
 };
 use crate::i18n::{t, tn};
 use crate::secrets::SecretRef;
@@ -384,6 +385,9 @@ pub struct HostPlan {
     pub group: GroupPlan,
     pub password: Option<(SecretRef, SecretChange)>,
     pub proxy_password: Option<(SecretRef, SecretChange)>,
+    /// What to do with the host's 登录脚本 entry, once the host has an id:
+    /// `None` leaves it, `Some(None)` deletes it, `Some(Some(json))` writes.
+    pub login_script: Option<Option<String>>,
 }
 
 /// `fields` on top of the host `existing` is (a new host's defaults when
@@ -414,6 +418,8 @@ pub fn plan_host(
         None => current.map(Host::draft),
     };
     let current = current.filter(|_| switching.is_none());
+    let mut fields = fields;
+    let login_script_field = fields.login_script.take();
     let protocol = match (current, fields.protocol) {
         (_, Some(asked)) => asked,
         (Some(host), None) => protocol_choice(&host.protocol),
@@ -426,6 +432,9 @@ pub fn plan_host(
         return Err(bad(t!("cli.host.telnet_on_other")));
     }
     if protocol == ProtocolChoice::Serial {
+        if matches!(login_script_field, Some(Some(_))) {
+            return Err(bad(t!("cli.host.login_script_not_ssh")));
+        }
         return plan_serial_host(fields, base, store);
     }
     if fields.serial.is_some() {
@@ -568,11 +577,20 @@ pub fn plan_host(
         }),
         _ => None,
     };
+    // Only an SSH host runs a 登录脚本.
+    let login_script = if draft.protocol.kind() == ProtocolKind::Ssh {
+        login_script_change(login_script_field)?
+    } else if matches!(login_script_field, Some(Some(_))) {
+        return Err(bad(t!("cli.host.login_script_not_ssh")));
+    } else {
+        None
+    };
     Ok(HostPlan {
         draft,
         group,
         password,
         proxy_password,
+        login_script,
     })
 }
 
@@ -674,7 +692,38 @@ fn plan_serial_host(
         group,
         password: None,
         proxy_password: None,
+        login_script: None,
     })
+}
+
+/// The 登录脚本 `field` gives: `None` leaves it, `Some(None)` deletes it,
+/// `Some(Some(json))` writes it, checked as the host form checks its text.
+fn login_script_change(field: Option<Option<Secret>>) -> Result<Option<Option<String>>, CliError> {
+    let Some(field) = field else {
+        return Ok(None);
+    };
+    let Some(json) = field else {
+        return Ok(Some(None));
+    };
+    let rules: Vec<LoginRule> = serde_json::from_str(json.expose())
+        .map_err(|error| bad(t!("cli.host.login_script_shape", error = error)))?;
+    if rules.len() > MAX_RULES {
+        return Err(bad(t!(
+            "host.dialog.login_script_too_many",
+            limit = MAX_RULES
+        )));
+    }
+    if let Some(ix) = rules
+        .iter()
+        .position(|rule| rule.expect.len() + rule.send.len() > MAX_RULE_LEN)
+    {
+        return Err(bad(t!(
+            "host.dialog.login_script_too_long",
+            line = ix + 1,
+            limit = MAX_RULE_LEN
+        )));
+    }
+    Ok(Some(encode_rules(&rules)))
 }
 
 /// The jump hosts the CLI names, as the store keeps them, or why they will
@@ -852,6 +901,14 @@ pub fn host_fields(mut value: serde_json::Value) -> Result<HostFields, String> {
             .and_then(|route| route.as_object_mut())
         {
             route.remove("password_saved");
+        }
+        object.remove("login_script_saved");
+        // The 登录脚本 travels as one secret, its rules as JSON, so the
+        // answers in it never show in a request's `Debug`.
+        if let Some(script) = object.get_mut("login_script")
+            && script.is_array()
+        {
+            *script = serde_json::Value::String(script.to_string());
         }
     }
     serde_json::from_value(value).map_err(|error| error.to_string())
@@ -1205,6 +1262,48 @@ mod tests {
             plan.password.unwrap().1,
             SecretChange::Set(Secret::new("hunter2"))
         );
+    }
+
+    #[test]
+    fn a_login_script_is_an_ssh_hosts_secret_and_is_checked() {
+        let (store, web, _) = store();
+        let plan = |json| plan_host(fields(json), Some(web), &store);
+
+        let script = serde_json::json!([
+            { "expect": "Opt>", "send": "10.0.0.5" },
+            { "expect": "password:", "send": "hunter2" },
+        ]);
+        // Carried as a secret: a printed request never shows the answers.
+        let given = fields(serde_json::json!({ "login_script": script }));
+        assert!(!format!("{given:?}").contains("hunter2"));
+        let written = plan(serde_json::json!({ "login_script": script }))
+            .unwrap()
+            .login_script
+            .unwrap()
+            .unwrap();
+        assert!(written.contains("10.0.0.5") && written.contains("hunter2"));
+
+        assert_eq!(plan(serde_json::json!({})).unwrap().login_script, None);
+        for deleting in [serde_json::json!(null), serde_json::json!([])] {
+            assert_eq!(
+                plan(serde_json::json!({ "login_script": deleting }))
+                    .unwrap()
+                    .login_script,
+                Some(None)
+            );
+        }
+        assert_eq!(
+            refused(plan(
+                serde_json::json!({ "login_script": [{ "wait": "x" }] })
+            ))
+            .0,
+            ErrorCode::BadRequest
+        );
+        let telnet = plan(serde_json::json!({
+            "protocol": "telnet",
+            "login_script": [{ "expect": "a", "send": "b" }],
+        }));
+        assert_eq!(refused(telnet), bad("只有 SSH 主机有 login_script"));
     }
 
     #[test]

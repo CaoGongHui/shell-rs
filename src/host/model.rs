@@ -498,6 +498,13 @@ impl Host {
         SecretRef::password(self.user.as_ref(), self.address.as_ref(), self.port)
     }
 
+    /// Where this host's 登录脚本 lives in the system keychain. Keyed by
+    /// the host's own never-reused id rather than its endpoint: hosts
+    /// behind one bastion share the endpoint and each answer it apart.
+    pub fn login_script_secret(&self) -> SecretRef {
+        SecretRef::login_script(self.public_id.as_str())
+    }
+
     /// The editable fields, for pre-filling the host form.
     pub fn draft(&self) -> HostDraft {
         HostDraft {

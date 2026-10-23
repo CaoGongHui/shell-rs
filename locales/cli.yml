@@ -342,6 +342,12 @@ cli.host.serial_on_ssh:
 cli.host.telnet_on_other:
   zh-CN: 只有 Telnet 主机有 telnet
   en: Only a Telnet host has telnet settings.
+cli.host.login_script_not_ssh:
+  zh-CN: 只有 SSH 主机有 login_script
+  en: Only an SSH host has a login_script.
+cli.host.login_script_shape:
+  zh-CN: 'login_script 要写成 [{"expect": "等待的文本", "send": "发送的文本"}]：%{error}'
+  en: 'login_script is written as [{"expect": "text to wait for", "send": "text to send"}]: %{error}'
 cli.host.telnet_credential_kind:
   zh-CN: Telnet 主机只能使用密码凭据
   en: A Telnet host can only use a password credential.
