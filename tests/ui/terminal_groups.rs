@@ -149,6 +149,14 @@ async fn the_toggle_puts_checkboxes_ahead_of_the_tab_marks(cx: &mut TestAppConte
         assert!(hide.right() <= broadcast.left());
         assert!(broadcast.right() <= tab.left());
         assert!((hide.center().y - broadcast.center().y).abs() <= px(1.));
+        // The controls run the bar's full height, so their bottom border
+        // lines up with the one under the tabs.
+        let controls = window.find("tab-bar-controls").bounds();
+        let bar = window.find("center-tab-bar").bounds();
+        assert!(bar.size.height > px(0.));
+        assert_eq!(controls.top(), bar.top());
+        assert_eq!(controls.bottom(), bar.bottom());
+        assert!(controls.right() <= bar.left());
         assert!(
             window
                 .find(("terminal-tab-os", INITIAL_WEB_TERMINAL))

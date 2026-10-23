@@ -9,7 +9,7 @@ use gpui_kit::component::dock::{
 use gpui_kit::component::{
     ActiveTheme as _, Icon, IconName, Selectable as _, Sizable as _,
     button::{Button, ButtonVariants as _},
-    h_flex,
+    h_flex, v_flex,
 };
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
@@ -26,7 +26,7 @@ struct TabBarControls {
 }
 
 impl TabBarControls {
-    fn controls(self, target: &FocusHandle) -> impl IntoElement {
+    fn controls(self, target: &FocusHandle, cx: &App) -> impl IntoElement {
         let hosts = target.clone();
         let broadcast = target.clone();
         let label = if !self.enabled {
@@ -36,10 +36,19 @@ impl TabBarControls {
         } else {
             t!("workspace.broadcast.active", count = self.count)
         };
+        // Bordered like the tab bar's own prefix: the bar's bottom line runs
+        // under it, and the first tab, drawn without a left border, is set
+        // off from it.
         h_flex()
+            .id("tab-bar-controls")
+            .test_support()
             .flex_shrink_0()
-            .pl_2()
+            .self_stretch()
+            .px_2()
             .gap_1()
+            .border_b_1()
+            .border_r_1()
+            .border_color(cx.theme().border)
             .when_some(self.hosts_open, |row, open| {
                 row.child(
                     Button::new("toggle-dock:Left")
@@ -261,8 +270,19 @@ impl TabGroupRenderer for WorkspaceTabBar {
         h_flex()
             .w_full()
             .bg(cx.theme().tokens.tab_bar)
-            .child(state.controls(&self.target))
-            .child(div().flex_1().min_w_0().child(tabs))
+            .child(state.controls(&self.target, cx))
+            // A column, as base lays out the other bars: in a block `div`
+            // the bar's height is indefinite, so the toolbar box on its
+            // right, `h_full`, shrinks to its buttons and its bottom border
+            // sits above the bar's (#44).
+            .child(
+                v_flex()
+                    .id("center-tab-bar")
+                    .test_support()
+                    .flex_1()
+                    .min_w_0()
+                    .child(tabs),
+            )
             .into_any_element()
     }
     fn render_active_panel(
