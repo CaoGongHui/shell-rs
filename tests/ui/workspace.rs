@@ -542,6 +542,55 @@ async fn middle_clicking_a_tab_closes_it(cx: &mut TestAppContext) {
     });
 }
 
+/// A mouse wheel brings back tabs scrolled out of view, though the tab bar
+/// scrolls only sideways and a wheel turns only vertically (#66).
+#[gpui_kit::test]
+fn the_mouse_wheel_scrolls_the_tabs(cx: &mut TestAppContext) {
+    let (handle, _) = open_workspace(cx);
+    for _ in 0..30 {
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            window.dispatch_action(Box::new(ConnectHost(HostId(WEB_01))), cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+    }
+    // The bar and where the first tab starts.
+    let layout = |cx: &mut TestAppContext| {
+        cx.update_window(handle.into(), |_, window, cx| {
+            window.render_frame(cx);
+            let bar = window.find("center-tab-bar").bounds();
+            let tab = window.find(("terminal-tab", INITIAL_WEB_TERMINAL)).bounds();
+            (bar, tab.left())
+        })
+        .unwrap()
+    };
+
+    // The last tab opened is shown, the first scrolled out to the left.
+    let (bar, before) = layout(cx);
+    assert!(before < bar.left());
+
+    cx.update_window(handle.into(), |_, window, cx| {
+        window.dispatch_event(
+            gpui_kit::ScrollWheelEvent {
+                position: bar.center(),
+                delta: gpui_kit::ScrollDelta::Lines(point(0., 3.)),
+                modifiers: gpui_kit::Modifiers::default(),
+                touch_phase: gpui_kit::TouchPhase::Moved,
+            }
+            .to_platform_input(),
+            cx,
+        );
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let (_, after) = layout(cx);
+    assert!(
+        after > before,
+        "the tabs did not scroll: {before:?} → {after:?}"
+    );
+}
+
 #[gpui_kit::test]
 async fn a_terminal_tab_can_be_renamed_and_follow_the_host_again(cx: &mut TestAppContext) {
     let (handle, workspace) = open_workspace(cx);

@@ -248,6 +248,35 @@ impl DockAreaRenderer for WorkspaceDockSkin {
     }
 }
 
+/// A center tab bar, in a column as base lays the bars out, that a mouse
+/// wheel scrolls sideways (#66).
+///
+/// The bar scrolls only along itself, dropping vertical deltas, while a
+/// mouse wheel turns only vertically: tabs scrolled out of view could be
+/// reached only with Shift held. A vertical turn is sent again as the
+/// sideways one Shift makes. Only a wheel's, which comes in lines; a
+/// trackpad swipes sideways itself.
+fn wheel_scrolls_tabs(tabs: AnyElement) -> Div {
+    v_flex()
+        .on_scroll_wheel(|event, window, cx| {
+            let ScrollDelta::Lines(lines) = event.delta else {
+                return;
+            };
+            if lines.x != 0. || lines.y == 0. {
+                return;
+            }
+            cx.stop_propagation();
+            let sideways = ScrollWheelEvent {
+                delta: ScrollDelta::Lines(point(lines.y, 0.)),
+                ..event.clone()
+            };
+            window.defer(cx, move |window, cx| {
+                window.dispatch_event(sideways.to_platform_input(), cx);
+            });
+        })
+        .child(tabs)
+}
+
 /// Add the permanent broadcast toggle ahead of the leading center tab strip.
 /// Dock's renderer still owns tabs, dragging, overflow, menus and focus.
 struct WorkspaceTabBar {
@@ -285,7 +314,8 @@ impl TabGroupRenderer for WorkspaceTabBar {
         let state = self.broadcast.get();
         if state.node != Some(group.node()) {
             return if self.center_groups.borrow().contains(&group.node()) {
-                self.center_skin.render_tab_bar(group, window, cx)
+                wheel_scrolls_tabs(self.center_skin.render_tab_bar(group, window, cx))
+                    .into_any_element()
             } else {
                 self.skin.render_tab_bar(group, window, cx)
             };
@@ -300,12 +330,11 @@ impl TabGroupRenderer for WorkspaceTabBar {
             // right, `h_full`, shrinks to its buttons and its bottom border
             // sits above the bar's (#44).
             .child(
-                v_flex()
+                wheel_scrolls_tabs(tabs)
                     .id("center-tab-bar")
                     .test_support()
                     .flex_1()
-                    .min_w_0()
-                    .child(tabs),
+                    .min_w_0(),
             )
             .into_any_element()
     }
