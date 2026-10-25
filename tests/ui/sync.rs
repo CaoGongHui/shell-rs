@@ -3,8 +3,10 @@
 //! `MemoryStore` shared by every computer of a test.
 
 use shellrs::app::{RemoveSyncDevice, ReviewSync, SetUpSync, SyncNow, TurnOffSync};
+use shellrs::settings::SyncLocation;
 use shellrs::sync::{Attention, EDIT_PAUSE, SyncPhase, SyncService, SyncServices};
-use shellrs_sync::{DeviceInfo, KdfParams, MemoryStore, SyncStore, layout};
+use shellrs_sync::store::Op;
+use shellrs_sync::{DeviceInfo, KdfParams, MemoryStore, StoreError, SyncStore, layout};
 use zeroize::Zeroizing;
 
 use crate::support::*;
@@ -12,11 +14,17 @@ use crate::support::*;
 const FOLDER: &str = "/Users/me/Dropbox/ShellRS";
 const PASSWORD: &str = "correct horse battery";
 
+fn at_folder() -> SyncLocation {
+    SyncLocation::Folder {
+        path: FOLDER.into(),
+    }
+}
+
 /// The folder, whatever path is picked, with keys that derive at once.
 fn services(folder: &Arc<MemoryStore>, name: &str) -> SyncServices {
     let folder = folder.clone();
     SyncServices {
-        open: Arc::new(move |_| folder.clone() as Arc<dyn SyncStore>),
+        open: Arc::new(move |_, _| Ok(folder.clone() as Arc<dyn SyncStore>)),
         kdf: KdfParams {
             memory_kib: 8,
             passes: 1,
@@ -39,13 +47,16 @@ struct Desk {
 }
 
 fn desk(cx: &mut TestAppContext, folder: &Arc<MemoryStore>) -> Desk {
+    desk_with(cx, services(folder, "desk"))
+}
+
+fn desk_with(cx: &mut TestAppContext, services: SyncServices) -> Desk {
     let secrets = Arc::new(InMemorySecretStore::default());
     let keys = tempfile::tempdir().unwrap();
     let store = HostStore::seed()
         .with_secrets(secrets.clone())
         .with_key_dir(keys.path());
     let (handle, workspace) = open_workspace_with_store(cx, store);
-    let services = services(folder, "desk");
     cx.update(|cx| {
         let sync = workspace.read(cx).sync().clone();
         sync.update(cx, |sync, cx| sync.set_services(services, cx));
@@ -67,7 +78,7 @@ impl Desk {
         cx.update(|cx| self.workspace.read(cx).store().clone())
     }
 
-    fn folder_setting(&self, cx: &mut TestAppContext) -> Option<std::path::PathBuf> {
+    fn location_setting(&self, cx: &mut TestAppContext) -> Option<SyncLocation> {
         cx.update(|cx| {
             self.workspace
                 .read(cx)
@@ -75,7 +86,7 @@ impl Desk {
                 .read(cx)
                 .settings()
                 .sync
-                .folder
+                .location
         })
     }
 }
@@ -110,7 +121,7 @@ impl Laptop {
     /// Join the sync in the folder.
     async fn join(&self, cx: &mut TestAppContext) {
         let join = self.sync.update(cx, |sync, cx| {
-            sync.join(FOLDER.into(), Zeroizing::new(PASSWORD.into()), true, cx)
+            sync.join(at_folder(), None, Zeroizing::new(PASSWORD.into()), true, cx)
         });
         join.await.unwrap();
         cx.run_until_parked();
@@ -167,7 +178,7 @@ async fn sync_is_set_up_on_one_computer_and_joined_on_another(cx: &mut TestAppCo
     let desk = desk(cx, &folder);
     set_up_on_the_desk(cx, &desk).await;
 
-    assert_eq!(desk.folder_setting(cx), Some(FOLDER.into()));
+    assert_eq!(desk.location_setting(cx), Some(at_folder()));
     assert!(folder.raw(layout::VAULT).is_some());
     // The keys went to the keychain, never to the folder in the clear.
     assert!(desk.secrets.get(&SecretRef::SyncKeyring).unwrap().is_some());
@@ -207,7 +218,7 @@ async fn a_wrong_password_is_said_over_the_dialog(cx: &mut TestAppContext) {
     let folder = Arc::new(MemoryStore::new());
     let laptop = laptop(cx, &folder);
     let create = laptop.sync.update(cx, |sync, cx| {
-        sync.create(FOLDER.into(), Zeroizing::new(PASSWORD.into()), cx)
+        sync.create(at_folder(), None, Zeroizing::new(PASSWORD.into()), cx)
     });
     create.await.unwrap();
     cx.run_until_parked();
@@ -233,7 +244,7 @@ async fn a_wrong_password_is_said_over_the_dialog(cx: &mut TestAppContext) {
         assert_eq!(window.find("form-error").label(), Some("同步密码不对。"));
         assert!(window.try_find("sync-commit").is_some());
     });
-    assert_eq!(desk.folder_setting(cx), None);
+    assert_eq!(desk.location_setting(cx), None);
 }
 
 #[gpui_kit::test]
@@ -486,7 +497,7 @@ async fn turning_sync_off_keeps_the_data_and_can_take_the_file_too(cx: &mut Test
     .await;
     cx.run_until_parked();
 
-    assert_eq!(desk.folder_setting(cx), None);
+    assert_eq!(desk.location_setting(cx), None);
     assert_eq!(files(), 0);
     assert!(desk.secrets.get(&SecretRef::SyncKeyring).unwrap().is_none());
     assert_eq!(host_names(&desk.store(cx), cx).len(), 6);
@@ -569,7 +580,8 @@ async fn a_new_password_and_key_are_asked_for_on_the_other_computer(cx: &mut Tes
     // With the new password it goes on where it was.
     let join = laptop.sync.update(cx, |sync, cx| {
         sync.join(
-            FOLDER.into(),
+            at_folder(),
+            None,
             Zeroizing::new(new_password.into()),
             false,
             cx,
@@ -584,4 +596,242 @@ async fn a_new_password_and_key_are_asked_for_on_the_other_computer(cx: &mut Tes
         None
     );
     assert!(host_names(&laptop.store, cx).contains(&"cache-01".to_string()));
+}
+
+const DAV: &str = "https://dav.example/dav/ShellRS";
+const DAV_USER: &str = "me@example.com";
+
+/// A WebDAV server in front of the folder, taking one login: the logins it
+/// was opened with are kept, for the tests to see none went astray.
+struct Server {
+    folder: Arc<MemoryStore>,
+    password: Mutex<String>,
+    logins: Mutex<Vec<Option<String>>>,
+}
+
+impl Server {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            folder: Arc::new(MemoryStore::new()),
+            password: Mutex::new("app-password".into()),
+            logins: Mutex::new(Vec::new()),
+        })
+    }
+
+    fn password(&self) -> String {
+        self.password.lock().unwrap().clone()
+    }
+
+    fn services(self: &Arc<Self>, name: &str) -> SyncServices {
+        let server = self.clone();
+        SyncServices {
+            open: Arc::new(move |location, password| {
+                let SyncLocation::WebDav { url, username } = location else {
+                    panic!("a folder: {location:?}");
+                };
+                server
+                    .logins
+                    .lock()
+                    .unwrap()
+                    .push(password.map(str::to_owned));
+                let known = url == DAV && username == DAV_USER;
+                if known && password == Some(server.password().as_str()) {
+                    Ok(server.folder.clone() as Arc<dyn SyncStore>)
+                } else {
+                    Err(StoreError::Unauthorized)
+                }
+            }),
+            ..services(&self.folder, name)
+        }
+    }
+}
+
+fn at_dav() -> SyncLocation {
+    SyncLocation::WebDav {
+        url: DAV.into(),
+        username: DAV_USER.into(),
+    }
+}
+
+/// Fill the WebDAV dialog with `password`.
+fn fill_webdav(window: &mut gpui_kit::Window, password: &str, cx: &mut App) {
+    window.click("webdav-url", cx);
+    window.input(DAV, cx);
+    window.click("webdav-username", cx);
+    window.input(DAV_USER, cx);
+    window.click("webdav-password", cx);
+    window.input(password, cx);
+}
+
+/// Set sync up on the server from 设置 › 同步 › 连接 WebDAV….
+async fn set_up_on_the_server(cx: &mut TestAppContext, desk: &Desk, server: &Server) {
+    let handle = desk.handle;
+    open_sync_settings(cx, handle);
+    in_frame(cx, handle, |window, cx| {
+        window.click("sync-set-up-webdav", cx)
+    });
+    let password = server.password();
+    in_frame(cx, handle, |window, cx| {
+        fill_webdav(window, &password, cx);
+        window.click("webdav-commit", cx);
+    });
+    cx.wait_for(handle.into(), Duration::from_secs(2), |window, _| {
+        window.try_find("sync-password-repeat").is_some()
+    })
+    .await;
+    in_frame(cx, handle, |window, cx| {
+        window.click("sync-password", cx);
+        window.input(PASSWORD, cx);
+        window.click("sync-password-repeat", cx);
+        window.input(PASSWORD, cx);
+        window.click("sync-commit", cx);
+    });
+    cx.wait_for(handle.into(), Duration::from_secs(2), |window, _| {
+        window.try_find("sync-commit").is_none()
+    })
+    .await;
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+async fn sync_is_set_up_on_a_webdav_server(cx: &mut TestAppContext) {
+    let server = Server::new();
+    let desk = desk_with(cx, server.services("desk"));
+    let handle = desk.handle;
+    open_sync_settings(cx, handle);
+    in_frame(cx, handle, |window, cx| {
+        window.click("sync-set-up-webdav", cx)
+    });
+
+    // A login the server refuses is said over the dialog, and keeps it.
+    in_frame(cx, handle, |window, cx| {
+        fill_webdav(window, "wrong", cx);
+        window.click("webdav-commit", cx);
+    });
+    cx.wait_for(handle.into(), Duration::from_secs(2), |window, _| {
+        window.try_find("form-error").is_some()
+    })
+    .await;
+    in_frame(cx, handle, |window, _| {
+        assert!(window.try_find("webdav-commit").is_some());
+        assert!(window.try_find("sync-password").is_none());
+    });
+
+    // 测试连接 writes, reads and deletes a file there, and keeps nothing.
+    in_frame(cx, handle, |window, cx| {
+        window.click("webdav-password", cx);
+        for _ in "wrong".chars() {
+            window.press("backspace", cx);
+        }
+        window.input(&server.password(), cx);
+        window.click("webdav-test", cx);
+    });
+    cx.run_until_parked();
+    let probes: Vec<Op> = server
+        .folder
+        .operations()
+        .into_iter()
+        .filter(|op| !matches!(op, Op::List(_)))
+        .collect();
+    assert!(
+        matches!(probes.as_slice(), [Op::Put(put), Op::Get(got), Op::Delete(deleted)]
+            if put.starts_with("shellrs-sync/probe-") && got == put && deleted == put),
+        "{probes:?}"
+    );
+    let paths = server.folder.paths();
+    assert!(paths.is_empty(), "{paths:?}");
+    assert!(desk.secrets.get(&SecretRef::SyncWebDav).unwrap().is_none());
+
+    in_frame(cx, handle, |window, cx| window.click("webdav-commit", cx));
+    cx.wait_for(handle.into(), Duration::from_secs(2), |window, _| {
+        window.try_find("sync-password-repeat").is_some()
+    })
+    .await;
+    in_frame(cx, handle, |window, cx| {
+        window.click("sync-password", cx);
+        window.input(PASSWORD, cx);
+        window.click("sync-password-repeat", cx);
+        window.input(PASSWORD, cx);
+        window.click("sync-commit", cx);
+    });
+    cx.wait_for(handle.into(), Duration::from_secs(2), |window, _| {
+        window.try_find("sync-commit").is_none()
+    })
+    .await;
+    cx.run_until_parked();
+
+    assert_eq!(desk.location_setting(cx), Some(at_dav()));
+    assert!(server.folder.raw(layout::VAULT).is_some());
+    let kept = desk.secrets.get(&SecretRef::SyncWebDav).unwrap();
+    assert_eq!(kept.as_deref().map(String::as_str), Some("app-password"));
+    // Rounds sign in with what the keychain keeps.
+    let logins = server.logins.lock().unwrap().clone();
+    assert_eq!(logins.last(), Some(&Some("app-password".to_string())));
+    let phase = desk
+        .sync(cx)
+        .read_with(cx, |sync, cx| sync.snapshot(cx).phase);
+    assert!(matches!(phase, SyncPhase::Synced { .. }), "{phase:?}");
+    in_frame(cx, handle, |window, _| {
+        assert_eq!(window.find("sync-webdav-url").label(), Some(DAV));
+        assert!(window.try_find("change-webdav-login").is_some());
+    });
+}
+
+#[gpui_kit::test]
+async fn a_refused_webdav_login_is_asked_for_again(cx: &mut TestAppContext) {
+    let server = Server::new();
+    let desk = desk_with(cx, server.services("desk"));
+    set_up_on_the_server(cx, &desk, &server).await;
+    let handle = desk.handle;
+
+    // The app password was revoked on the server's website.
+    *server.password.lock().unwrap() = "new-app-password".into();
+    in_frame(cx, handle, |window, cx| {
+        window.dispatch_action(Box::new(SyncNow), cx)
+    });
+    let attention = desk
+        .sync(cx)
+        .read_with(cx, |sync, cx| sync.snapshot(cx).attention);
+    assert_eq!(attention, Some(Attention::LoginRefused));
+    in_frame(cx, handle, |window, cx| {
+        assert_eq!(window.notifications(cx).len(), 1);
+        assert_eq!(
+            window.find("sync-status").label(),
+            Some("WebDAV 服务器拒绝了用户名或密码，重新登录后继续同步。")
+        );
+        window.dispatch_action(Box::new(ReviewSync), cx);
+    });
+    in_frame(cx, handle, |window, cx| {
+        // The same server: only the login changes.
+        assert!(window.try_find("webdav-url").is_some());
+        window.click("webdav-password", cx);
+        window.input("new-app-password", cx);
+        window.click("webdav-commit", cx);
+    });
+    cx.wait_for(handle.into(), Duration::from_secs(2), |window, _| {
+        window.try_find("webdav-commit").is_none()
+    })
+    .await;
+    cx.run_until_parked();
+    let snapshot = desk.sync(cx).read_with(cx, |sync, cx| sync.snapshot(cx));
+    assert_eq!(snapshot.attention, None);
+    assert!(matches!(snapshot.phase, SyncPhase::Synced { .. }));
+    let kept = desk.secrets.get(&SecretRef::SyncWebDav).unwrap();
+    assert_eq!(
+        kept.as_deref().map(String::as_str),
+        Some("new-app-password")
+    );
+
+    // Turned off, sync forgets the password with its keys.
+    in_frame(cx, handle, |window, cx| {
+        window.dispatch_action(Box::new(TurnOffSync), cx)
+    });
+    in_frame(cx, handle, |window, cx| window.click("sync-turn-off", cx));
+    cx.wait_for(handle.into(), Duration::from_secs(2), |window, _| {
+        window.try_find("sync-turn-off").is_none()
+    })
+    .await;
+    cx.run_until_parked();
+    assert_eq!(desk.location_setting(cx), None);
+    assert!(desk.secrets.get(&SecretRef::SyncWebDav).unwrap().is_none());
 }

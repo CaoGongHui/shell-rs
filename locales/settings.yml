@@ -566,21 +566,36 @@ settings.theme.app_follows_description:
   en: When off, the interface stays neutral black, white and gray, and only terminals take the theme’s colors.
 
 # 同步.
-settings.sync.folder_title:
-  zh-CN: 同步文件夹
-  en: Sync folder
 settings.sync.description:
-  zh-CN: 经一个文件夹在几台电脑之间同步主机、分组、凭据、端口转发、命令片段和书签，连同密码、口令和私钥。可以选 iCloud 云盘、Dropbox、OneDrive 同步的文件夹。数据在这台电脑上加密，文件夹里只有密文。
-  en: Sync hosts, groups, credentials, port forwards, snippets and bookmarks, with their passwords, passphrases and private keys, between your computers through a folder, such as one iCloud Drive, Dropbox or OneDrive syncs. They’re encrypted on this computer; the folder only ever holds ciphertext.
+  zh-CN: 经一个文件夹或 WebDAV 服务器，在几台电脑之间同步主机、分组、凭据、端口转发、命令片段和书签，连同密码、口令和私钥。数据在这台电脑上加密，存放的地方只有密文。
+  en: Sync hosts, groups, credentials, port forwards, snippets and bookmarks, with their passwords, passphrases and private keys, between your computers through a folder or a WebDAV server. They’re encrypted on this computer; where they’re kept only ever holds ciphertext.
+settings.sync.folder_option:
+  zh-CN: 文件夹
+  en: Folder
+settings.sync.folder_option_description:
+  zh-CN: 网盘（iCloud 云盘、Dropbox、OneDrive）同步的文件夹，或共享盘上的文件夹。
+  en: A folder a cloud drive syncs (iCloud Drive, Dropbox, OneDrive), or one on a network share.
+settings.sync.choose_folder:
+  zh-CN: 选择文件夹…
+  en: Choose folder…
+settings.sync.webdav_option:
+  zh-CN: WebDAV
+  en: WebDAV
+settings.sync.webdav_option_description:
+  zh-CN: 坚果云、Nextcloud、群晖等支持 WebDAV 的网盘或服务器。
+  en: A cloud drive or server that speaks WebDAV, such as Jianguoyun, Nextcloud or a Synology NAS.
+settings.sync.connect_webdav:
+  zh-CN: 连接 WebDAV…
+  en: Connect WebDAV…
+settings.sync.webdav:
+  zh-CN: WebDAV 地址
+  en: WebDAV address
+settings.sync.webdav_login:
+  zh-CN: WebDAV 账号
+  en: WebDAV login
 settings.sync.set_up:
   zh-CN: 开启同步
   en: Turn on sync
-settings.sync.set_up_description:
-  zh-CN: 选好文件夹后，那里没有同步就创建，已有就加入。
-  en: Pick a folder. Sync is set up there if it isn’t yet, or joined if it is.
-settings.sync.set_up_button:
-  zh-CN: 开启同步…
-  en: Turn on sync…
 settings.sync.keywords:
   zh-CN: 同步,云,网盘,iCloud,Dropbox,OneDrive,设备,同步密码
   en: sync,cloud,iCloud,Dropbox,OneDrive,device,sync password
@@ -617,6 +632,9 @@ settings.sync.attention.vault_replaced:
 settings.sync.attention.removed:
   zh-CN: 这台电脑已在别的设备上被移出同步。
   en: This computer was removed from sync on another device.
+settings.sync.attention.login_refused:
+  zh-CN: WebDAV 服务器拒绝了用户名或密码，重新登录后继续同步。
+  en: The WebDAV server refused the username or password. Sign in again to keep syncing.
 settings.sync.attention.mass_delete.one:
   en: This sync would delete %{count} record. It waits for you to agree.
 settings.sync.attention.mass_delete.other:
@@ -631,6 +649,9 @@ settings.sync.rejoin:
 settings.sync.review:
   zh-CN: 查看…
   en: Review…
+settings.sync.sign_in:
+  zh-CN: 重新登录…
+  en: Sign in…
 settings.sync.folder:
   zh-CN: 同步文件夹
   en: Sync folder

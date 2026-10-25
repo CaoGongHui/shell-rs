@@ -212,9 +212,14 @@ gpui_kit::actions!(
         OpenChangelog,
         /// Open the ShellRS website.
         OpenWebsite,
-        /// 开启同步…: pick the folder to sync through, then make sync there
-        /// or join it.
+        /// 开启同步 › 选择文件夹…: pick the folder to sync through, then make
+        /// sync there or join it.
         SetUpSync,
+        /// 开启同步 › 连接 WebDAV…: name the server and the login, then make
+        /// sync there or join it.
+        SetUpWebDavSync,
+        /// Sign in to the WebDAV server sync goes through anew.
+        ChangeWebDavLogin,
         /// Run a round of sync now.
         SyncNow,
         /// Open what sync waits for the user to settle: a password, a

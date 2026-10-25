@@ -11,6 +11,7 @@
 mod error;
 mod service;
 mod sync_dialog;
+mod webdav_dialog;
 mod worker;
 
 pub use error::JobError;
@@ -20,3 +21,4 @@ pub use service::{
 pub use sync_dialog::{
     JoinReason, MIN_PASSWORD, PasswordDialog, open_password_dialog, open_turn_off_dialog,
 };
+pub use webdav_dialog::{WebDavDialog, open_webdav_dialog};

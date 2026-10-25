@@ -1,6 +1,6 @@
 # The sync core (crates/shellrs-sync), on its own: it builds without GPUI,
 # so this takes minutes. Its tests also run with the app's (`cargo test`)
-# and on Windows (windows.yml).
+# and on Windows (windows.yml); its WebDAV store against Apache only here.
 name: sync
 
 on:
@@ -29,3 +29,7 @@ jobs:
       - run: cargo fmt -p shellrs-sync --check
       - run: cargo clippy -p shellrs-sync --all-targets -- -D warnings
       - run: cargo test --locked -p shellrs-sync
+      # The WebDAV store against Apache's mod_dav, which its ignored tests
+      # start on a port of their own.
+      - run: sudo apt-get update && sudo apt-get install -y apache2
+      - run: cargo test --locked -p shellrs-sync webdav -- --include-ignored

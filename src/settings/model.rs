@@ -379,13 +379,24 @@ pub struct ExternalCliSettings {
     pub enabled: bool,
 }
 
-/// 同步: where it goes through. Its keys are in the keychain and its
-/// state in the database.
+/// 同步: where it goes through. Its keys and a WebDAV password are in the
+/// keychain, its state in the database.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SyncSettings {
-    /// The folder, while sync is on.
-    pub folder: Option<PathBuf>,
+    /// Where, while sync is on.
+    pub location: Option<SyncLocation>,
+}
+
+/// Where sync goes through.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SyncLocation {
+    /// A folder on this computer, which a cloud drive may be syncing.
+    Folder { path: PathBuf },
+    /// A folder on a WebDAV server; its password is in the keychain.
+    #[serde(rename = "webdav")]
+    WebDav { url: String, username: String },
 }
 
 /// 关于 → 应用更新.

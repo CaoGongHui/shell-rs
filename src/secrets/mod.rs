@@ -50,6 +50,8 @@ pub enum SecretRef {
     /// 同步的密钥（`shellrs_sync::Keyring`），全机一条：有了它，同步不用每次问同步
     /// 密码。
     SyncKeyring,
+    /// 同步经由的 WebDAV 服务器的密码，全机一条。
+    SyncWebDav,
 }
 
 impl SecretRef {
@@ -94,6 +96,7 @@ impl SecretRef {
             Self::Proxy { user, host, port } => format!("proxy:{user}@{host}:{port}"),
             Self::Temporary { host } => format!("temporary:{host}"),
             Self::SyncKeyring => "sync:keyring".into(),
+            Self::SyncWebDav => "sync:webdav".into(),
         }
     }
 }
@@ -162,6 +165,7 @@ mod tests {
             SecretRef::proxy("root", "10.0.1.12", 22),
             SecretRef::temporary(22),
             SecretRef::SyncKeyring,
+            SecretRef::SyncWebDav,
         ]
         .map(|secret| secret.account());
         for (ix, account) in accounts.iter().enumerate() {

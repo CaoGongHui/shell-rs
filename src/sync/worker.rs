@@ -2,19 +2,76 @@
 //! storage, the keychain and the sync core, which may all take a while.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use shellrs_sync::{
-    Capabilities, DeviceId, DeviceInfo, KdfParams, Keyring, Pulled, Pushed, RoundOptions,
-    SyncState, SyncStore, SystemEnv, VaultStatus, change_password, create_vault, layout, pull,
-    push, rotate_key, unlock_vault, vault_status,
+    Capabilities, DeviceId, DeviceInfo, KdfParams, Keyring, Pulled, Pushed, PutCondition,
+    RoundOptions, StoreError, SyncError, SyncState, SyncStore, SystemEnv, VaultStatus,
+    change_password, create_vault, layout, pull, push, rotate_key, unlock_vault, vault_status,
 };
 use zeroize::Zeroizing;
 
-use super::JobError;
+use super::{JobError, SyncServices};
 use crate::host::{SecretWork, SecretsWritten, SyncExport};
 use crate::secrets::{SecretRef, SecretStore};
+use crate::settings::SyncLocation;
+
+/// The storage at `location`. A WebDAV server's opens with `login`, or the
+/// password the keychain keeps for it.
+pub(super) fn open(
+    services: &SyncServices,
+    location: &SyncLocation,
+    login: Option<&str>,
+    secrets: &dyn SecretStore,
+) -> Result<Arc<dyn SyncStore>, JobError> {
+    let kept;
+    let password = match (location, login) {
+        (SyncLocation::Folder { .. }, _) => None,
+        (SyncLocation::WebDav { .. }, Some(login)) => Some(login),
+        (SyncLocation::WebDav { .. }, None) => {
+            kept = secrets
+                .get(&SecretRef::SyncWebDav)
+                .map_err(|error| JobError::Keychain(error.to_string().into()))?
+                .ok_or(JobError::NoLogin)?;
+            Some(kept.as_str())
+        }
+    };
+    (services.open)(location, password).map_err(|error| JobError::Sync(error.into()))
+}
+
+/// Keep a WebDAV server's password in the keychain, or with `None`
+/// forget the one kept.
+pub(super) fn keep_login(secrets: &dyn SecretStore, login: Option<&str>) -> Result<(), JobError> {
+    match login {
+        Some(login) => secrets.set(&SecretRef::SyncWebDav, login),
+        None => secrets.delete(&SecretRef::SyncWebDav),
+    }
+    .map_err(|error| JobError::Keychain(error.to_string().into()))
+}
+
+/// 测试连接: list, write, read back and delete `name` beside the sync's
+/// folder, which is all sync asks of a store.
+pub(super) fn probe(store: &dyn SyncStore, name: &str) -> Result<(), JobError> {
+    let path = format!("shellrs-sync/{name}");
+    let wrote = b"ShellRS".to_vec();
+    store.list("shellrs-sync".into()).map_err(SyncError::from)?;
+    store
+        .put(path.clone(), wrote.clone(), PutCondition::Overwrite)
+        .map_err(SyncError::from)?;
+    let read = store.get(path.clone(), 64);
+    let deleted = store.delete(path);
+    let read = read.map_err(SyncError::from)?;
+    deleted.map_err(SyncError::from)?;
+    if read.bytes != wrote {
+        return Err(SyncError::Store(StoreError::Io(
+            "what was read is not what was written".into(),
+        ))
+        .into());
+    }
+    Ok(())
+}
 
 /// The vault's keys as this computer keeps them: in the keychain only.
 pub(super) fn load_keyring(secrets: &dyn SecretStore) -> Result<Keyring, JobError> {

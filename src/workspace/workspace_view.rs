@@ -377,10 +377,10 @@ impl Workspace {
             updater.set_channel(update_settings.channel, cx);
             updater
         });
-        let sync_folder = settings.read(cx).settings().sync.folder.clone();
+        let sync_location = settings.read(cx).settings().sync.location.clone();
         let sync = cx.new(|cx| {
             let mut sync = SyncService::new(store.clone(), cx);
-            sync.set_folder(sync_folder, cx);
+            sync.set_location(sync_location, cx);
             sync
         });
         let forward_panel = cx.new(|cx| {
@@ -2941,6 +2941,8 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_open_website))
             .on_action(cx.listener(Self::on_set_up_sync))
             .on_action(cx.listener(Self::on_set_up_sync_in))
+            .on_action(cx.listener(Self::on_set_up_webdav_sync))
+            .on_action(cx.listener(Self::on_change_webdav_login))
             .on_action(cx.listener(Self::on_sync_now))
             .on_action(cx.listener(Self::on_review_sync))
             .on_action(cx.listener(Self::on_change_sync_password))

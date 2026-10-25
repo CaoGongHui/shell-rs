@@ -12,6 +12,10 @@ argon2 = { version = "0.6", default-features = false, features = ["alloc", "zero
 chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc", "zeroize"] }
 flate2 = "1"
 getrandom = "0.3"
+# WebDAV's listings.
+quick-xml = "0.41"
+# WebDAV, as the app already uses it: blocking calls, on a worker thread.
+reqwest = { version = "0.13", features = ["blocking"] }
 serde = { version = "1", features = ["derive"] }
 # Keys keep their order, so a record nobody edited is written back as it
 # came, and this crate's tests see the same order alone as in the app.

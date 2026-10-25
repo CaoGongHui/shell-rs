@@ -1,5 +1,6 @@
-//! 设置 › 同步: off, the way to turn it on; on, where this computer stands,
-//! the other devices, and the sync password.
+//! 设置 › 同步: off, the two ways to turn it on (a folder, a WebDAV
+//! server); on, where this computer stands, the other devices, and the
+//! sync password.
 
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _,
@@ -15,15 +16,16 @@ use shellrs_sync::RemoteDevice;
 
 use super::settings_panel::keywords;
 use crate::app::{
-    CatalogIcon, ChangeSyncPassword, RemoveSyncDevice, ReviewSync, RotateSyncKey, SetUpSync,
-    SyncNow, TurnOffSync,
+    CatalogIcon, ChangeSyncPassword, ChangeWebDavLogin, RemoveSyncDevice, ReviewSync,
+    RotateSyncKey, SetUpSync, SetUpWebDavSync, SyncNow, TurnOffSync,
 };
 use crate::i18n::{t, tn};
+use crate::settings::SyncLocation;
 use crate::sync::{Attention, JobError, SyncPhase, SyncService, SyncSnapshot};
 
 pub(super) fn sync_groups(sync: &Entity<SyncService>, cx: &App) -> Vec<SettingGroup> {
     let snapshot = sync.read(cx).snapshot(cx);
-    let Some(folder) = snapshot.folder.clone() else {
+    let Some(location) = snapshot.location.clone() else {
         return vec![set_up_group(snapshot.available)];
     };
     let name = snapshot
@@ -36,17 +38,18 @@ pub(super) fn sync_groups(sync: &Entity<SyncService>, cx: &App) -> Vec<SettingGr
         SettingGroup::new()
             .title(t!("settings.sync.this_computer"))
             .description(t!("settings.sync.this_computer_description", name = name))
-            .items([
-                status_item(snapshot.clone()),
-                folder_item(folder.display().to_string().into()),
-                command_item(
-                    t!("settings.sync.turn_off"),
-                    t!("settings.sync.turn_off_description"),
-                    ("turn-off-sync", t!("settings.sync.turn_off_button")),
-                    busy,
-                    || Box::new(TurnOffSync),
-                ),
-            ]),
+            .items(
+                [status_item(snapshot.clone())]
+                    .into_iter()
+                    .chain(location_items(&location, busy))
+                    .chain([command_item(
+                        t!("settings.sync.turn_off"),
+                        t!("settings.sync.turn_off_description"),
+                        ("turn-off-sync", t!("settings.sync.turn_off_button")),
+                        busy,
+                        || Box::new(TurnOffSync),
+                    )]),
+            ),
         devices_group(&snapshot),
         SettingGroup::new()
             .title(t!("settings.sync.password"))
@@ -69,30 +72,59 @@ pub(super) fn sync_groups(sync: &Entity<SyncService>, cx: &App) -> Vec<SettingGr
     ]
 }
 
-/// Sync is off: what it does, and the button that turns it on.
+/// Sync is off: what it does, and the two places it can go through.
 fn set_up_group(available: bool) -> SettingGroup {
     let description = if available {
-        t!("settings.sync.set_up_description")
+        t!("settings.sync.description")
     } else {
         JobError::Unavailable.describe()
     };
     SettingGroup::new()
-        .title(t!("settings.sync.folder_title"))
-        .description(t!("settings.sync.description"))
-        .items([SettingItem::new(
-            t!("settings.sync.set_up"),
-            SettingField::render(move |options, _, _| {
-                Button::new("sync-set-up")
-                    .primary()
-                    .with_size(options.size())
-                    .icon(Icon::new(CatalogIcon::CloudSync))
-                    .label(t!("settings.sync.set_up_button"))
-                    .disabled(!available)
-                    .on_click(|_, window, cx| window.dispatch_action(Box::new(SetUpSync), cx))
-            }),
-        )
+        .title(t!("settings.sync.set_up"))
         .description(description)
-        .keywords(keywords(t!("settings.sync.keywords")))])
+        .items([
+            command_item(
+                t!("settings.sync.folder_option"),
+                t!("settings.sync.folder_option_description"),
+                ("sync-set-up", t!("settings.sync.choose_folder")),
+                !available,
+                || Box::new(SetUpSync),
+            )
+            .keywords(keywords(t!("settings.sync.keywords"))),
+            command_item(
+                t!("settings.sync.webdav_option"),
+                t!("settings.sync.webdav_option_description"),
+                ("sync-set-up-webdav", t!("settings.sync.connect_webdav")),
+                !available,
+                || Box::new(SetUpWebDavSync),
+            ),
+        ])
+}
+
+/// Where sync goes through: a folder's path, or a WebDAV server's
+/// address and the login to change.
+fn location_items(location: &SyncLocation, busy: bool) -> Vec<SettingItem> {
+    match location {
+        SyncLocation::Folder { path } => vec![path_item(
+            "sync-folder",
+            t!("settings.sync.folder"),
+            path.display().to_string().into(),
+        )],
+        SyncLocation::WebDav { url, username } => vec![
+            path_item(
+                "sync-webdav-url",
+                t!("settings.sync.webdav"),
+                url.clone().into(),
+            ),
+            command_item(
+                t!("settings.sync.webdav_login"),
+                username.clone().into(),
+                ("change-webdav-login", t!("settings.sync.change")),
+                busy,
+                || Box::new(ChangeWebDavLogin),
+            ),
+        ],
+    }
 }
 
 /// A row whose button opens what it names.
@@ -193,6 +225,7 @@ fn attention_text(attention: Attention) -> SharedString {
         Attention::MassDelete { count, .. } => {
             tn!("settings.sync.attention.mass_delete", count as usize)
         }
+        Attention::LoginRefused => t!("settings.sync.attention.login_refused"),
     }
 }
 
@@ -201,19 +234,20 @@ fn review_label(attention: Attention) -> SharedString {
         Attention::NeedsPassword => t!("settings.sync.enter_password"),
         Attention::VaultReplaced | Attention::Removed => t!("settings.sync.rejoin"),
         Attention::MassDelete { .. } => t!("settings.sync.review"),
+        Attention::LoginRefused => t!("settings.sync.sign_in"),
     }
 }
 
-/// 同步文件夹, with its path.
-fn folder_item(path: SharedString) -> SettingItem {
+/// A row titled `title` showing where, as `path`.
+fn path_item(id: &'static str, title: SharedString, path: SharedString) -> SettingItem {
     SettingItem::render(move |_, _, cx| {
         v_flex()
             .w_full()
             .min_w_0()
-            .child(Label::new(t!("settings.sync.folder")).text_sm())
+            .child(Label::new(title.clone()).text_sm())
             .child(
                 div()
-                    .id("sync-folder")
+                    .id(id)
                     .test_support()
                     .aria_label(path.clone())
                     .text_sm()

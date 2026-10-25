@@ -12,13 +12,15 @@ use gpui_kit::component::{
 use gpui_kit::*;
 
 use crate::app::{
-    ChangeSyncPassword, RemoveSyncDevice, ReviewSync, RotateSyncKey, SetUpSync, SetUpSyncIn,
-    SyncNow, TurnOffSync,
+    ChangeSyncPassword, ChangeWebDavLogin, RemoveSyncDevice, ReviewSync, RotateSyncKey, SetUpSync,
+    SetUpSyncIn, SetUpWebDavSync, SyncNow, TurnOffSync,
 };
 use crate::i18n::{t, tn};
+use crate::settings::SyncLocation;
 use crate::shared::confirm_danger;
 use crate::sync::{
-    Attention, JoinReason, PasswordDialog, SyncEvent, open_password_dialog, open_turn_off_dialog,
+    Attention, JoinReason, PasswordDialog, SyncEvent, WebDavDialog, open_password_dialog,
+    open_turn_off_dialog, open_webdav_dialog,
 };
 
 use super::workspace_view::Workspace;
@@ -66,7 +68,10 @@ impl Workspace {
 
     /// Make sync in `folder`, or join the one there.
     fn set_up_sync_in(&mut self, folder: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        let inspect = self.sync.update(cx, |sync, cx| sync.inspect(&folder, cx));
+        let location = SyncLocation::Folder { path: folder };
+        let inspect = self
+            .sync
+            .update(cx, |sync, cx| sync.inspect(location.clone(), None, cx));
         let sync = self.sync.clone();
         cx.spawn_in(window, async move |_, cx| {
             let found = inspect.await;
@@ -74,13 +79,13 @@ impl Workspace {
                 Ok(present) => {
                     let dialog = if present {
                         PasswordDialog::Join {
-                            folder,
+                            location,
                             reason: JoinReason::First,
                         }
                     } else {
-                        PasswordDialog::Create { folder }
+                        PasswordDialog::Create { location }
                     };
-                    open_password_dialog(sync, dialog, window, cx);
+                    open_password_dialog(sync, dialog, None, window, cx);
                 }
                 Err(error) => window.push_notification(
                     Notification::error(error.describe()).title(t!("workspace.sync.folder_failed")),
@@ -90,6 +95,33 @@ impl Workspace {
             .ok();
         })
         .detach();
+    }
+
+    pub(super) fn on_set_up_webdav_sync(
+        &mut self,
+        _: &SetUpWebDavSync,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        open_webdav_dialog(self.sync.clone(), WebDavDialog::SetUp, window, cx);
+    }
+
+    pub(super) fn on_change_webdav_login(
+        &mut self,
+        _: &ChangeWebDavLogin,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_login_dialog(window, cx);
+    }
+
+    /// Sign in to the WebDAV server sync goes through anew.
+    fn open_login_dialog(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let location = self.sync.read(cx).snapshot(cx).location;
+        if let Some(SyncLocation::WebDav { url, username }) = location {
+            let dialog = WebDavDialog::Login { url, username };
+            open_webdav_dialog(self.sync.clone(), dialog, window, cx);
+        }
     }
 
     pub(super) fn on_sync_now(&mut self, _: &SyncNow, _: &mut Window, cx: &mut Context<Self>) {
@@ -104,7 +136,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let snapshot = self.sync.read(cx).snapshot(cx);
-        let (Some(attention), Some(folder)) = (snapshot.attention, snapshot.folder) else {
+        let (Some(attention), Some(location)) = (snapshot.attention, snapshot.location) else {
             return;
         };
         let sync = self.sync.clone();
@@ -115,7 +147,8 @@ impl Workspace {
                 } else {
                     JoinReason::Reset
                 };
-                open_password_dialog(sync, PasswordDialog::Join { folder, reason }, window, cx);
+                let dialog = PasswordDialog::Join { location, reason };
+                open_password_dialog(sync, dialog, None, window, cx);
             }
             Attention::Removed => {
                 window.open_alert_dialog(cx, move |alert, _, _| {
@@ -135,6 +168,7 @@ impl Workspace {
                         })
                 });
             }
+            Attention::LoginRefused => self.open_login_dialog(window, cx),
             Attention::MassDelete { count, of } => confirm_danger(
                 tn!("workspace.sync.mass_delete_title", count as usize),
                 Some(t!("workspace.sync.mass_delete", of = of)),
@@ -153,7 +187,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let dialog = PasswordDialog::Change { rotate: false };
-        open_password_dialog(self.sync.clone(), dialog, window, cx);
+        open_password_dialog(self.sync.clone(), dialog, None, window, cx);
     }
 
     pub(super) fn on_rotate_sync_key(
@@ -163,7 +197,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let dialog = PasswordDialog::Change { rotate: true };
-        open_password_dialog(self.sync.clone(), dialog, window, cx);
+        open_password_dialog(self.sync.clone(), dialog, None, window, cx);
     }
 
     pub(super) fn on_turn_off_sync(
@@ -230,6 +264,7 @@ impl Workspace {
                     Attention::NeedsPassword => t!("workspace.sync.needs_password"),
                     Attention::VaultReplaced => t!("workspace.sync.vault_replaced"),
                     Attention::Removed => t!("workspace.sync.removed_notice"),
+                    Attention::LoginRefused => t!("workspace.sync.login_refused"),
                     Attention::MassDelete { count, .. } => {
                         tn!("workspace.sync.mass_delete_notice", *count as usize)
                     }
@@ -258,24 +293,25 @@ impl Workspace {
                     cx,
                 );
             }
-            SyncEvent::Joined(folder) => {
-                let folder = folder.clone();
+            SyncEvent::LocationSet(location) => {
+                let location = location.clone();
                 self.settings().update(cx, |settings, cx| {
-                    settings.update(|settings| settings.sync.folder = Some(folder), cx)
+                    settings.update(|settings| settings.sync.location = Some(location), cx)
                 });
             }
             SyncEvent::TurnedOff => {
                 self.settings().update(cx, |settings, cx| {
-                    settings.update(|settings| settings.sync.folder = None, cx)
+                    settings.update(|settings| settings.sync.location = None, cx)
                 });
             }
         }
     }
 
-    /// The folder from the settings.
+    /// The location from the settings.
     pub(super) fn follow_sync_settings(&self, cx: &mut App) {
-        let folder = self.settings().read(cx).settings().sync.folder.clone();
-        self.sync.update(cx, |sync, cx| sync.set_folder(folder, cx));
+        let location = self.settings().read(cx).settings().sync.location.clone();
+        self.sync
+            .update(cx, |sync, cx| sync.set_location(location, cx));
     }
 
     /// Part of the quit guard: with something not synced yet, hold the quit

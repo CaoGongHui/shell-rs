@@ -19,6 +19,10 @@ pub enum JobError {
     Keychain(SharedString),
     /// The database refused a round's changes, in its own words.
     NotSaved(SharedString),
+    /// The keychain has no password for the WebDAV server.
+    NoLogin,
+    /// A round or another job runs: one at a time.
+    InProgress,
     /// Every try met a change made meanwhile, the user's or another
     /// device's: the next round will do.
     Busy,
@@ -37,6 +41,8 @@ impl JobError {
             Self::Unavailable => t!("sync.error.unavailable"),
             Self::NoKeyring => t!("sync.error.no_keyring"),
             Self::Keychain(message) | Self::NotSaved(message) => message.clone(),
+            Self::NoLogin => t!("sync.error.no_login"),
+            Self::InProgress => t!("sync.error.in_progress"),
             Self::Busy => t!("sync.error.busy"),
         }
     }

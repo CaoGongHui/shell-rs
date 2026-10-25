@@ -1,6 +1,6 @@
 //! ShellRS's sync core: hosts and the rest kept alike on every device of a
-//! user, through storage that only keeps files (WebDAV, S3, a folder a
-//! cloud drive syncs).
+//! user, through storage that only keeps files (a WebDAV server, a folder a
+//! cloud drive syncs; S3 later).
 //!
 //! Each device writes one file, an encrypted snapshot of every record it
 //! knows, and reads the others'; per record, the latest version wins. The
@@ -52,7 +52,9 @@ pub use round::{
 pub use secret::{EndpointSecret, Secret, endpoint_secret_id};
 pub use snapshot::DeviceInfo;
 pub use state::SyncState;
-pub use store::{Fetched, LocalFolderStore, MemoryStore, PutCondition, RemoteFile, SyncStore};
+pub use store::{
+    Fetched, LocalFolderStore, MemoryStore, PutCondition, RemoteFile, SyncStore, WebDavStore,
+};
 pub use vault::{
     KdfParams, Keyring, VaultStatus, change_password, create_vault, refresh_keyring, rotate_key,
     unlock_vault, vault_status,

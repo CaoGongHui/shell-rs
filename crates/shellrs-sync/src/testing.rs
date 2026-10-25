@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::store::MemoryStore;
+use crate::store::SyncStore;
 use crate::wire::tests::ssh_host;
 use crate::{
     Capabilities, Change, CredentialData, CredentialKind, DeviceId, DeviceInfo, EndpointSecret,
@@ -107,7 +107,7 @@ impl Device {
 
     pub fn pull_with(
         &mut self,
-        store: &MemoryStore,
+        store: &dyn SyncStore,
         opts: RoundOptions,
     ) -> Result<Pulled, SyncError> {
         let local = self.local();
@@ -122,7 +122,7 @@ impl Device {
         )
     }
 
-    pub fn pull(&mut self, store: &MemoryStore) -> Result<Pulled, SyncError> {
+    pub fn pull(&mut self, store: &dyn SyncStore) -> Result<Pulled, SyncError> {
         self.pull_with(store, RoundOptions::default())
     }
 
@@ -147,7 +147,7 @@ impl Device {
         }
     }
 
-    pub fn push(&mut self, store: &MemoryStore) -> Result<Pushed, SyncError> {
+    pub fn push(&mut self, store: &dyn SyncStore) -> Result<Pushed, SyncError> {
         let pushed = push(store, &self.keys, &self.info, &self.state, &mut self.env)?;
         if let Pushed::Uploaded { state } = &pushed {
             self.state = state.clone();
@@ -156,7 +156,7 @@ impl Device {
     }
 
     /// A whole round: pull, apply, push.
-    pub fn sync(&mut self, store: &MemoryStore) -> (RoundReport, Pushed) {
+    pub fn sync(&mut self, store: &dyn SyncStore) -> (RoundReport, Pushed) {
         let pulled = self.pull(store).expect("pull");
         self.apply(&pulled);
         let pushed = self.push(store).expect("push");

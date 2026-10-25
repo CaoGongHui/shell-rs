@@ -10,6 +10,12 @@ sync.error.unavailable:
 sync.error.no_keyring:
   zh-CN: 钥匙串里没有同步的密钥，需要再输入一次同步密码。
   en: The keychain doesn’t have the sync keys. Enter the sync password again.
+sync.error.no_login:
+  zh-CN: 钥匙串里没有 WebDAV 密码。
+  en: The keychain doesn’t have the WebDAV password.
+sync.error.in_progress:
+  zh-CN: 正在同步，等这一轮结束再试。
+  en: Sync is running. Try again once it’s done.
 sync.error.busy:
   zh-CN: 同步期间数据一直在变，下次再同步。
   en: The data kept changing while syncing. It syncs next time.
@@ -61,8 +67,8 @@ sync.error.store.timeout:
   zh-CN: 同步文件夹没有响应。
   en: The sync folder isn’t responding.
 sync.error.store.unauthorized:
-  zh-CN: 没有读写同步文件夹的权限。
-  en: ShellRS isn’t allowed to read and write the sync folder.
+  zh-CN: 同步的位置拒绝了访问：检查用户名和密码，或文件夹的权限。
+  en: The sync location refused access. Check the username and password, or the folder’s permissions.
 sync.error.store.unavailable:
   zh-CN: 同步文件夹暂时用不了：%{reason}
   en: "The sync folder isn’t available for now: %{reason}"
@@ -166,3 +172,47 @@ sync.turn_off.delete_file:
 sync.turn_off.commit:
   zh-CN: 关闭同步
   en: Turn off sync
+
+# The WebDAV dialog.
+sync.webdav.set_up_title:
+  zh-CN: 连接 WebDAV
+  en: Connect WebDAV
+sync.webdav.login_title:
+  zh-CN: 重新登录 WebDAV
+  en: Sign in to WebDAV
+sync.webdav.url:
+  zh-CN: 地址
+  en: Address
+sync.webdav.username:
+  zh-CN: 用户名
+  en: Username
+sync.webdav.password:
+  zh-CN: 密码
+  en: Password
+sync.webdav.app_password:
+  zh-CN: 地址是服务器上放同步数据的文件夹，不存在会自动建。坚果云的密码要用网页「账户信息 › 安全选项」里生成的应用密码，Nextcloud 用「设置 › 安全」里的应用密码。
+  en: The address is the server folder sync goes in; it’s made if missing. For Jianguoyun, use an app password from “Account › Security” on its website; for Nextcloud, one from “Settings › Security”.
+sync.webdav.test:
+  zh-CN: 测试连接
+  en: Test connection
+sync.webdav.next:
+  zh-CN: 继续
+  en: Continue
+sync.webdav.connecting:
+  zh-CN: 正在连接…
+  en: Connecting…
+sync.webdav.test_ok:
+  zh-CN: 连接成功，可以在这里读写。
+  en: Connected. Sync can read and write there.
+sync.webdav.test_failed:
+  zh-CN: 连接失败
+  en: Couldn’t connect
+sync.webdav.url_invalid:
+  zh-CN: 地址要以 https:// 或 http:// 开头，比如 https://dav.jianguoyun.com/dav/ShellRS。
+  en: The address starts with https:// or http://, such as https://dav.jianguoyun.com/dav/ShellRS.
+sync.webdav.username_missing:
+  zh-CN: 输入用户名。
+  en: Enter the username.
+sync.webdav.password_missing:
+  zh-CN: 输入密码。
+  en: Enter the password.

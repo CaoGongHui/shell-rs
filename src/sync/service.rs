@@ -5,24 +5,25 @@
 //! there and its middle, applying the changes, on the UI thread with the
 //! store. One round runs at a time, and none beside a job: asked for
 //! meanwhile, it runs once that ends. A round that would need the user
-//! (a new password, a reset, many deletions) stops and says so; automatic
-//! rounds then wait until the user has dealt with it.
+//! (a new password, a reset, many deletions, a WebDAV login refused) stops
+//! and says so; automatic rounds then wait until the user has dealt with it.
 
 use std::mem;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use gpui_kit::*;
 use shellrs_sync::{
     DeviceId, DeviceInfo, JoinMode, KdfParams, LocalFolderStore, Pulled, Pushed, RemoteDevice,
-    RoundOptions, SyncError, SyncState, SyncStore,
+    RoundOptions, StoreError, SyncError, SyncState, SyncStore, WebDavStore,
 };
 use zeroize::Zeroizing;
 
 use super::{JobError, worker};
 use crate::host::{ApplyError, HostStore};
-use crate::secrets::SecretStore;
+use crate::secrets::{SecretStore, SharedSecretStore};
+use crate::settings::SyncLocation;
 
 /// After an edit, how long the user may go on editing before a round runs.
 pub const EDIT_PAUSE: Duration = Duration::from_secs(5);
@@ -34,15 +35,16 @@ const ATTEMPTS: usize = 3;
 const QUIT_WAIT: Duration = Duration::from_secs(3);
 const QUIT_POLL: Duration = Duration::from_millis(50);
 
-/// Opens the storage in a folder.
-pub type OpenStore = Arc<dyn Fn(&Path) -> Arc<dyn SyncStore> + Send + Sync>;
+/// Opens the storage at a location, a WebDAV server's with its password.
+pub type OpenStore = Arc<
+    dyn Fn(&SyncLocation, Option<&str>) -> Result<Arc<dyn SyncStore>, StoreError> + Send + Sync,
+>;
 
 /// What the service works with. Production has the real ones
 /// ([`SyncServices::system`]); the UI tests share one `MemoryStore`
 /// between workspaces.
 #[derive(Clone)]
 pub struct SyncServices {
-    /// The storage in a folder.
     pub open: OpenStore,
     /// What deriving the key of a new sync password costs.
     pub kdf: KdfParams,
@@ -52,8 +54,17 @@ pub struct SyncServices {
 
 impl SyncServices {
     pub fn system() -> Self {
+        let user_agent = format!("ShellRS/{}", crate::update::build_info::VERSION);
         Self {
-            open: Arc::new(|folder| Arc::new(LocalFolderStore::new(folder))),
+            open: Arc::new(move |location, password| match location {
+                SyncLocation::Folder { path } => Ok(Arc::new(LocalFolderStore::new(path))),
+                SyncLocation::WebDav { url, username } => Ok(Arc::new(WebDavStore::new(
+                    url,
+                    username,
+                    password.unwrap_or_default(),
+                    &user_agent,
+                )?)),
+            }),
             kdf: KdfParams::DEFAULT,
             device: DeviceInfo {
                 name: crate::app::computer_name().unwrap_or_else(|| "ShellRS".into()),
@@ -93,6 +104,9 @@ pub enum Attention {
     /// A round would delete `count` of the `of` records synced: delete, or
     /// leave sync waiting.
     MassDelete { count: u32, of: u32 },
+    /// The WebDAV server refused the username or password, or the keychain
+    /// lost the password: a new login is needed.
+    LoginRefused,
 }
 
 /// Everything the settings page and the dialogs show, as a plain value.
@@ -100,7 +114,7 @@ pub enum Attention {
 pub struct SyncSnapshot {
     /// Whether this copy can sync: it has the services and a keychain.
     pub available: bool,
-    pub folder: Option<PathBuf>,
+    pub location: Option<SyncLocation>,
     pub phase: SyncPhase,
     pub attention: Option<Attention>,
     /// This computer, as the others list it.
@@ -115,9 +129,10 @@ pub struct SyncSnapshot {
 pub enum SyncEvent {
     /// The user has something to settle, newly.
     NeedsAttention(Attention),
-    /// Sync was set up or joined in this folder: keep it in the settings.
-    Joined(PathBuf),
-    /// Sync was turned off: forget the folder.
+    /// Sync goes through this location now (set up, joined, or signed in
+    /// to anew): keep it in the settings.
+    LocationSet(SyncLocation),
+    /// Sync was turned off: forget the location.
     TurnedOff,
 }
 
@@ -134,7 +149,7 @@ enum Ended {
 pub struct SyncService {
     store: Entity<HostStore>,
     services: Option<SyncServices>,
-    folder: Option<PathBuf>,
+    location: Option<SyncLocation>,
     phase: SyncPhase,
     attention: Option<Attention>,
     devices: Vec<RemoteDevice>,
@@ -174,7 +189,7 @@ impl SyncService {
         Self {
             store,
             services: None,
-            folder: None,
+            location: None,
             phase: SyncPhase::Off,
             attention: None,
             devices: Vec::new(),
@@ -200,7 +215,7 @@ impl SyncService {
     pub fn snapshot(&self, cx: &App) -> SyncSnapshot {
         SyncSnapshot {
             available: self.available(cx),
-            folder: self.folder.clone(),
+            location: self.location.clone(),
             phase: self.phase.clone(),
             attention: self.attention,
             device: self
@@ -213,23 +228,27 @@ impl SyncService {
     }
 
     fn available(&self, cx: &App) -> bool {
-        self.services.is_some() && self.store.read(cx).secrets().is_available()
+        self.services.is_some() && self.secrets(cx).is_available()
+    }
+
+    fn secrets(&self, cx: &App) -> SharedSecretStore {
+        self.store.read(cx).secrets()
     }
 
     fn busy(&self) -> bool {
         self.round.is_some() || self.job_running
     }
 
-    /// The folder from the settings: sync is on while there is one.
-    pub fn set_folder(&mut self, folder: Option<PathBuf>, cx: &mut Context<Self>) {
-        if folder == self.folder {
+    /// The location from the settings: sync is on while there is one.
+    pub fn set_location(&mut self, location: Option<SyncLocation>, cx: &mut Context<Self>) {
+        if location == self.location {
             return;
         }
-        self.folder = folder;
+        self.location = location;
         self.devices.clear();
         self.attention = None;
         self.synced_revision = None;
-        self.phase = if self.folder.is_some() {
+        self.phase = if self.location.is_some() {
             SyncPhase::Waiting
         } else {
             SyncPhase::Off
@@ -276,7 +295,7 @@ impl SyncService {
 
     /// A round once the user has stopped editing for a while.
     fn sync_after_pause(&mut self, cx: &mut Context<Self>) {
-        if self.folder.is_none() {
+        if self.location.is_none() {
             return;
         }
         self.pause = Some(cx.spawn(async move |this, cx| {
@@ -290,7 +309,8 @@ impl SyncService {
             self.again = true;
             return;
         }
-        let (Some(services), Some(folder)) = (self.services.clone(), self.folder.clone()) else {
+        let (Some(services), Some(location)) = (self.services.clone(), self.location.clone())
+        else {
             return;
         };
         if !self.available(cx) {
@@ -299,7 +319,6 @@ impl SyncService {
             return;
         }
         self.pause = None;
-        let remote = (services.open)(&folder);
         let opts = RoundOptions {
             allow_mass_delete: mem::take(&mut self.allow_mass_delete),
             join: JoinMode::Merge,
@@ -309,7 +328,7 @@ impl SyncService {
         self.phase = SyncPhase::Syncing;
         cx.notify();
         self.round = Some(cx.spawn(async move |this, cx| {
-            let ended = round(store, remote, services.device, opts, accept_removed, cx).await;
+            let ended = round(store, services, location, opts, accept_removed, cx).await;
             this.update(cx, |this, cx| this.round_ended(ended, cx)).ok();
         }));
     }
@@ -346,7 +365,7 @@ impl SyncService {
     /// that ends with it, or after [`QUIT_WAIT`]. `None` when there is
     /// nothing to wait for.
     pub fn sync_before_quit(&mut self, cx: &mut Context<Self>) -> Option<Task<()>> {
-        if self.folder.is_none() || self.attention.is_some() || !self.available(cx) {
+        if self.location.is_none() || self.attention.is_some() || !self.available(cx) {
             return None;
         }
         let revision = self.store.read(cx).sync_revision();
@@ -369,68 +388,140 @@ impl SyncService {
         }))
     }
 
-    /// Whether sync is set up in `folder` already: to join it, or to make
-    /// it.
+    /// Whether sync is set up at `location` already: to join it, or to
+    /// make it. A WebDAV server's opens with `login`, its password.
     pub fn inspect(
         &mut self,
-        folder: &Path,
+        location: SyncLocation,
+        login: Option<Zeroizing<String>>,
         cx: &mut Context<Self>,
     ) -> Task<Result<bool, JobError>> {
-        self.job(folder, cx, |remote, _, _| worker::inspect(remote))
+        self.job(location, login, cx, |remote, _, _| worker::inspect(remote))
     }
 
-    /// Set sync up in `folder` with a new password.
+    /// 测试连接: write, read and delete a file at `location`, without
+    /// keeping anything. Beside a round as well.
+    pub fn test_connection(
+        &mut self,
+        location: SyncLocation,
+        login: Option<Zeroizing<String>>,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(), JobError>> {
+        let Some(services) = self.services.clone().filter(|_| self.available(cx)) else {
+            return Task::ready(Err(JobError::Unavailable));
+        };
+        let secrets = self.secrets(cx);
+        let probe = format!("probe-{:016x}.tmp", rand::random::<u64>());
+        cx.background_executor().spawn(async move {
+            let remote = worker::open(&services, &location, text(&login), &*secrets)?;
+            worker::probe(&*remote, &probe)
+        })
+    }
+
+    /// Set sync up at `location` with a new sync password. A WebDAV
+    /// server's `login` is kept in the keychain once it is.
     pub fn create(
         &mut self,
-        folder: PathBuf,
+        location: SyncLocation,
+        login: Option<Zeroizing<String>>,
         password: Zeroizing<String>,
         cx: &mut Context<Self>,
     ) -> Task<Result<(), JobError>> {
-        let job = self.job(&folder, cx, move |remote, secrets, services| {
-            worker::create(remote, secrets, &password, services.kdf)
-        });
+        let kept = login.clone();
+        let job = self.job(
+            location.clone(),
+            login,
+            cx,
+            move |remote, secrets, services| {
+                worker::create(remote, secrets, &password, services.kdf)?;
+                worker::keep_login(secrets, text(&kept))
+            },
+        );
         cx.spawn(async move |this, cx| {
             job.await?;
-            this.update(cx, |this, cx| this.joined(folder, true, cx))
+            this.update(cx, |this, cx| this.joined(location, true, cx))
                 .ok();
             Ok(())
         })
     }
 
-    /// Join the sync in `folder` with its password. `fresh` forgets what
-    /// this computer synced before: sync was reset, or this is its first
-    /// time. The password changed elsewhere keeps it.
+    /// Join the sync at `location` with its password. `fresh` forgets
+    /// what this computer synced before: sync was reset, or this is its
+    /// first time. The password changed elsewhere keeps it. A WebDAV
+    /// server's `login`, when given, is kept in the keychain once joined.
     pub fn join(
         &mut self,
-        folder: PathBuf,
+        location: SyncLocation,
+        login: Option<Zeroizing<String>>,
         password: Zeroizing<String>,
         fresh: bool,
         cx: &mut Context<Self>,
     ) -> Task<Result<(), JobError>> {
-        let job = self.job(&folder, cx, move |remote, secrets, _| {
-            worker::join(remote, secrets, &password)
+        let kept = login.clone();
+        let job = self.job(location.clone(), login, cx, move |remote, secrets, _| {
+            worker::join(remote, secrets, &password)?;
+            worker::keep_login(secrets, text(&kept))
         });
         cx.spawn(async move |this, cx| {
             job.await?;
-            this.update(cx, |this, cx| this.joined(folder, fresh, cx))
+            this.update(cx, |this, cx| this.joined(location, fresh, cx))
                 .ok();
             Ok(())
         })
     }
 
-    fn joined(&mut self, folder: PathBuf, fresh: bool, cx: &mut Context<Self>) {
+    fn joined(&mut self, location: SyncLocation, fresh: bool, cx: &mut Context<Self>) {
         if fresh {
             self.store.update(cx, |store, _| store.clear_sync_state());
             self.synced_revision = None;
             self.devices.clear();
         }
         self.attention = None;
-        self.folder = Some(folder.clone());
+        self.location = Some(location.clone());
         if self.phase == SyncPhase::Off {
             self.phase = SyncPhase::Waiting;
         }
-        cx.emit(SyncEvent::Joined(folder));
+        cx.emit(SyncEvent::LocationSet(location));
         self.start_round(cx);
+    }
+
+    /// Sign in to the WebDAV server sync goes through anew: as `username`
+    /// with `login`, which a listing must take before they are kept.
+    pub fn change_login(
+        &mut self,
+        username: String,
+        login: Zeroizing<String>,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(), JobError>> {
+        let Some(SyncLocation::WebDav { url, .. }) = self.location.clone() else {
+            return Task::ready(Err(JobError::Unavailable));
+        };
+        let location = SyncLocation::WebDav { url, username };
+        let kept = login.clone();
+        let job = self.job(
+            location.clone(),
+            Some(login),
+            cx,
+            move |remote, secrets, _| {
+                // The sync there is the one this computer joined: the round
+                // tells, as for any other.
+                if !worker::inspect(remote)? {
+                    return Err(SyncError::VaultMissing.into());
+                }
+                worker::keep_login(secrets, Some(kept.as_str()))
+            },
+        );
+        cx.spawn(async move |this, cx| {
+            job.await?;
+            this.update(cx, |this, cx| {
+                this.attention = None;
+                this.location = Some(location.clone());
+                cx.emit(SyncEvent::LocationSet(location));
+                this.start_round(cx);
+            })
+            .ok();
+            Ok(())
+        })
     }
 
     /// 更换同步密码, and with `rotate` 更换密钥 after it: what the other
@@ -441,10 +532,10 @@ impl SyncService {
         rotate: bool,
         cx: &mut Context<Self>,
     ) -> Task<Result<(), JobError>> {
-        let Some(folder) = self.folder.clone() else {
+        let Some(location) = self.location.clone() else {
             return Task::ready(Err(JobError::Unavailable));
         };
-        let job = self.job(&folder, cx, move |remote, secrets, services| {
+        let job = self.job(location, None, cx, move |remote, secrets, services| {
             worker::new_password(remote, secrets, &password, rotate, services.kdf)
         });
         cx.spawn(async move |this, cx| {
@@ -461,11 +552,11 @@ impl SyncService {
         device: DeviceId,
         cx: &mut Context<Self>,
     ) -> Task<Result<(), JobError>> {
-        let Some(folder) = self.folder.clone() else {
+        let Some(location) = self.location.clone() else {
             return Task::ready(Err(JobError::Unavailable));
         };
         let gone = device.clone();
-        let job = self.job(&folder, cx, move |remote, _, _| {
+        let job = self.job(location, None, cx, move |remote, _, _| {
             worker::remove_device(remote, &device)
         });
         cx.spawn(async move |this, cx| {
@@ -479,28 +570,36 @@ impl SyncService {
         })
     }
 
-    /// 关闭同步: the data here stays as it is; the keys and the state go,
-    /// and with `delete_file` this computer's file in the folder too.
+    /// 关闭同步: the data here stays as it is; the keys, a WebDAV password
+    /// and the state go, and with `delete_file` this computer's file at the
+    /// location too.
     pub fn turn_off(
         &mut self,
         delete_file: bool,
         cx: &mut Context<Self>,
     ) -> Task<Result<(), JobError>> {
-        let Some(folder) = self.folder.clone() else {
+        let Some(location) = self.location.clone() else {
             return Task::ready(Ok(()));
         };
         let state = self.store.read(cx).sync_state();
-        let job = self.job(&folder, cx, move |remote, secrets, _| {
-            if delete_file
-                && let Some(state) = state.and_then(|bytes| SyncState::from_bytes(&bytes).ok())
-            {
-                worker::remove_device(remote, state.device())?;
-            }
-            // Left in the keychain, they open nothing new once the next
-            // set-up writes over them.
-            let _ = worker::forget_keyring(secrets);
-            Ok(())
-        });
+        let job = self.job_with(
+            location,
+            None,
+            delete_file,
+            cx,
+            move |remote, secrets, _| {
+                if let Some(remote) = remote
+                    && let Some(state) = state.and_then(|bytes| SyncState::from_bytes(&bytes).ok())
+                {
+                    worker::remove_device(remote, state.device())?;
+                }
+                // Left in the keychain, they open nothing new once the next
+                // set-up writes over them.
+                let _ = worker::forget_keyring(secrets);
+                let _ = worker::keep_login(secrets, None);
+                Ok(())
+            },
+        );
         cx.spawn(async move |this, cx| {
             job.await?;
             this.update(cx, |this, cx| this.turned_off(cx)).ok();
@@ -510,7 +609,7 @@ impl SyncService {
 
     fn turned_off(&mut self, cx: &mut Context<Self>) {
         self.store.update(cx, |store, _| store.clear_sync_state());
-        self.folder = None;
+        self.location = None;
         self.phase = SyncPhase::Off;
         self.attention = None;
         self.devices.clear();
@@ -520,12 +619,40 @@ impl SyncService {
         cx.notify();
     }
 
-    /// Run `work` on the background executor, alone: no round beside it.
+    /// Run `work` on the background executor with the storage at
+    /// `location` (a WebDAV server's opened with `login`, or the password
+    /// the keychain keeps), alone: no round beside it.
     fn job<R: Send + 'static>(
         &mut self,
-        folder: &Path,
+        location: SyncLocation,
+        login: Option<Zeroizing<String>>,
         cx: &mut Context<Self>,
         work: impl FnOnce(&dyn SyncStore, &dyn SecretStore, &SyncServices) -> Result<R, JobError>
+        + Send
+        + 'static,
+    ) -> Task<Result<R, JobError>> {
+        self.job_with(
+            location,
+            login,
+            true,
+            cx,
+            move |remote, secrets, services| work(remote.expect("opened"), secrets, services),
+        )
+    }
+
+    /// As [`Self::job`], the storage opened only when `open`: turning sync
+    /// off needs none unless it deletes a file.
+    fn job_with<R: Send + 'static>(
+        &mut self,
+        location: SyncLocation,
+        login: Option<Zeroizing<String>>,
+        open: bool,
+        cx: &mut Context<Self>,
+        work: impl FnOnce(
+            Option<&dyn SyncStore>,
+            &dyn SecretStore,
+            &SyncServices,
+        ) -> Result<R, JobError>
         + Send
         + 'static,
     ) -> Task<Result<R, JobError>> {
@@ -533,16 +660,21 @@ impl SyncService {
             return Task::ready(Err(JobError::Unavailable));
         };
         if self.busy() {
-            return Task::ready(Err(JobError::Busy));
+            return Task::ready(Err(JobError::InProgress));
         }
         self.job_running = true;
         cx.notify();
-        let remote = (services.open)(folder);
-        let secrets = self.store.read(cx).secrets();
+        let secrets = self.secrets(cx);
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { work(&*remote, &*secrets, &services) })
+                .spawn(async move {
+                    let remote = match open {
+                        true => Some(worker::open(&services, &location, text(&login), &*secrets)?),
+                        false => None,
+                    };
+                    work(remote.as_deref(), &*secrets, &services)
+                })
                 .await;
             this.update(cx, |this, cx| {
                 this.job_running = false;
@@ -560,18 +692,30 @@ impl SyncService {
 /// One round, tried again while its changes meet newer ones.
 async fn round(
     store: Entity<HostStore>,
-    remote: Arc<dyn SyncStore>,
-    device: DeviceInfo,
+    services: SyncServices,
+    location: SyncLocation,
     opts: RoundOptions,
     accept_removed: bool,
     cx: &mut AsyncApp,
 ) -> Ended {
+    let webdav = matches!(location, SyncLocation::WebDav { .. });
+    let secrets = store.read_with(cx, |store, _| store.secrets());
+    let remote = cx
+        .background_executor()
+        .spawn({
+            let (services, secrets) = (services.clone(), secrets.clone());
+            async move { worker::open(&services, &location, None, &*secrets) }
+        })
+        .await;
+    let remote = match remote {
+        Ok(remote) => remote,
+        Err(error) => return stopped(error, webdav),
+    };
     for _ in 0..ATTEMPTS {
-        let (export, state, secrets, key_dir) = store.read_with(cx, |store, _| {
+        let (export, state, key_dir) = store.read_with(cx, |store, _| {
             (
                 store.sync_export(),
                 store.sync_state(),
-                store.secrets(),
                 store.key_dir().map(Path::to_path_buf),
             )
         });
@@ -587,7 +731,7 @@ async fn round(
                 .await;
         let (pulled, keyring) = match pulled {
             Ok(pulled) => pulled,
-            Err(error) => return stopped(error),
+            Err(error) => return stopped(error, webdav),
         };
         if pulled.report.removed && !accept_removed {
             return Ended::Attention(Attention::Removed);
@@ -607,7 +751,8 @@ async fn round(
         let (written, pushed) = cx
             .background_executor()
             .spawn({
-                let (remote, device) = (remote.clone(), device.clone());
+                let (remote, secrets, device) =
+                    (remote.clone(), secrets.clone(), services.device.clone());
                 async move {
                     worker::push_round(
                         &*remote,
@@ -631,7 +776,7 @@ async fn round(
             }
             Ok(Pushed::Unchanged) => {}
             Ok(Pushed::Conflict) => continue,
-            Err(error) => return stopped(error),
+            Err(error) => return stopped(error, webdav),
         }
         return Ended::Synced {
             revision: export.revision,
@@ -641,8 +786,10 @@ async fn round(
     Ended::Failed(JobError::Busy)
 }
 
-/// A round's error, or what the user is to settle when only they can.
-fn stopped(error: JobError) -> Ended {
+/// A round's error, or what the user is to settle when only they can. A
+/// refusal is a login's to settle on a WebDAV server, a folder's
+/// permissions otherwise.
+fn stopped(error: JobError, webdav: bool) -> Ended {
     match error {
         JobError::NoKeyring | JobError::Sync(SyncError::NeedsPassword) => {
             Ended::Attention(Attention::NeedsPassword)
@@ -651,8 +798,16 @@ fn stopped(error: JobError) -> Ended {
         JobError::Sync(SyncError::MassDelete { count, of }) => {
             Ended::Attention(Attention::MassDelete { count, of })
         }
+        JobError::NoLogin => Ended::Attention(Attention::LoginRefused),
+        JobError::Sync(SyncError::Store(StoreError::Unauthorized)) if webdav => {
+            Ended::Attention(Attention::LoginRefused)
+        }
         error => Ended::Failed(error),
     }
+}
+
+fn text(login: &Option<Zeroizing<String>>) -> Option<&str> {
+    login.as_ref().map(|login| login.as_str())
 }
 
 fn now_ms() -> u64 {

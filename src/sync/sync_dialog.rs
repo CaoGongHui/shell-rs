@@ -5,8 +5,6 @@
 //! input until it is done: closed when it went through, the reason shown
 //! over it when not.
 
-use std::path::PathBuf;
-
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Sizable as _, WindowExt as _,
     button::{Button, ButtonVariants as _},
@@ -23,6 +21,7 @@ use zeroize::Zeroizing;
 
 use super::{JobError, SyncService};
 use crate::i18n::t;
+use crate::settings::SyncLocation;
 use crate::shared::{commit_footer, dismiss_form_error, form_error_notification};
 
 /// The shortest new sync password, in characters: it guards every secret
@@ -32,10 +31,13 @@ pub const MIN_PASSWORD: usize = 12;
 /// What a password dialog does.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PasswordDialog {
-    /// 创建同步, in a folder without one.
-    Create { folder: PathBuf },
-    /// 加入同步, in a folder with one.
-    Join { folder: PathBuf, reason: JoinReason },
+    /// 创建同步, where there is none.
+    Create { location: SyncLocation },
+    /// 加入同步, where there is one.
+    Join {
+        location: SyncLocation,
+        reason: JoinReason,
+    },
     /// 更换同步密码, and with `rotate` the key too.
     Change { rotate: bool },
 }
@@ -123,6 +125,9 @@ impl PasswordDialog {
 pub struct PasswordForm {
     service: Entity<SyncService>,
     dialog: PasswordDialog,
+    /// The WebDAV server's password, from its dialog, for the keychain to
+    /// keep once sync is set up.
+    login: Option<Zeroizing<String>>,
     password: Entity<InputState>,
     /// The new password again.
     repeat: Option<Entity<InputState>>,
@@ -133,6 +138,7 @@ impl PasswordForm {
     fn new(
         service: Entity<SyncService>,
         dialog: PasswordDialog,
+        login: Option<Zeroizing<String>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -144,6 +150,7 @@ impl PasswordForm {
         Self {
             service,
             dialog,
+            login,
             password,
             repeat,
             working: false,
@@ -176,12 +183,16 @@ impl PasswordForm {
             window.push_notification(form_error_notification(error), cx);
             return false;
         }
-        let dialog = self.dialog.clone();
+        let (dialog, login) = (self.dialog.clone(), self.login.clone());
         let job = self.service.update(cx, |service, cx| match dialog {
-            PasswordDialog::Create { folder } => service.create(folder, password, cx),
-            PasswordDialog::Join { folder, reason } => {
-                service.join(folder, password, reason != JoinReason::NewPassword, cx)
-            }
+            PasswordDialog::Create { location } => service.create(location, login, password, cx),
+            PasswordDialog::Join { location, reason } => service.join(
+                location,
+                login,
+                password,
+                reason != JoinReason::NewPassword,
+                cx,
+            ),
             PasswordDialog::Change { rotate } => service.change_password(password, rotate, cx),
         });
         self.working = true;
@@ -316,15 +327,17 @@ impl Render for PasswordForm {
     }
 }
 
-/// Open a password dialog.
+/// Open a password dialog. `login` is the WebDAV server's password when
+/// its dialog came first.
 pub fn open_password_dialog(
     service: Entity<SyncService>,
     dialog: PasswordDialog,
+    login: Option<Zeroizing<String>>,
     window: &mut Window,
     cx: &mut App,
 ) {
     let (title, commit_label) = (dialog.title(), dialog.commit_label());
-    let form = cx.new(|cx| PasswordForm::new(service, dialog, window, cx));
+    let form = cx.new(|cx| PasswordForm::new(service, dialog, login, window, cx));
     window.open_dialog(cx, {
         let form = form.clone();
         move |dialog, _, _| {
