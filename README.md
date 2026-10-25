@@ -215,4 +215,4 @@ If ShellRS is useful to you, consider [sponsoring its development on GitHub](htt
 
 ## License
 
-ShellRS is licensed under the [GNU General Public License v3.0](LICENSE). You may use, modify and redistribute it, commercially or not, but any modified version you distribute must come with its complete source code under the GPL-3.0 as well.
+ShellRS is licensed under the [GNU General Public License v3.0](LICENSE). You may use, modify and redistribute it, commercially or not, but any modified version you distribute must come with its complete source code under the GPL-3.0 as well. The sync core in [`crates/shellrs-sync`](crates/shellrs-sync) is licensed under the [MIT License](crates/shellrs-sync/LICENSE).

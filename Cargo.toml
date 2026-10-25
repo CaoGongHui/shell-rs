@@ -20,6 +20,13 @@ path = "src/main.rs"
 name = "shellrs-cli"
 path = "src/bin/shellrs-cli.rs"
 
+# The sync core is a crate of its own, under MIT, so the mobile apps can
+# link it as well. Cargo commands here build, test and lint it too.
+[workspace]
+members = ["crates/shellrs-sync"]
+default-members = [".", "crates/shellrs-sync"]
+resolver = "3"
+
 [dependencies]
 gpui-kit = { version = "0.6.1", features = [
     # The built-in editor's syntax highlighting, for what servers hold most:
@@ -176,6 +183,9 @@ crypto-bigint = { opt-level = 3 }
 crypto-primes = { opt-level = 3 }
 bcrypt-pbkdf = { opt-level = 3 }
 blowfish = { opt-level = 3 }
+# The sync key's Argon2id, over 64 MiB, takes seconds unoptimized.
+argon2 = { opt-level = 3 }
+blake2 = { opt-level = 3 }
 # The editor parses whole files of up to 5 MB to highlight them.
 tree-sitter = { opt-level = 3 }
 tree-sitter-bash = { opt-level = 3 }

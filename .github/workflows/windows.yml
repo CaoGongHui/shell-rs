@@ -1,7 +1,8 @@
 # The Windows build, which the Macs this is developed on cannot compile:
-# the whole crate through clippy, the external CLI's tests, including the
-# named pipe between two processes, the updater's, and the local SFTP pane's
-# paths (std canonicalizes to `\\?\C:\…` there).
+# the whole workspace through clippy, the external CLI's tests, including
+# the named pipe between two processes, the updater's, the local SFTP pane's
+# paths (std canonicalizes to `\\?\C:\…` there), and the sync crate's, whose
+# folder store replaces files the Windows way.
 #
 # A push runs it only when it touches code that differs on Windows (the
 # files with `cfg(windows)` and friends, and the portable copy's), the
@@ -40,6 +41,7 @@ on:
       - "src/project/project_panel.rs"
       - "src/terminal/zmodem.rs"
       - "src/serial/**"
+      - "crates/shellrs-sync/**"
       - "src/app/shortcuts.rs"
       - "src/workspace/window_state.rs"
       - "src/testing.rs"
@@ -78,3 +80,4 @@ jobs:
       - run: "cargo test --lib serial::"
       - run: "cargo test --lib settings::model"
       - run: cargo test --test cli_bin
+      - run: cargo test --locked -p shellrs-sync

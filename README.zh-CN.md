@@ -213,4 +213,4 @@ cargo test
 
 ## 许可证
 
-ShellRS 以 [GNU 通用公共许可证第 3 版（GPL-3.0）](LICENSE)发布。你可以自由使用、修改和再分发，包括用于商业用途；但分发修改后的版本时，必须同样以 GPL-3.0 公开完整的源代码。
+ShellRS 以 [GNU 通用公共许可证第 3 版（GPL-3.0）](LICENSE)发布。你可以自由使用、修改和再分发，包括用于商业用途；但分发修改后的版本时，必须同样以 GPL-3.0 公开完整的源代码。同步核心 [`crates/shellrs-sync`](crates/shellrs-sync) 以 [MIT 许可证](crates/shellrs-sync/LICENSE)发布。
