@@ -7840,6 +7840,7 @@ dependencies = [
  "serde_yaml_ng",
  "serial2",
  "sha2 0.10.9",
+ "shellrs-sync",
  "sys-locale",
  "tempfile",
  "tokio",

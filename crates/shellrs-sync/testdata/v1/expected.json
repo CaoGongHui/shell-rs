@@ -152,18 +152,11 @@
     ],
     "data": {
       "name": "console",
-      "address": "/dev/ttyUSB0",
+      "address": "10.0.0.3",
       "port": 22,
       "group": null,
       "sort_order": 0,
-      "protocol": "serial",
-      "serial": {
-        "baud": 115200,
-        "data_bits": 8,
-        "parity": "none",
-        "stop_bits": 1,
-        "flow": "rts-cts"
-      },
+      "protocol": "ssh",
       "auth": "password",
       "username": "root",
       "credential": null,

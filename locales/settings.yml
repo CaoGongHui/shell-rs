@@ -52,6 +52,9 @@ settings.category.shortcuts:
 settings.category.external_cli:
   zh-CN: 外部 CLI
   en: External CLI
+settings.category.sync:
+  zh-CN: 同步
+  en: Sync
 settings.category.application:
   zh-CN: 应用
   en: General
@@ -561,3 +564,115 @@ settings.theme.app_follows:
 settings.theme.app_follows_description:
   zh-CN: 关闭时界面用中性的黑白灰，只有终端按所选主题配色。
   en: When off, the interface stays neutral black, white and gray, and only terminals take the theme’s colors.
+
+# 同步.
+settings.sync.folder_title:
+  zh-CN: 同步文件夹
+  en: Sync folder
+settings.sync.description:
+  zh-CN: 经一个文件夹在几台电脑之间同步主机、分组、凭据、端口转发、命令片段和书签，连同密码、口令和私钥。可以选 iCloud 云盘、Dropbox、OneDrive 同步的文件夹。数据在这台电脑上加密，文件夹里只有密文。
+  en: Sync hosts, groups, credentials, port forwards, snippets and bookmarks, with their passwords, passphrases and private keys, between your computers through a folder, such as one iCloud Drive, Dropbox or OneDrive syncs. They’re encrypted on this computer; the folder only ever holds ciphertext.
+settings.sync.set_up:
+  zh-CN: 开启同步
+  en: Turn on sync
+settings.sync.set_up_description:
+  zh-CN: 选好文件夹后，那里没有同步就创建，已有就加入。
+  en: Pick a folder. Sync is set up there if it isn’t yet, or joined if it is.
+settings.sync.set_up_button:
+  zh-CN: 开启同步…
+  en: Turn on sync…
+settings.sync.keywords:
+  zh-CN: 同步,云,网盘,iCloud,Dropbox,OneDrive,设备,同步密码
+  en: sync,cloud,iCloud,Dropbox,OneDrive,device,sync password
+settings.sync.this_computer:
+  zh-CN: 这台电脑
+  en: This computer
+settings.sync.this_computer_description:
+  zh-CN: 其他设备上显示为“%{name}”。
+  en: Other devices list it as “%{name}”.
+settings.sync.status:
+  zh-CN: 状态
+  en: Status
+settings.sync.waiting:
+  zh-CN: 尚未同步
+  en: Not synced yet
+settings.sync.syncing:
+  zh-CN: 正在同步…
+  en: Syncing…
+settings.sync.synced:
+  zh-CN: 上次同步：%{time}
+  en: "Last synced %{time}"
+settings.sync.failed:
+  zh-CN: 未能同步：%{reason}
+  en: "Couldn’t sync. %{reason}"
+settings.sync.sync_now:
+  zh-CN: 立即同步
+  en: Sync now
+settings.sync.attention.needs_password:
+  zh-CN: 同步密码已在别的设备上更改，输入新密码后继续同步。
+  en: The sync password was changed on another device. Enter the new one to keep syncing.
+settings.sync.attention.vault_replaced:
+  zh-CN: 同步已在别的设备上重置，重新加入后继续同步。
+  en: Sync was reset on another device. Rejoin it to keep syncing.
+settings.sync.attention.removed:
+  zh-CN: 这台电脑已在别的设备上被移出同步。
+  en: This computer was removed from sync on another device.
+settings.sync.attention.mass_delete.one:
+  en: This sync would delete %{count} record. It waits for you to agree.
+settings.sync.attention.mass_delete.other:
+  zh-CN: 这次同步会删除 %{count} 条记录，等你确认。
+  en: This sync would delete %{count} records. It waits for you to agree.
+settings.sync.enter_password:
+  zh-CN: 输入密码…
+  en: Enter password…
+settings.sync.rejoin:
+  zh-CN: 重新加入…
+  en: Rejoin…
+settings.sync.review:
+  zh-CN: 查看…
+  en: Review…
+settings.sync.folder:
+  zh-CN: 同步文件夹
+  en: Sync folder
+settings.sync.turn_off:
+  zh-CN: 关闭同步
+  en: Turn off sync
+settings.sync.turn_off_description:
+  zh-CN: 这台电脑上的数据保留不动，之后的改动不再同步。
+  en: What’s on this computer stays as it is; later changes aren’t synced.
+settings.sync.turn_off_button:
+  zh-CN: 关闭同步…
+  en: Turn off sync…
+settings.sync.devices:
+  zh-CN: 其他设备
+  en: Other devices
+settings.sync.devices_empty:
+  zh-CN: 还没有。在另一台电脑上开启同步，选同一个文件夹。
+  en: None yet. Turn on sync on another computer and pick the same folder.
+settings.sync.devices_description:
+  zh-CN: 移除丢失的设备后，再更换同步密码和密钥。
+  en: After removing a lost device, change the sync password and key.
+settings.sync.device_detail:
+  zh-CN: "%{platform} · ShellRS %{version} · 上次同步 %{time}"
+  en: "%{platform} · ShellRS %{version} · last synced %{time}"
+settings.sync.remove:
+  zh-CN: 移除…
+  en: Remove…
+settings.sync.password:
+  zh-CN: 同步密码
+  en: Sync password
+settings.sync.change_password:
+  zh-CN: 更换同步密码
+  en: Change sync password
+settings.sync.change_password_description:
+  zh-CN: 别的设备下次同步时要输入新密码。
+  en: Your other devices ask for the new password when they next sync.
+settings.sync.rotate:
+  zh-CN: 更换同步密码和密钥
+  en: Change sync password and key
+settings.sync.rotate_description:
+  zh-CN: 移除丢失的设备后用：它即使知道旧密码，也读不了之后的数据。
+  en: For after removing a lost device. Even with the old password, it can’t read anything newer.
+settings.sync.change:
+  zh-CN: 更换…
+  en: Change…

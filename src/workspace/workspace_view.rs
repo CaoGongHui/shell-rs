@@ -68,6 +68,7 @@ use crate::sftp::{
     SystemLocalDirectoryProvider, TransferDirection,
 };
 use crate::shared::{commit_footer, confirm_danger, open_rename_tab_dialog};
+use crate::sync::{SyncEvent, SyncService, SyncServices};
 use crate::terminal::{
     DEFAULT_FONT_SIZE, HostTerminalTransports, LocalPtyTransportProvider, LocalTerminalId,
     LocalTerminalPanel, LocalTerminalPanelEvent, RemoteTerminalId, SavedName, SearchDirection,
@@ -196,6 +197,9 @@ pub struct Workspace {
     /// in UI tests, so it never reaches the network unless a test hands it
     /// fakes.
     pub(super) updater: Entity<Updater>,
+    /// 同步. Without services in UI tests, so it never reaches a folder
+    /// unless a test hands it a store.
+    pub(super) sync: Entity<SyncService>,
     /// 匿名使用统计. Production only, like the CLI server: UI tests hand in
     /// one that only records.
     pub(super) analytics: Option<super::analytics::Reporting>,
@@ -309,6 +313,8 @@ impl Workspace {
             updater.set_services(UpdateServices::system(bundle), cx);
             updater.start(cx);
         });
+        this.sync
+            .update(cx, |sync, cx| sync.set_services(SyncServices::system(), cx));
         if let Some(services) = AnalyticsServices::system() {
             let enabled = this.settings.read(cx).settings().analytics.enabled;
             this.set_analytics(Analytics::start(services, enabled), window, cx);
@@ -370,6 +376,12 @@ impl Workspace {
             updater.set_automatic(update_settings.automatic, cx);
             updater.set_channel(update_settings.channel, cx);
             updater
+        });
+        let sync_folder = settings.read(cx).settings().sync.folder.clone();
+        let sync = cx.new(|cx| {
+            let mut sync = SyncService::new(store.clone(), cx);
+            sync.set_folder(sync_folder, cx);
+            sync
         });
         let forward_panel = cx.new(|cx| {
             ForwardPanel::new(
@@ -436,6 +448,7 @@ impl Workspace {
                 }
                 this.sync_cli_server(cx);
                 this.sync_updater(cx);
+                this.follow_sync_settings(cx);
                 this.sync_analytics(window, cx);
                 if !settings
                     .read(cx)
@@ -455,6 +468,15 @@ impl Workspace {
                     this.on_updater_event(event, window, cx)
                 },
             ),
+            cx.subscribe_in(&sync, window, |this, _, event: &SyncEvent, window, cx| {
+                this.on_sync_event(event, window, cx)
+            }),
+            // Coming back to ShellRS, the other computers' edits come too.
+            cx.observe_window_activation(window, |this, window, cx| {
+                if window.is_window_active() {
+                    this.sync.update(cx, |sync, cx| sync.window_activated(cx));
+                }
+            }),
             cx.subscribe_in(
                 &settings,
                 window,
@@ -619,6 +641,7 @@ impl Workspace {
             cli_integration: cx.new(|_| CliIntegration::new(None)),
             cli_server: None,
             updater,
+            sync,
             analytics: None,
             local_terminal_provider,
             host_terminals,
@@ -809,6 +832,10 @@ impl Workspace {
 
     pub fn updater(&self) -> &Entity<Updater> {
         &self.updater
+    }
+
+    pub fn sync(&self) -> &Entity<SyncService> {
+        &self.sync
     }
 
     /// Give the focus to the center: the tab shown last, or the start page
@@ -1353,7 +1380,8 @@ impl Workspace {
         // Something may have been installed or removed since last time.
         integration.update(cx, |integration, cx| integration.refresh(cx));
         let updater = self.updater.clone();
-        let panel = cx.new(|cx| SettingsPanel::new(store, integration, updater, window, cx));
+        let sync = self.sync.clone();
+        let panel = cx.new(|cx| SettingsPanel::new(store, integration, updater, sync, window, cx));
         let subscription = cx.subscribe_in(
             &panel,
             window,
@@ -2911,6 +2939,14 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_open_download_page))
             .on_action(cx.listener(Self::on_open_changelog))
             .on_action(cx.listener(Self::on_open_website))
+            .on_action(cx.listener(Self::on_set_up_sync))
+            .on_action(cx.listener(Self::on_set_up_sync_in))
+            .on_action(cx.listener(Self::on_sync_now))
+            .on_action(cx.listener(Self::on_review_sync))
+            .on_action(cx.listener(Self::on_change_sync_password))
+            .on_action(cx.listener(Self::on_rotate_sync_key))
+            .on_action(cx.listener(Self::on_turn_off_sync))
+            .on_action(cx.listener(Self::on_remove_sync_device))
             .on_action(cx.listener(Self::on_copy_agent_skill))
             .on_action(cx.listener(Self::on_close_settings))
             .on_action(cx.listener(Self::on_close_active_tab))

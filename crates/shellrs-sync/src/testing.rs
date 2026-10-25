@@ -101,6 +101,7 @@ impl Device {
                 .collect(),
             secrets_read,
             unreadable: self.unreadable.clone(),
+            unchanged: Vec::new(),
         }
     }
 

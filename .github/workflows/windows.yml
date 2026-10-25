@@ -20,6 +20,7 @@ on:
       - "src/update/**"
       - "src/app/mod.rs"
       - "src/app/paths.rs"
+      - "src/app/computer.rs"
       - "src/host/private_key.rs"
       - "src/app/window_hiding.rs"
       - "src/app/system_hotkey.rs"

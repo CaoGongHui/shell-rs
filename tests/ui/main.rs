@@ -32,6 +32,7 @@ mod settings;
 mod sftp;
 mod shortcuts;
 mod snippets;
+mod sync;
 mod telnet;
 mod terminal;
 mod terminal_groups;

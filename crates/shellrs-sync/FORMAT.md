@@ -117,7 +117,7 @@ References are other records' ids. `null` means none.
 | --- | --- |
 | `group` | `name` (not empty), `parent` (group or null), `sort_order` |
 | `credential` | `name` (not empty), `kind` (`password`, `key`, `agent`), `username`, `sort_order` |
-| `host` | `name`, `address` (not empty), `port` (1–65535), `group` (or null), `sort_order`, `protocol` (`ssh`, `telnet`, `serial`), `telnet` {`user_prompt`, `pass_prompt`} when Telnet, `serial` {`baud`, `data_bits` 5–8, `parity` (`none`, `odd`, `even`), `stop_bits` 1–2, `flow` (`none`, `rts-cts`, `xon-xoff`)} when serial, `auth` (`password`, `no-password`, `credential`), `username` (null exactly when `auth` is `credential`), `credential` (set exactly then), `route` (`direct`, `jump`, `proxy`), `jumps` [host or null] when `jump`, `proxy` {`kind` (`http`, `socks5`), `host`, `port`, `username`} when `proxy`, `notes` |
+| `host` | `name`, `address` (not empty), `port` (1–65535), `group` (or null), `sort_order`, `protocol` (`ssh`, `telnet`), `telnet` {`user_prompt`, `pass_prompt`} when Telnet, `auth` (`password`, `no-password`, `credential`), `username` (null exactly when `auth` is `credential`), `credential` (set exactly then), `route` (`direct`, `jump`, `proxy`), `jumps` [host or null] when `jump`, `proxy` {`kind` (`http`, `socks5`), `host`, `port`, `username`} when `proxy`, `notes` |
 | `bookmark` | `host`, `path`, `sort_order`; its id is the first 16 bytes, hex, of SHA-256(`host` ‖ 0x00 ‖ `path`) |
 | `forward` | `host`, `name`, `kind` (`local`, `remote`, `dynamic`), `bind_host`, `bind_port`, `target_host` and `target_port` (null exactly when dynamic), `sort_order` |
 | `snippet_category` | `name` (not empty) |
@@ -135,10 +135,10 @@ sync; there is no setting to keep them out.
 Every field listed is written, `null` where it has none: a record missing one
 is damaged, kept and passed on but not used.
 
-Not synced, each device's own: a host's detected system, last connection and
-sidebar tool; a group's expanded state; a key credential's file path; a
-forward's automatic start; local SFTP bookmarks; 项目 (local terminals);
-the app's settings; known hosts.
+Not synced, each device's own: serial hosts (their port is this computer's);
+a host's detected system, last connection and sidebar tool; a group's expanded
+state; a key credential's file path; a forward's automatic start; local SFTP
+bookmarks; 项目 (local terminals); the app's settings; known hosts.
 
 ### After a merge
 

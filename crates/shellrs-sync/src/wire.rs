@@ -81,7 +81,6 @@ pub struct HostData {
 pub enum Protocol {
     Ssh,
     Telnet(TelnetData),
-    Serial(SerialData),
 }
 
 /// The prompts Telnet's automatic login waits for; `None` for the usual.
@@ -89,30 +88,6 @@ pub enum Protocol {
 pub struct TelnetData {
     pub user_prompt: Option<String>,
     pub pass_prompt: Option<String>,
-}
-
-/// A serial line. The device path is in the host's `address`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SerialData {
-    pub baud: u32,
-    pub data_bits: u8,
-    pub parity: Parity,
-    pub stop_bits: u8,
-    pub flow: FlowControl,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Parity {
-    None,
-    Odd,
-    Even,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FlowControl {
-    None,
-    RtsCts,
-    XonXoff,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -206,14 +181,10 @@ pub enum SnippetScope {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Capabilities {
     pub telnet: bool,
-    pub serial: bool,
 }
 
 impl Capabilities {
-    pub const ALL: Self = Self {
-        telnet: true,
-        serial: true,
-    };
+    pub const ALL: Self = Self { telnet: true };
 }
 
 /// The id of the bookmark of `path` on `host`.
@@ -240,8 +211,6 @@ macro_rules! spelled {
 }
 
 spelled!(CredentialKind { Password = "password", Key = "key", Agent = "agent" });
-spelled!(Parity { None = "none", Odd = "odd", Even = "even" });
-spelled!(FlowControl { None = "none", RtsCts = "rts-cts", XonXoff = "xon-xoff" });
 spelled!(Auth { Password = "password", NoPassword = "no-password", Credential = "credential" });
 spelled!(ProxyKind { Http = "http", Socks5 = "socks5" });
 spelled!(ForwardKind { Local = "local", Remote = "remote", Dynamic = "dynamic" });
@@ -271,10 +240,6 @@ impl RecordData {
                 protocol: Protocol::Telnet(_),
                 ..
             }) if !caps.telnet => Err("Telnet hosts are not supported here".into()),
-            Self::Host(HostData {
-                protocol: Protocol::Serial(_),
-                ..
-            }) if !caps.serial => Err("serial hosts are not supported here".into()),
             _ => Ok(()),
         }
     }
@@ -355,21 +320,6 @@ fn parse_host(key: &RecordKey, r: &Reader) -> Result<HostData, String> {
             Protocol::Telnet(TelnetData {
                 user_prompt: telnet.prompt("user_prompt")?,
                 pass_prompt: telnet.prompt("pass_prompt")?,
-            })
-        }
-        "serial" => {
-            let serial = r.object("serial")?;
-            let serial = Reader(&serial);
-            let baud = serial.number("baud", 1, u64::from(u32::MAX))?;
-            Protocol::Serial(SerialData {
-                baud: u32::try_from(baud).map_err(|_| "baud")?,
-                data_bits: serial.number("data_bits", 5, 8)? as u8,
-                parity: serial.spelled("parity", Parity::parse)?,
-                stop_bits: match serial.number("stop_bits", 1, 2)? {
-                    1 => 1,
-                    _ => 2,
-                },
-                flow: serial.spelled("flow", FlowControl::parse)?,
             })
         }
         other => return Err(format!("unknown protocol {other}")),
@@ -490,7 +440,6 @@ fn known_fields(kind: &Kind) -> &'static [&'static str] {
             "sort_order",
             "protocol",
             "telnet",
-            "serial",
             "auth",
             "username",
             "credential",
@@ -553,19 +502,6 @@ fn fields(data: &RecordData) -> Vec<(&'static str, Value)> {
                     out.push((
                         "telnet",
                         json!({"user_prompt": telnet.user_prompt, "pass_prompt": telnet.pass_prompt}),
-                    ));
-                }
-                Protocol::Serial(serial) => {
-                    out.push(("protocol", json!("serial")));
-                    out.push((
-                        "serial",
-                        json!({
-                            "baud": serial.baud,
-                            "data_bits": serial.data_bits,
-                            "parity": serial.parity.as_str(),
-                            "stop_bits": serial.stop_bits,
-                            "flow": serial.flow.as_str(),
-                        }),
                     ));
                 }
             }
@@ -796,14 +732,7 @@ pub(crate) mod tests {
             (
                 key(Kind::Host, "h3"),
                 RecordData::Host(HostData {
-                    address: "/dev/ttyUSB0".into(),
-                    protocol: Protocol::Serial(SerialData {
-                        baud: 115_200,
-                        data_bits: 8,
-                        parity: Parity::None,
-                        stop_bits: 1,
-                        flow: FlowControl::RtsCts,
-                    }),
+                    address: "10.0.0.3".into(),
                     route: Route::Proxy(ProxyData {
                         kind: ProxyKind::Socks5,
                         host: "proxy".into(),
@@ -1022,17 +951,13 @@ pub(crate) mod tests {
 
     #[test]
     fn hosts_some_devices_cannot_use_do_not_fit_them() {
-        let serial = samples()
+        let telnet = samples()
             .into_iter()
-            .find(|(key, _)| key.id == "h3")
+            .find(|(key, _)| key.id == "h2")
             .unwrap()
             .1;
-        assert!(serial.fits(&Capabilities::ALL).is_ok());
-        let caps = Capabilities {
-            telnet: true,
-            serial: false,
-        };
-        assert!(serial.fits(&caps).is_err());
+        assert!(telnet.fits(&Capabilities::ALL).is_ok());
+        assert!(telnet.fits(&Capabilities { telnet: false }).is_err());
     }
 
     #[test]

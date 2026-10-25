@@ -87,6 +87,9 @@ url = "2"
 percent-encoding = "2"
 zeroize = "1"
 keyring = "4"
+# Sync between devices; its own crate, under MIT, so the mobile apps can
+# link it too.
+shellrs-sync = { path = "crates/shellrs-sync" }
 trash = "5"
 # Online update: the signed manifest, its versions and the downloads. The
 # default features keep rustls with the OS trust store and the system proxy

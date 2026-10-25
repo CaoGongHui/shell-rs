@@ -13,7 +13,7 @@ use crate::testing::{Device, credential, group, host};
 use crate::vault::tests::vault;
 use crate::{
     Auth, Capabilities, Change, DeviceId, FixedEnv, HostData, JoinMode, Keyring, Kind, Protocol,
-    Pushed, RecordData, RecordKey, RoundOptions, SerialData, StoreError, SyncError, Warning,
+    Pushed, RecordData, RecordKey, RoundOptions, StoreError, SyncError, TelnetData, Warning,
     envelope, layout,
 };
 
@@ -519,37 +519,28 @@ fn a_reset_vault_stops_the_round() {
     assert_eq!(a.pull(&store).unwrap_err(), SyncError::VaultReplaced);
 }
 
-/// A phone without serial ports never gets the serial host, keeps it for
-/// the others, and still syncs the rest.
+/// A device without Telnet never gets the Telnet host, keeps it for the
+/// others, and still syncs the rest.
 #[test]
 fn a_device_that_cannot_store_a_record_keeps_it_for_the_others() {
     let (store, _, mut a, mut b) = setup();
-    let serial = RecordData::Host(HostData {
-        address: "/dev/ttyUSB0".into(),
-        protocol: Protocol::Serial(SerialData {
-            baud: 115_200,
-            data_bits: 8,
-            parity: crate::Parity::None,
-            stop_bits: 1,
-            flow: crate::FlowControl::None,
-        }),
-        ..crate::wire::tests::ssh_host("console")
+    let telnet = RecordData::Host(HostData {
+        port: 23,
+        protocol: Protocol::Telnet(TelnetData::default()),
+        ..crate::wire::tests::ssh_host("switch")
     });
-    a.put("s1", serial.clone());
+    a.put("t1", telnet.clone());
     a.put("h1", host("web", None));
     a.sync(&store);
-    b.caps = Capabilities {
-        telnet: true,
-        serial: false,
-    };
+    b.caps = Capabilities { telnet: false };
     b.sync(&store);
-    assert_eq!(b.get(Kind::Host, "s1"), None);
+    assert_eq!(b.get(Kind::Host, "t1"), None);
     assert_eq!(name(&b, "h1"), "web");
     b.wait(1000);
     b.put("h1", host("web-01", None));
     b.sync(&store);
     a.sync(&store);
-    assert_eq!(a.get(Kind::Host, "s1"), Some(&serial));
+    assert_eq!(a.get(Kind::Host, "t1"), Some(&telnet));
     assert_eq!(name(&a, "h1"), "web-01");
 }
 

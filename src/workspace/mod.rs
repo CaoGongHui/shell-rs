@@ -20,6 +20,7 @@ mod recent_hosts;
 mod sidebar;
 mod snippets;
 mod status_bar;
+mod sync;
 mod tabs;
 mod terminal_groups;
 mod title_bar;

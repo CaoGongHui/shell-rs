@@ -47,7 +47,7 @@ pub use error::{StoreError, SyncError, Warning};
 pub use id::{DeviceId, Kind, RecordKey};
 pub use round::{
     Change, JoinMode, LocalRecord, LocalSnapshot, Pulled, Pushed, RemoteDevice, RoundOptions,
-    RoundReport, pull, push,
+    RoundReport, Unchanged, pull, push,
 };
 pub use secret::{EndpointSecret, Secret, endpoint_secret_id};
 pub use snapshot::DeviceInfo;
@@ -58,10 +58,9 @@ pub use vault::{
     unlock_vault, vault_status,
 };
 pub use wire::{
-    Auth, BookmarkData, Capabilities, CredentialData, CredentialKind, Endpoint, FlowControl,
-    ForwardData, ForwardKind, GroupData, HostData, Parity, Protocol, ProxyData, ProxyKind,
-    RecordData, Route, SerialData, SnippetCategoryData, SnippetData, SnippetScope, TelnetData,
-    bookmark_id,
+    Auth, BookmarkData, Capabilities, CredentialData, CredentialKind, Endpoint, ForwardData,
+    ForwardKind, GroupData, HostData, Protocol, ProxyData, ProxyKind, RecordData, Route,
+    SnippetCategoryData, SnippetData, SnippetScope, TelnetData, bookmark_id,
 };
 
 /// The snapshot format this version writes and reads.

@@ -3,6 +3,7 @@ use gpui_kit::{SharedString, WindowAppearance};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use crate::app::{ShortcutOverrides, ToolKind};
 use crate::explorer::{FileIconStyle, FileSizeFormat, ShowHiddenFiles};
@@ -42,6 +43,8 @@ pub struct AppSettings {
     /// 终端 → 本地终端.
     pub local_terminal: LocalTerminalSettings,
     pub external_cli: ExternalCliSettings,
+    /// 同步.
+    pub sync: SyncSettings,
     pub update: UpdateSettings,
     /// 关于 → 隐私.
     pub analytics: AnalyticsSettings,
@@ -374,6 +377,15 @@ pub struct ExternalCliSettings {
     /// Whether the `shellrs` command may use the saved hosts. Off until
     /// the user turns it on.
     pub enabled: bool,
+}
+
+/// 同步: where it goes through. Its keys are in the keychain and its
+/// state in the database.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SyncSettings {
+    /// The folder, while sync is on.
+    pub folder: Option<PathBuf>,
 }
 
 /// 关于 → 应用更新.

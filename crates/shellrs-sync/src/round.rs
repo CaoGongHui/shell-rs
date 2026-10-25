@@ -29,9 +29,18 @@
 //! an edit.
 //!
 //! Secrets come and go the same way, with one more rule: what the app could
-//! not read this round (its keychain locked, a key file gone) it says it
-//! could not, and that stays as it was. Missing, it would count as deleted,
-//! and the deletion would reach every device.
+//! not read this round (its keychain locked, a key file gone) or could not
+//! write when a round brought it, it says it could not, and that stays as
+//! it was. Missing, it would count as deleted, and the deletion would reach
+//! every device. A record it names is given again, so a key file gone comes
+//! back and a secret not written is written; the secrets of a keychain that
+//! did not answer are not, as it would not take them.
+//!
+//! Nor does the app have to read what it knows has not changed: a secret
+//! whose edit time is the one the last round saw (`SyncState::edit_seen`)
+//! it may name as unchanged instead, and the round takes the copy the state
+//! keeps. So a keychain is read for what the user just changed only, not
+//! for every password at every round.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -78,9 +87,22 @@ pub struct LocalSnapshot {
     /// (the keychain locked), they stay as they were: none counts as
     /// deleted, none is given.
     pub secrets_read: bool,
-    /// Records the app could not read this round, such as a key file gone
-    /// from its folder: they stay as they were.
+    /// Records the app does not hold as it should, such as a key file gone
+    /// from its folder or a secret it could not write: they stay as they
+    /// were, and are given again (or their deletion is).
     pub unreadable: Vec<RecordKey>,
+    /// Records the app did not read, as they have not changed since the
+    /// last round saw them: the copy in the state stands in for each. One
+    /// it cannot (another edit time, its secrets lost) is as if unreadable.
+    pub unchanged: Vec<Unchanged>,
+}
+
+/// A record the app vouches for without reading it: still as it was when
+/// the last round saw it with this edit time.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unchanged {
+    pub key: RecordKey,
+    pub edited_ms: u64,
 }
 
 /// What a device that has never synced does with its records.
@@ -214,10 +236,35 @@ pub fn pull(
 
     // What the app could not read stays as it was: its secrets when it did
     // not read them, and whatever it lists as unreadable.
-    let untouched = |key: &RecordKey| {
-        (key.kind.is_secret() && !local.secrets_read) || local.unreadable.contains(key)
-    };
-    let local = index(local, &untouched, &mut report.warnings);
+    let withheld = |key: &RecordKey| key.kind.is_secret() && !local.secrets_read;
+    // What the app vouches for unread comes from the state, as it last was.
+    let mut restored = Vec::new();
+    let mut lost = BTreeSet::new();
+    for unchanged in &local.unchanged {
+        let kept = (edited_seen.get(&unchanged.key) == Some(&unchanged.edited_ms))
+            .then(|| known.get(&unchanged.key))
+            .flatten()
+            .and_then(RawRecord::live)
+            .and_then(|fields| wire::parse(&unchanged.key, fields).ok());
+        match kept {
+            Some(data) => restored.push(LocalRecord {
+                id: unchanged.key.id.clone(),
+                data,
+                edited_ms: unchanged.edited_ms,
+            }),
+            None => {
+                lost.insert(unchanged.key.clone());
+            }
+        }
+    }
+    let untouched =
+        |key: &RecordKey| withheld(key) || local.unreadable.contains(key) || lost.contains(key);
+    let unreadable: BTreeSet<RecordKey> = local.unreadable.iter().chain(&lost).cloned().collect();
+    let local = index(
+        local.records.iter().chain(&restored),
+        &untouched,
+        &mut report.warnings,
+    );
 
     // The app's own changes come first, against what it was last given and
     // with the clock as it was then: an edit is dated when it was made.
@@ -367,20 +414,32 @@ pub fn pull(
 
     report.repairs = fixup::repair(&mut set, &mut clock, &me);
 
-    // What the app is to change: whatever it should hold and does not.
+    // What the app is to change: whatever it should hold and does not,
+    // what it could not read among it.
     let (visible, parked) = deliverable(&set, caps);
     report.warnings.extend(parked);
     let mut changes = Vec::new();
     for (key, view) in &visible {
-        if !untouched(key) && local.get(key).is_none_or(|record| record.data != *view) {
+        if !withheld(key) && local.get(key).is_none_or(|record| record.data != *view) {
             changes.push(Change::Upsert {
                 id: key.id.clone(),
                 data: view.clone(),
             });
         }
     }
+    let gone = |key: &RecordKey| !visible.contains_key(key);
     for key in local.keys() {
-        if !visible.contains_key(key) && set.get(key).is_none_or(RawRecord::is_deleted) {
+        if gone(key) && set.get(key).is_none_or(RawRecord::is_deleted) {
+            changes.push(Change::Delete {
+                kind: key.kind.clone(),
+                id: key.id.clone(),
+            });
+        }
+    }
+    // One it could not read that was never synced is not the round's to
+    // delete.
+    for key in &unreadable {
+        if !withheld(key) && gone(key) && set.get(key).is_some_and(RawRecord::is_deleted) {
             changes.push(Change::Delete {
                 kind: key.kind.clone(),
                 id: key.id.clone(),
@@ -531,12 +590,12 @@ pub(crate) fn records_digest(info: &DeviceInfo, records: &RecordSet) -> String {
 /// The app's records by key, those `untouched` this round left out; one
 /// that could not be stored as it is is parked.
 fn index<'a>(
-    local: &'a LocalSnapshot,
+    records: impl Iterator<Item = &'a LocalRecord>,
     untouched: &dyn Fn(&RecordKey) -> bool,
     warnings: &mut Vec<Warning>,
 ) -> BTreeMap<RecordKey, &'a LocalRecord> {
     let mut out = BTreeMap::new();
-    for record in &local.records {
+    for record in records {
         let key = RecordKey::new(record.data.kind(), record.id.clone());
         if untouched(&key) {
             continue;

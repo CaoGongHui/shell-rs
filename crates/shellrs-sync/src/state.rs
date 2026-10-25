@@ -74,6 +74,13 @@ impl SyncState {
         &self.device
     }
 
+    /// The edit time the last round saw for record `key`, when it saw it:
+    /// a record of the app with this time is unchanged since, and need not
+    /// be read again (`LocalSnapshot::unchanged`).
+    pub fn edit_seen(&self, key: &RecordKey) -> Option<u64> {
+        self.edited_seen.get(key).copied()
+    }
+
     /// Whether this device has not synced yet: its first round decides
     /// whether its records join the others' or give way to them
     /// (`RoundOptions::join`).

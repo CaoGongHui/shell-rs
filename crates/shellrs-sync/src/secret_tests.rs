@@ -9,7 +9,10 @@ use crate::round::records_digest;
 use crate::round_tests::{plant, read_file, setup};
 use crate::secret::Sealed;
 use crate::testing::{Device, credential, key_credential, password};
-use crate::{DeviceInfo, Kind, RecordData, RecordKey, Secret, Warning};
+use crate::{
+    Capabilities, Change, DeviceInfo, Kind, LocalSnapshot, Pushed, RecordData, RecordKey,
+    RoundOptions, Secret, Unchanged, Warning, pull,
+};
 
 fn key(kind: Kind, id: &str) -> RecordKey {
     RecordKey::new(kind, id)
@@ -194,6 +197,154 @@ fn a_key_file_the_app_cannot_read_is_not_deleted() {
         value(&b, Kind::SecretPrivateKey, "c1").as_deref(),
         Some("key-c1")
     );
+}
+
+/// What `device` hands a round without reading its secrets: each one as
+/// unchanged, with the edit time it has.
+fn unread(device: &Device) -> LocalSnapshot {
+    let mut local = device.local();
+    let (secrets, records): (Vec<_>, Vec<_>) = local
+        .records
+        .into_iter()
+        .partition(|record| record.data.kind().is_secret());
+    local.records = records;
+    local.unchanged = secrets
+        .into_iter()
+        .map(|record| Unchanged {
+            key: RecordKey::new(record.data.kind(), record.id),
+            edited_ms: record.edited_ms,
+        })
+        .collect();
+    local
+}
+
+fn pull_from(
+    device: &mut Device,
+    store: &crate::MemoryStore,
+    local: &LocalSnapshot,
+) -> crate::Pulled {
+    pull(
+        store,
+        &device.keys,
+        &device.state,
+        local,
+        &Capabilities::ALL,
+        &RoundOptions::default(),
+        &mut device.env,
+    )
+    .unwrap()
+}
+
+/// A keychain is read for what changed only: the rest the state keeps.
+#[test]
+fn secrets_not_read_since_the_last_round_are_the_states_copies() {
+    let (store, _, mut a, mut b) = setup();
+    let web = with_secrets(&mut a);
+    a.sync(&store);
+    b.sync(&store);
+    let local = unread(&b);
+    assert_eq!(local.unchanged.len(), 4);
+    for unchanged in &local.unchanged {
+        assert_eq!(b.state.edit_seen(&unchanged.key), Some(unchanged.edited_ms));
+    }
+    let pulled = pull_from(&mut b, &store, &local);
+    assert!(pulled.changes.is_empty(), "{:?}", pulled.changes);
+    assert_eq!(pulled.report.local_deletes, 0);
+    b.apply(&pulled);
+    assert!(matches!(b.push(&store).unwrap(), Pushed::Unchanged));
+
+    // Changed elsewhere, it comes all the same.
+    a.wait(1000);
+    let (_, changed) = password("root", "web", "pw-new");
+    a.put(&web, changed);
+    a.sync(&store);
+    let local = unread(&b);
+    let pulled = pull_from(&mut b, &store, &local);
+    assert_eq!(
+        pulled.changes.iter().map(Change::key).collect::<Vec<_>>(),
+        [key(Kind::SecretPassword, &web)]
+    );
+    b.apply(&pulled);
+    b.push(&store).unwrap();
+    assert_eq!(
+        value(&b, Kind::SecretPassword, &web).as_deref(),
+        Some("pw-new")
+    );
+    a.sync(&store);
+    assert_eq!(a.data(), b.data());
+}
+
+/// One the state does not have as vouched for is neither taken for it nor
+/// for deleted: it is given again.
+#[test]
+fn an_unchanged_secret_the_state_did_not_see_so_is_given_again() {
+    let (store, _, mut a, mut b) = setup();
+    with_secrets(&mut a);
+    a.sync(&store);
+    b.sync(&store);
+    let mut local = unread(&b);
+    local.unchanged[0].edited_ms += 1;
+    let wrong = local.unchanged[0].key.clone();
+    let pulled = pull_from(&mut b, &store, &local);
+    assert_eq!(pulled.report.local_deletes, 0);
+    assert_eq!(
+        pulled.changes.iter().map(Change::key).collect::<Vec<_>>(),
+        [wrong]
+    );
+}
+
+/// A secret a round brought that the app could not write (its keychain
+/// locked by then) is named until written: it comes again, and its
+/// deletion too, and nothing is deleted for it.
+#[test]
+fn a_secret_the_app_could_not_write_is_given_again() {
+    let (store, _, mut a, mut b) = setup();
+    let web = with_secrets(&mut a);
+    a.sync(&store);
+    b.sync(&store);
+    let pw = key(Kind::SecretPassword, &web);
+    b.app.remove(&pw);
+    b.unreadable = vec![pw.clone()];
+
+    let pulled = b.pull(&store).unwrap();
+    assert_eq!(pulled.report.local_deletes, 0);
+    assert!(pulled.changes.iter().any(|change| change.key() == pw));
+    b.apply(&pulled);
+    b.push(&store).unwrap();
+    b.unreadable.clear();
+    assert_eq!(
+        value(&b, Kind::SecretPassword, &web).as_deref(),
+        Some("pw-web")
+    );
+    let (report, _) = b.sync(&store);
+    assert_eq!(report.local_deletes, 0);
+    a.sync(&store);
+    assert_eq!(a.data(), b.data());
+
+    // Deleted elsewhere meanwhile: the deletion comes instead.
+    b.app.remove(&pw);
+    b.unreadable = vec![pw.clone()];
+    a.wait(1000);
+    a.remove(Kind::SecretPassword, &web);
+    a.sync(&store);
+    let pulled = b.pull(&store).unwrap();
+    assert!(
+        pulled
+            .changes
+            .iter()
+            .any(|change| matches!(change, Change::Delete { .. }) && change.key() == pw)
+    );
+}
+
+/// What the app cannot read and never synced is no deletion of the
+/// round's.
+#[test]
+fn a_record_the_app_cannot_read_and_never_synced_is_left_alone() {
+    let (store, _, mut a, _) = setup();
+    a.put("c1", key_credential("deploy key"));
+    a.unreadable = vec![key(Kind::SecretPrivateKey, "c1")];
+    let pulled = a.pull(&store).unwrap();
+    assert!(pulled.changes.is_empty(), "{:?}", pulled.changes);
 }
 
 /// Once a state's sealed secrets are lost, the files it read before are
