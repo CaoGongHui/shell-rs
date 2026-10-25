@@ -9,16 +9,16 @@
 //! database, and the secrets go where the store keeps them.
 
 mod error;
+mod remote_dialog;
 mod service;
 mod sync_dialog;
-mod webdav_dialog;
 mod worker;
 
 pub use error::JobError;
+pub use remote_dialog::{RemoteDialog, RemoteKind, open_remote_dialog};
 pub use service::{
     Attention, EDIT_PAUSE, OpenStore, SyncEvent, SyncPhase, SyncService, SyncServices, SyncSnapshot,
 };
 pub use sync_dialog::{
     JoinReason, MIN_PASSWORD, PasswordDialog, open_password_dialog, open_turn_off_dialog,
 };
-pub use webdav_dialog::{WebDavDialog, open_webdav_dialog};

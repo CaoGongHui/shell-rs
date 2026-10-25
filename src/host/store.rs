@@ -300,7 +300,7 @@ fn secret_failure(secret: &SecretRef, writing: bool) -> fn(&str) -> SharedString
         (SecretRef::Temporary { .. }, _) => {
             |error| t!("host.store.secret.temporary", error = error)
         }
-        (SecretRef::SyncKeyring | SecretRef::SyncWebDav, _) => {
+        (SecretRef::SyncKeyring | SecretRef::SyncLogin, _) => {
             |error| t!("host.store.secret.sync_keyring", error = error)
         }
     }

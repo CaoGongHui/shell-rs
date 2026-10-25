@@ -218,8 +218,11 @@ gpui_kit::actions!(
         /// 开启同步 › 连接 WebDAV…: name the server and the login, then make
         /// sync there or join it.
         SetUpWebDavSync,
-        /// Sign in to the WebDAV server sync goes through anew.
-        ChangeWebDavLogin,
+        /// 开启同步 › 连接 S3…: name the bucket and its keys, then make sync
+        /// there or join it.
+        SetUpS3Sync,
+        /// Sign in anew to the WebDAV server or bucket sync goes through.
+        ChangeSyncLogin,
         /// Run a round of sync now.
         SyncNow,
         /// Open what sync waits for the user to settle: a password, a

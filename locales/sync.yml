@@ -11,8 +11,8 @@ sync.error.no_keyring:
   zh-CN: 钥匙串里没有同步的密钥，需要再输入一次同步密码。
   en: The keychain doesn’t have the sync keys. Enter the sync password again.
 sync.error.no_login:
-  zh-CN: 钥匙串里没有 WebDAV 密码。
-  en: The keychain doesn’t have the WebDAV password.
+  zh-CN: 钥匙串里没有同步位置的密码或密钥。
+  en: The keychain doesn’t have the sync location’s password or key.
 sync.error.in_progress:
   zh-CN: 正在同步，等这一轮结束再试。
   en: Sync is running. Try again once it’s done.
@@ -216,3 +216,47 @@ sync.webdav.username_missing:
 sync.webdav.password_missing:
   zh-CN: 输入密码。
   en: Enter the password.
+
+# The S3 dialog; its test, buttons and progress are WebDAV's.
+sync.s3.set_up_title:
+  zh-CN: 连接 S3
+  en: Connect S3
+sync.s3.login_title:
+  zh-CN: 更换 S3 访问密钥
+  en: Change S3 access key
+sync.s3.endpoint:
+  zh-CN: 服务地址
+  en: Endpoint
+sync.s3.region:
+  zh-CN: 区域
+  en: Region
+sync.s3.bucket:
+  zh-CN: 存储桶
+  en: Bucket
+sync.s3.prefix:
+  zh-CN: 桶里的文件夹
+  en: Folder in the bucket
+sync.s3.path_style:
+  zh-CN: 路径式地址（MinIO 等自建的服务要勾选）
+  en: Path-style addresses (for MinIO and other self-hosted services)
+sync.s3.access_key:
+  zh-CN: Access Key ID
+  en: Access key ID
+sync.s3.secret_key:
+  zh-CN: Secret Access Key
+  en: Secret access key
+sync.s3.note:
+  zh-CN: 区域留空就是 us-east-1，Cloudflare R2 填 auto。阿里云 OSS、腾讯云 COS 等填它们兼容 S3 的服务地址。访问密钥给这个桶的读写权限就够了，桶要先在服务商那里建好。
+  en: An empty region is us-east-1; Cloudflare R2’s is auto. For Alibaba Cloud OSS, Tencent Cloud COS and the like, enter their S3-compatible endpoint. The access key needs only to read and write this bucket, which must exist already.
+sync.s3.endpoint_invalid:
+  zh-CN: 服务地址要以 https:// 或 http:// 开头，比如 https://s3.us-east-1.amazonaws.com。
+  en: The endpoint starts with https:// or http://, such as https://s3.us-east-1.amazonaws.com.
+sync.s3.bucket_invalid:
+  zh-CN: 输入存储桶的名称。
+  en: Enter the bucket’s name.
+sync.s3.access_key_missing:
+  zh-CN: 输入 Access Key ID。
+  en: Enter the access key ID.
+sync.s3.secret_key_missing:
+  zh-CN: 输入 Secret Access Key。
+  en: Enter the secret access key.

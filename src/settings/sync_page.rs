@@ -16,8 +16,8 @@ use shellrs_sync::RemoteDevice;
 
 use super::settings_panel::keywords;
 use crate::app::{
-    CatalogIcon, ChangeSyncPassword, ChangeWebDavLogin, RemoveSyncDevice, ReviewSync,
-    RotateSyncKey, SetUpSync, SetUpWebDavSync, SyncNow, TurnOffSync,
+    CatalogIcon, ChangeSyncLogin, ChangeSyncPassword, RemoveSyncDevice, ReviewSync, RotateSyncKey,
+    SetUpS3Sync, SetUpSync, SetUpWebDavSync, SyncNow, TurnOffSync,
 };
 use crate::i18n::{t, tn};
 use crate::settings::SyncLocation;
@@ -98,6 +98,13 @@ fn set_up_group(available: bool) -> SettingGroup {
                 !available,
                 || Box::new(SetUpWebDavSync),
             ),
+            command_item(
+                t!("settings.sync.s3_option"),
+                t!("settings.sync.s3_option_description"),
+                ("sync-set-up-s3", t!("settings.sync.connect_s3")),
+                !available,
+                || Box::new(SetUpS3Sync),
+            ),
         ])
 }
 
@@ -119,11 +126,34 @@ fn location_items(location: &SyncLocation, busy: bool) -> Vec<SettingItem> {
             command_item(
                 t!("settings.sync.webdav_login"),
                 username.clone().into(),
-                ("change-webdav-login", t!("settings.sync.change")),
+                ("change-sync-login", t!("settings.sync.change")),
                 busy,
-                || Box::new(ChangeWebDavLogin),
+                || Box::new(ChangeSyncLogin),
             ),
         ],
+        SyncLocation::S3 {
+            endpoint,
+            bucket,
+            prefix,
+            access_key,
+            ..
+        } => {
+            let place = if prefix.is_empty() {
+                format!("{bucket} · {endpoint}")
+            } else {
+                format!("{bucket}/{prefix} · {endpoint}")
+            };
+            vec![
+                path_item("sync-s3-location", t!("settings.sync.s3"), place.into()),
+                command_item(
+                    t!("settings.sync.s3_login"),
+                    access_key.clone().into(),
+                    ("change-sync-login", t!("settings.sync.change")),
+                    busy,
+                    || Box::new(ChangeSyncLogin),
+                ),
+            ]
+        }
     }
 }
 

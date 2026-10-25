@@ -7,11 +7,13 @@
 
 mod local;
 mod memory;
+mod s3;
 mod webdav;
 
 pub use local::LocalFolderStore;
 pub(crate) use local::tag_base;
 pub use memory::{MemoryStore, Op};
+pub use s3::{S3Location, S3Store};
 pub use webdav::WebDavStore;
 
 use crate::StoreError;

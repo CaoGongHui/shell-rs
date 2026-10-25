@@ -16,7 +16,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use gpui_kit::*;
 use shellrs_sync::{
     DeviceId, DeviceInfo, JoinMode, KdfParams, LocalFolderStore, Pulled, Pushed, RemoteDevice,
-    RoundOptions, StoreError, SyncError, SyncState, SyncStore, WebDavStore,
+    RoundOptions, S3Location, S3Store, StoreError, SyncError, SyncState, SyncStore, WebDavStore,
 };
 use zeroize::Zeroizing;
 
@@ -64,6 +64,28 @@ impl SyncServices {
                     password.unwrap_or_default(),
                     &user_agent,
                 )?)),
+                SyncLocation::S3 {
+                    endpoint,
+                    region,
+                    bucket,
+                    prefix,
+                    path_style,
+                    access_key,
+                } => {
+                    let bucket = S3Location {
+                        endpoint: endpoint.clone(),
+                        region: region.clone(),
+                        bucket: bucket.clone(),
+                        prefix: prefix.clone(),
+                        path_style: *path_style,
+                    };
+                    Ok(Arc::new(S3Store::new(
+                        &bucket,
+                        access_key,
+                        password.unwrap_or_default(),
+                        &user_agent,
+                    )?))
+                }
             }),
             kdf: KdfParams::DEFAULT,
             device: DeviceInfo {
@@ -104,8 +126,8 @@ pub enum Attention {
     /// A round would delete `count` of the `of` records synced: delete, or
     /// leave sync waiting.
     MassDelete { count: u32, of: u32 },
-    /// The WebDAV server refused the username or password, or the keychain
-    /// lost the password: a new login is needed.
+    /// The WebDAV server or the bucket refused the login, or the keychain
+    /// lost it: a new login is needed.
     LoginRefused,
 }
 
@@ -485,18 +507,22 @@ impl SyncService {
         self.start_round(cx);
     }
 
-    /// Sign in to the WebDAV server sync goes through anew: as `username`
-    /// with `login`, which a listing must take before they are kept.
+    /// Sign in to the server or bucket sync goes through anew: at
+    /// `location`, the same place as a new user or key, with `login`, which
+    /// it must take before they are kept.
     pub fn change_login(
         &mut self,
-        username: String,
+        location: SyncLocation,
         login: Zeroizing<String>,
         cx: &mut Context<Self>,
     ) -> Task<Result<(), JobError>> {
-        let Some(SyncLocation::WebDav { url, .. }) = self.location.clone() else {
+        let same = self
+            .location
+            .as_ref()
+            .is_some_and(|now| now.signs_in() && now.same_place(&location));
+        if !same {
             return Task::ready(Err(JobError::Unavailable));
-        };
-        let location = SyncLocation::WebDav { url, username };
+        }
         let kept = login.clone();
         let job = self.job(
             location.clone(),
@@ -698,7 +724,7 @@ async fn round(
     accept_removed: bool,
     cx: &mut AsyncApp,
 ) -> Ended {
-    let webdav = matches!(location, SyncLocation::WebDav { .. });
+    let signs_in = location.signs_in();
     let secrets = store.read_with(cx, |store, _| store.secrets());
     let remote = cx
         .background_executor()
@@ -709,7 +735,7 @@ async fn round(
         .await;
     let remote = match remote {
         Ok(remote) => remote,
-        Err(error) => return stopped(error, webdav),
+        Err(error) => return stopped(error, signs_in),
     };
     for _ in 0..ATTEMPTS {
         let (export, state, key_dir) = store.read_with(cx, |store, _| {
@@ -731,7 +757,7 @@ async fn round(
                 .await;
         let (pulled, keyring) = match pulled {
             Ok(pulled) => pulled,
-            Err(error) => return stopped(error, webdav),
+            Err(error) => return stopped(error, signs_in),
         };
         if pulled.report.removed && !accept_removed {
             return Ended::Attention(Attention::Removed);
@@ -776,7 +802,7 @@ async fn round(
             }
             Ok(Pushed::Unchanged) => {}
             Ok(Pushed::Conflict) => continue,
-            Err(error) => return stopped(error, webdav),
+            Err(error) => return stopped(error, signs_in),
         }
         return Ended::Synced {
             revision: export.revision,
@@ -787,9 +813,9 @@ async fn round(
 }
 
 /// A round's error, or what the user is to settle when only they can. A
-/// refusal is a login's to settle on a WebDAV server, a folder's
+/// refusal is a login's to settle on a server or a bucket, a folder's
 /// permissions otherwise.
-fn stopped(error: JobError, webdav: bool) -> Ended {
+fn stopped(error: JobError, signs_in: bool) -> Ended {
     match error {
         JobError::NoKeyring | JobError::Sync(SyncError::NeedsPassword) => {
             Ended::Attention(Attention::NeedsPassword)
@@ -799,7 +825,7 @@ fn stopped(error: JobError, webdav: bool) -> Ended {
             Ended::Attention(Attention::MassDelete { count, of })
         }
         JobError::NoLogin => Ended::Attention(Attention::LoginRefused),
-        JobError::Sync(SyncError::Store(StoreError::Unauthorized)) if webdav => {
+        JobError::Sync(SyncError::Store(StoreError::Unauthorized)) if signs_in => {
             Ended::Attention(Attention::LoginRefused)
         }
         error => Ended::Failed(error),

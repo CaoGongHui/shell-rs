@@ -18,8 +18,8 @@ use crate::host::{SecretWork, SecretsWritten, SyncExport};
 use crate::secrets::{SecretRef, SecretStore};
 use crate::settings::SyncLocation;
 
-/// The storage at `location`. A WebDAV server's opens with `login`, or the
-/// password the keychain keeps for it.
+/// The storage at `location`. A WebDAV server's or a bucket's opens with
+/// `login` (the password, the secret key), or the one the keychain keeps.
 pub(super) fn open(
     services: &SyncServices,
     location: &SyncLocation,
@@ -29,10 +29,10 @@ pub(super) fn open(
     let kept;
     let password = match (location, login) {
         (SyncLocation::Folder { .. }, _) => None,
-        (SyncLocation::WebDav { .. }, Some(login)) => Some(login),
-        (SyncLocation::WebDav { .. }, None) => {
+        (_, Some(login)) => Some(login),
+        (_, None) => {
             kept = secrets
-                .get(&SecretRef::SyncWebDav)
+                .get(&SecretRef::SyncLogin)
                 .map_err(|error| JobError::Keychain(error.to_string().into()))?
                 .ok_or(JobError::NoLogin)?;
             Some(kept.as_str())
@@ -41,12 +41,12 @@ pub(super) fn open(
     (services.open)(location, password).map_err(|error| JobError::Sync(error.into()))
 }
 
-/// Keep a WebDAV server's password in the keychain, or with `None`
-/// forget the one kept.
+/// Keep the login of a WebDAV server or a bucket in the keychain, or with
+/// `None` forget the one kept.
 pub(super) fn keep_login(secrets: &dyn SecretStore, login: Option<&str>) -> Result<(), JobError> {
     match login {
-        Some(login) => secrets.set(&SecretRef::SyncWebDav, login),
-        None => secrets.delete(&SecretRef::SyncWebDav),
+        Some(login) => secrets.set(&SecretRef::SyncLogin, login),
+        None => secrets.delete(&SecretRef::SyncLogin),
     }
     .map_err(|error| JobError::Keychain(error.to_string().into()))
 }

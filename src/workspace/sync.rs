@@ -12,15 +12,15 @@ use gpui_kit::component::{
 use gpui_kit::*;
 
 use crate::app::{
-    ChangeSyncPassword, ChangeWebDavLogin, RemoveSyncDevice, ReviewSync, RotateSyncKey, SetUpSync,
-    SetUpSyncIn, SetUpWebDavSync, SyncNow, TurnOffSync,
+    ChangeSyncLogin, ChangeSyncPassword, RemoveSyncDevice, ReviewSync, RotateSyncKey, SetUpS3Sync,
+    SetUpSync, SetUpSyncIn, SetUpWebDavSync, SyncNow, TurnOffSync,
 };
 use crate::i18n::{t, tn};
 use crate::settings::SyncLocation;
 use crate::shared::confirm_danger;
 use crate::sync::{
-    Attention, JoinReason, PasswordDialog, SyncEvent, WebDavDialog, open_password_dialog,
-    open_turn_off_dialog, open_webdav_dialog,
+    Attention, JoinReason, PasswordDialog, RemoteDialog, RemoteKind, SyncEvent,
+    open_password_dialog, open_remote_dialog, open_turn_off_dialog,
 };
 
 use super::workspace_view::Workspace;
@@ -103,24 +103,34 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        open_webdav_dialog(self.sync.clone(), WebDavDialog::SetUp, window, cx);
+        let dialog = RemoteDialog::SetUp(RemoteKind::WebDav);
+        open_remote_dialog(self.sync.clone(), dialog, window, cx);
     }
 
-    pub(super) fn on_change_webdav_login(
+    pub(super) fn on_set_up_s3_sync(
         &mut self,
-        _: &ChangeWebDavLogin,
+        _: &SetUpS3Sync,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let dialog = RemoteDialog::SetUp(RemoteKind::S3);
+        open_remote_dialog(self.sync.clone(), dialog, window, cx);
+    }
+
+    pub(super) fn on_change_sync_login(
+        &mut self,
+        _: &ChangeSyncLogin,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.open_login_dialog(window, cx);
     }
 
-    /// Sign in to the WebDAV server sync goes through anew.
+    /// Sign in anew to the server or bucket sync goes through.
     fn open_login_dialog(&self, window: &mut Window, cx: &mut Context<Self>) {
         let location = self.sync.read(cx).snapshot(cx).location;
-        if let Some(SyncLocation::WebDav { url, username }) = location {
-            let dialog = WebDavDialog::Login { url, username };
-            open_webdav_dialog(self.sync.clone(), dialog, window, cx);
+        if let Some(location) = location.filter(SyncLocation::signs_in) {
+            open_remote_dialog(self.sync.clone(), RemoteDialog::Login(location), window, cx);
         }
     }
 

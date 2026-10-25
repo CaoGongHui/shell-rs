@@ -645,7 +645,7 @@ impl HostStore {
                 .filter(|credential| credential.key_path.as_deref() == Some(key_path.as_str()))
                 .map(|credential| (Kind::SecretPassphrase, credential.keychain_id.to_string()))
                 .collect(),
-            SecretRef::Temporary { .. } | SecretRef::SyncKeyring | SecretRef::SyncWebDav => {
+            SecretRef::Temporary { .. } | SecretRef::SyncKeyring | SecretRef::SyncLogin => {
                 Vec::new()
             }
         };

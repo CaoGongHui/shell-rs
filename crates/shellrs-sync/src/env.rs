@@ -102,9 +102,10 @@ mod tests {
         assert_eq!(one.now_ms(), 15);
     }
 
-    /// Only this file and the local folder store, which reads file times,
-    /// may touch the clock or the random source: everything else gets them
-    /// through `Env`, so a round is a function of its arguments.
+    /// Only this file, the local folder store, which reads file times, and
+    /// the S3 store, which signs requests with the time, may touch the
+    /// clock or the random source: everything else gets them through
+    /// `Env`, so a round is a function of its arguments.
     #[test]
     fn no_clock_or_random_elsewhere() {
         fn visit(dir: &std::path::Path, found: &mut Vec<String>) {
@@ -115,7 +116,10 @@ mod tests {
                     continue;
                 }
                 let name = path.to_string_lossy().replace('\\', "/");
-                if name.ends_with("src/env.rs") || name.ends_with("src/store/local.rs") {
+                if name.ends_with("src/env.rs")
+                    || name.ends_with("src/store/local.rs")
+                    || name.ends_with("src/store/s3.rs")
+                {
                     continue;
                 }
                 let text = std::fs::read_to_string(&path).unwrap();

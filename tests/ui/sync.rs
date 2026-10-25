@@ -600,6 +600,8 @@ async fn a_new_password_and_key_are_asked_for_on_the_other_computer(cx: &mut Tes
 
 const DAV: &str = "https://dav.example/dav/ShellRS";
 const DAV_USER: &str = "me@example.com";
+const S3_ENDPOINT: &str = "https://abc123.r2.cloudflarestorage.com";
+const S3_KEY: &str = "AKIAEXAMPLE";
 
 /// A WebDAV server in front of the folder, taking one login: the logins it
 /// was opened with are kept, for the tests to see none went astray.
@@ -626,15 +628,21 @@ impl Server {
         let server = self.clone();
         SyncServices {
             open: Arc::new(move |location, password| {
-                let SyncLocation::WebDav { url, username } = location else {
-                    panic!("a folder: {location:?}");
+                let known = match location {
+                    SyncLocation::WebDav { url, username } => url == DAV && username == DAV_USER,
+                    SyncLocation::S3 {
+                        endpoint,
+                        bucket,
+                        access_key,
+                        ..
+                    } => endpoint == S3_ENDPOINT && bucket == "shellrs" && access_key == S3_KEY,
+                    SyncLocation::Folder { .. } => panic!("a folder: {location:?}"),
                 };
                 server
                     .logins
                     .lock()
                     .unwrap()
                     .push(password.map(str::to_owned));
-                let known = url == DAV && username == DAV_USER;
                 if known && password == Some(server.password().as_str()) {
                     Ok(server.folder.clone() as Arc<dyn SyncStore>)
                 } else {
@@ -673,7 +681,7 @@ async fn set_up_on_the_server(cx: &mut TestAppContext, desk: &Desk, server: &Ser
     let password = server.password();
     in_frame(cx, handle, |window, cx| {
         fill_webdav(window, &password, cx);
-        window.click("webdav-commit", cx);
+        window.click("remote-commit", cx);
     });
     cx.wait_for(handle.into(), Duration::from_secs(2), |window, _| {
         window.try_find("sync-password-repeat").is_some()
@@ -706,14 +714,14 @@ async fn sync_is_set_up_on_a_webdav_server(cx: &mut TestAppContext) {
     // A login the server refuses is said over the dialog, and keeps it.
     in_frame(cx, handle, |window, cx| {
         fill_webdav(window, "wrong", cx);
-        window.click("webdav-commit", cx);
+        window.click("remote-commit", cx);
     });
     cx.wait_for(handle.into(), Duration::from_secs(2), |window, _| {
         window.try_find("form-error").is_some()
     })
     .await;
     in_frame(cx, handle, |window, _| {
-        assert!(window.try_find("webdav-commit").is_some());
+        assert!(window.try_find("remote-commit").is_some());
         assert!(window.try_find("sync-password").is_none());
     });
 
@@ -724,7 +732,7 @@ async fn sync_is_set_up_on_a_webdav_server(cx: &mut TestAppContext) {
             window.press("backspace", cx);
         }
         window.input(&server.password(), cx);
-        window.click("webdav-test", cx);
+        window.click("remote-test", cx);
     });
     cx.run_until_parked();
     let probes: Vec<Op> = server
@@ -740,9 +748,9 @@ async fn sync_is_set_up_on_a_webdav_server(cx: &mut TestAppContext) {
     );
     let paths = server.folder.paths();
     assert!(paths.is_empty(), "{paths:?}");
-    assert!(desk.secrets.get(&SecretRef::SyncWebDav).unwrap().is_none());
+    assert!(desk.secrets.get(&SecretRef::SyncLogin).unwrap().is_none());
 
-    in_frame(cx, handle, |window, cx| window.click("webdav-commit", cx));
+    in_frame(cx, handle, |window, cx| window.click("remote-commit", cx));
     cx.wait_for(handle.into(), Duration::from_secs(2), |window, _| {
         window.try_find("sync-password-repeat").is_some()
     })
@@ -762,7 +770,7 @@ async fn sync_is_set_up_on_a_webdav_server(cx: &mut TestAppContext) {
 
     assert_eq!(desk.location_setting(cx), Some(at_dav()));
     assert!(server.folder.raw(layout::VAULT).is_some());
-    let kept = desk.secrets.get(&SecretRef::SyncWebDav).unwrap();
+    let kept = desk.secrets.get(&SecretRef::SyncLogin).unwrap();
     assert_eq!(kept.as_deref().map(String::as_str), Some("app-password"));
     // Rounds sign in with what the keychain keeps.
     let logins = server.logins.lock().unwrap().clone();
@@ -773,7 +781,7 @@ async fn sync_is_set_up_on_a_webdav_server(cx: &mut TestAppContext) {
     assert!(matches!(phase, SyncPhase::Synced { .. }), "{phase:?}");
     in_frame(cx, handle, |window, _| {
         assert_eq!(window.find("sync-webdav-url").label(), Some(DAV));
-        assert!(window.try_find("change-webdav-login").is_some());
+        assert!(window.try_find("change-sync-login").is_some());
     });
 }
 
@@ -797,7 +805,7 @@ async fn a_refused_webdav_login_is_asked_for_again(cx: &mut TestAppContext) {
         assert_eq!(window.notifications(cx).len(), 1);
         assert_eq!(
             window.find("sync-status").label(),
-            Some("WebDAV 服务器拒绝了用户名或密码，重新登录后继续同步。")
+            Some("同步的位置拒绝了这台电脑的登录信息，重新登录后继续同步。")
         );
         window.dispatch_action(Box::new(ReviewSync), cx);
     });
@@ -806,17 +814,17 @@ async fn a_refused_webdav_login_is_asked_for_again(cx: &mut TestAppContext) {
         assert!(window.try_find("webdav-url").is_some());
         window.click("webdav-password", cx);
         window.input("new-app-password", cx);
-        window.click("webdav-commit", cx);
+        window.click("remote-commit", cx);
     });
     cx.wait_for(handle.into(), Duration::from_secs(2), |window, _| {
-        window.try_find("webdav-commit").is_none()
+        window.try_find("remote-commit").is_none()
     })
     .await;
     cx.run_until_parked();
     let snapshot = desk.sync(cx).read_with(cx, |sync, cx| sync.snapshot(cx));
     assert_eq!(snapshot.attention, None);
     assert!(matches!(snapshot.phase, SyncPhase::Synced { .. }));
-    let kept = desk.secrets.get(&SecretRef::SyncWebDav).unwrap();
+    let kept = desk.secrets.get(&SecretRef::SyncLogin).unwrap();
     assert_eq!(
         kept.as_deref().map(String::as_str),
         Some("new-app-password")
@@ -833,5 +841,68 @@ async fn a_refused_webdav_login_is_asked_for_again(cx: &mut TestAppContext) {
     .await;
     cx.run_until_parked();
     assert_eq!(desk.location_setting(cx), None);
-    assert!(desk.secrets.get(&SecretRef::SyncWebDav).unwrap().is_none());
+    assert!(desk.secrets.get(&SecretRef::SyncLogin).unwrap().is_none());
+}
+
+#[gpui_kit::test]
+async fn sync_is_set_up_in_an_s3_bucket(cx: &mut TestAppContext) {
+    let server = Server::new();
+    let desk = desk_with(cx, server.services("desk"));
+    let handle = desk.handle;
+    open_sync_settings(cx, handle);
+    in_frame(cx, handle, |window, cx| window.click("sync-set-up-s3", cx));
+    // A bucket is all it takes, and a key for it.
+    in_frame(cx, handle, |window, cx| window.click("remote-commit", cx));
+    in_frame(cx, handle, |window, cx| {
+        assert!(window.try_find("form-error").is_some());
+        window.click("s3-endpoint", cx);
+        window.input(S3_ENDPOINT, cx);
+        window.click("s3-region", cx);
+        window.input("auto", cx);
+        window.click("s3-bucket", cx);
+        window.input("shellrs", cx);
+        window.click("s3-access-key", cx);
+        window.input(S3_KEY, cx);
+        window.click("s3-secret-key", cx);
+        window.input(&server.password(), cx);
+        window.click("remote-commit", cx);
+    });
+    cx.wait_for(handle.into(), Duration::from_secs(2), |window, _| {
+        window.try_find("sync-password-repeat").is_some()
+    })
+    .await;
+    in_frame(cx, handle, |window, cx| {
+        window.click("sync-password", cx);
+        window.input(PASSWORD, cx);
+        window.click("sync-password-repeat", cx);
+        window.input(PASSWORD, cx);
+        window.click("sync-commit", cx);
+    });
+    cx.wait_for(handle.into(), Duration::from_secs(2), |window, _| {
+        window.try_find("sync-commit").is_none()
+    })
+    .await;
+    cx.run_until_parked();
+
+    assert_eq!(
+        desk.location_setting(cx),
+        Some(SyncLocation::S3 {
+            endpoint: S3_ENDPOINT.into(),
+            region: "auto".into(),
+            bucket: "shellrs".into(),
+            prefix: "ShellRS".into(),
+            path_style: false,
+            access_key: S3_KEY.into(),
+        })
+    );
+    assert!(server.folder.raw(layout::VAULT).is_some());
+    let kept = desk.secrets.get(&SecretRef::SyncLogin).unwrap();
+    assert_eq!(kept.as_deref().map(String::as_str), Some("app-password"));
+    in_frame(cx, handle, |window, _| {
+        assert_eq!(
+            window.find("sync-s3-location").label(),
+            Some(format!("shellrs/ShellRS · {S3_ENDPOINT}").as_str())
+        );
+        assert!(window.try_find("change-sync-login").is_some());
+    });
 }

@@ -504,8 +504,13 @@ fn strong(etag: &str) -> String {
     etag.strip_prefix("W/").unwrap_or(etag).to_owned()
 }
 
-/// The ETag to send as `If-Match`, for a tag this store made of one.
-fn etag_of(tag: &str) -> Option<String> {
+/// The tag of an ETag, as the S3 store makes them too.
+pub(super) fn etag_tag(etag: &str) -> String {
+    Tag::Etag(strong(etag)).to_string()
+}
+
+/// The ETag to send as `If-Match`, for a tag made of one.
+pub(super) fn etag_of(tag: &str) -> Option<String> {
     let escaped = tag.strip_prefix("e:")?;
     Some(escaped.replace("%7E", "~").replace("%25", "%"))
 }
@@ -650,7 +655,7 @@ fn percent_decode(text: &str) -> Option<String> {
 /// An HTTP date (`Sun, 06 Nov 1994 08:49:37 GMT`) in seconds since the
 /// epoch. Only this form: the others are obsolete, and a date that does
 /// not read only makes a tag doubtful.
-fn parse_http_date(text: &str) -> Option<u64> {
+pub(super) fn parse_http_date(text: &str) -> Option<u64> {
     let mut parts = text.split_whitespace().skip(1);
     let day: u64 = parts.next()?.parse().ok()?;
     let month = match parts.next()? {

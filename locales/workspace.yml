@@ -359,8 +359,8 @@ workspace.sync.vault_replaced:
   zh-CN: 同步已在别的设备上重置，重新加入后继续同步。
   en: Sync was reset on another device. Rejoin it to keep syncing.
 workspace.sync.login_refused:
-  zh-CN: WebDAV 服务器拒绝了用户名或密码，重新登录后继续同步。
-  en: The WebDAV server refused the username or password. Sign in again to keep syncing.
+  zh-CN: 同步的位置拒绝了这台电脑的登录信息，重新登录后继续同步。
+  en: The sync location refused this computer’s login. Sign in again to keep syncing.
 workspace.sync.removed_notice:
   zh-CN: 这台电脑已在别的设备上被移出同步，同步已暂停。
   en: This computer was removed from sync on another device. Sync is paused.
