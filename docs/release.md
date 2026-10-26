@@ -10,8 +10,6 @@
 
 版本号带 `-` 的（如 `0.3.0-beta.1`）只发到 beta 通道；正式版同时成为 beta 通道的最新版。在 Actions 里手动运行这个 workflow 只构建打包、不发布，用来演练。客户端只接受比自己新的版本，所以发错的版本撤不回来：把清单改回上一版能阻止更多人升级，修复要发新的补丁版。
 
-发布后改了更新日志：官网构建时从 `main` 读 `CHANGELOG.md` 和 `CHANGELOG.zh.md`，在 Actions › site › Run workflow 手动重建（`.github/workflows/site.yml`，用的是 `release` 环境的部署挂钩，同样要批准）；GitHub Release 的说明用 `gh release edit v<版本> --notes-file …` 改。
-
 一次性准备：
 
 - **更新签名密钥**：`minisign -G -p shellrs-update.pub -s shellrs-update.key` 生成两对（一对日常用，一对离线保存备用），把两个公钥（`.pub` 文件的第二行）填进 `src/update/build_info.rs` 的 `TRUSTED_KEYS`。私钥和口令只放进 GitHub 的 `release` 环境，另外离线备份；丢了私钥，已发出去的 ShellRS 就再也收不到更新。换钥匙时先发一版带上新公钥，再换签名用的私钥。
