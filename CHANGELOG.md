@@ -8,12 +8,8 @@ One section per version, titled `## [version]`, optionally followed by a date. E
 
 ### Added
 
-- Cloud sync: in “Settings › Cloud sync”, pick a folder a cloud drive syncs (iCloud Drive, Dropbox, OneDrive and the like), or connect a WebDAV server (Nextcloud, Synology and the like) or S3-compatible object storage (AWS S3, Cloudflare R2, MinIO, Alibaba Cloud OSS, Tencent Cloud COS and the like), to sync hosts, groups, credentials, port forwards, snippets and bookmarks between your computers, with their passwords, passphrases and private keys. It’s end-to-end encrypted: data is encrypted before it leaves this computer, and where it’s kept holds only ciphertext. A forgotten sync password can’t be recovered. Serial hosts aren’t synced.
+- Cloud sync: sync your data between computers, end-to-end encrypted (E2EE): it’s encrypted before it leaves this computer, so remote storage holds only ciphertext, and only devices with the password can read it.
 - When the tabs don’t fit, scroll the tab bar sideways with the mouse wheel.
-
-### Improved
-
-- A private key file chosen for a credential, imported with hosts from ~/.ssh/config or given to the external CLI is copied into ShellRS; the original file is left as it is.
 
 ### Fixed
 
@@ -23,12 +19,8 @@ One section per version, titled `## [version]`, optionally followed by a date. E
 
 ### Added
 
-- Cloud sync: in “Settings › Cloud sync”, pick a folder a cloud drive syncs (iCloud Drive, Dropbox, OneDrive and the like), or connect a WebDAV server (Nextcloud, Synology and the like) or S3-compatible object storage (AWS S3, Cloudflare R2, MinIO, Alibaba Cloud OSS, Tencent Cloud COS and the like), to sync hosts, groups, credentials, port forwards, snippets and bookmarks between your computers, with their passwords, passphrases and private keys. It’s end-to-end encrypted: data is encrypted before it leaves this computer, and where it’s kept holds only ciphertext. A forgotten sync password can’t be recovered. Serial hosts aren’t synced.
+- Cloud sync: sync your data between computers, end-to-end encrypted (E2EE): it’s encrypted before it leaves this computer, so remote storage holds only ciphertext, and only devices with the password can read it.
 - When the tabs don’t fit, scroll the tab bar sideways with the mouse wheel.
-
-### Improved
-
-- A private key file chosen for a credential, imported with hosts from ~/.ssh/config or given to the external CLI is copied into ShellRS; the original file is left as it is.
 
 ## [0.1.15]
 
