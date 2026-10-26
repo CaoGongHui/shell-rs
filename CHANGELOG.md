@@ -4,6 +4,17 @@
 
 One section per version, titled `## [version]`, optionally followed by a date. Each section is written in English here and in Chinese in [CHANGELOG.zh.md](CHANGELOG.zh.md), in the same change. The release workflow (`.github/workflows/release.yml`) takes the section with the tag’s version, as it is, for the GitHub release. The website’s changelog shows this file in English and Japanese and CHANGELOG.zh.md in Chinese (ShellRS’s update dialog opens it with What’s new). Written in Markdown, for users.
 
+## [0.1.16-beta.1]
+
+### Added
+
+- Cloud sync: in “Settings › Cloud sync”, pick a folder a cloud drive syncs (iCloud Drive, Dropbox, OneDrive and the like), or connect a WebDAV server (Nextcloud, Synology and the like) or S3-compatible object storage (AWS S3, Cloudflare R2, MinIO, Alibaba Cloud OSS, Tencent Cloud COS and the like), to sync hosts, groups, credentials, port forwards, snippets and bookmarks between your computers, with their passwords, passphrases and private keys. It’s end-to-end encrypted: data is encrypted before it leaves this computer, and where it’s kept holds only ciphertext. A forgotten sync password can’t be recovered. Serial hosts aren’t synced.
+- When the tabs don’t fit, scroll the tab bar sideways with the mouse wheel.
+
+### Improved
+
+- A private key file chosen for a credential, imported with hosts from ~/.ssh/config or given to the external CLI is copied into ShellRS; the original file is left as it is.
+
 ## [0.1.15]
 
 ### Added
