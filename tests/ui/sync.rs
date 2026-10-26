@@ -141,7 +141,7 @@ fn host_names(store: &Entity<HostStore>, cx: &mut TestAppContext) -> Vec<String>
     })
 }
 
-/// Open 设置 › 同步.
+/// Open 设置 › 云同步.
 fn open_sync_settings(cx: &mut TestAppContext, handle: WindowHandle<Root>) {
     in_frame(cx, handle, |window, cx| window.click("open-settings", cx));
     in_frame(cx, handle, |window, cx| {
@@ -149,7 +149,7 @@ fn open_sync_settings(cx: &mut TestAppContext, handle: WindowHandle<Root>) {
     });
 }
 
-/// Set sync up from 设置 › 同步 on the desk: the folder picked, the
+/// Set sync up from 设置 › 云同步 on the desk: the folder picked, the
 /// password typed twice.
 async fn set_up_on_the_desk(cx: &mut TestAppContext, desk: &Desk) {
     let handle = desk.handle;
@@ -546,7 +546,7 @@ async fn a_new_password_and_key_are_asked_for_on_the_other_computer(cx: &mut Tes
 
     let new_password = "staple battery horse";
     in_frame(cx, desk.handle, |window, cx| {
-        window.click("rotate-sync-key", cx)
+        window.click("change-sync-password", cx)
     });
     in_frame(cx, desk.handle, |window, cx| {
         window.click("sync-password", cx);
@@ -560,6 +560,10 @@ async fn a_new_password_and_key_are_asked_for_on_the_other_computer(cx: &mut Tes
     })
     .await;
     cx.run_until_parked();
+    // The data key changed with the password.
+    let vault: serde_json::Value =
+        serde_json::from_slice(&folder.raw(layout::VAULT).unwrap()).unwrap();
+    assert_eq!(vault["current"], 2);
 
     desk.store(cx).update(cx, |store, cx| {
         store.insert(
@@ -671,7 +675,7 @@ fn fill_webdav(window: &mut gpui_kit::Window, password: &str, cx: &mut App) {
     window.input(password, cx);
 }
 
-/// Set sync up on the server from 设置 › 同步 › 连接 WebDAV….
+/// Set sync up on the server from 设置 › 云同步 › 连接 WebDAV….
 async fn set_up_on_the_server(cx: &mut TestAppContext, desk: &Desk, server: &Server) {
     let handle = desk.handle;
     open_sync_settings(cx, handle);

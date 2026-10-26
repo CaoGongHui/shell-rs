@@ -228,10 +228,8 @@ gpui_kit::actions!(
         /// Open what sync waits for the user to settle: a password, a
         /// reset, deletions to agree to.
         ReviewSync,
-        /// Open 更换同步密码.
+        /// Open 更换同步密码, which changes the data key too.
         ChangeSyncPassword,
-        /// Open 更换同步密码和密钥.
-        RotateSyncKey,
         /// Open 关闭同步.
         TurnOffSync,
     ]

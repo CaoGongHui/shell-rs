@@ -12,8 +12,8 @@ use gpui_kit::component::{
 use gpui_kit::*;
 
 use crate::app::{
-    ChangeSyncLogin, ChangeSyncPassword, RemoveSyncDevice, ReviewSync, RotateSyncKey, SetUpS3Sync,
-    SetUpSync, SetUpSyncIn, SetUpWebDavSync, SyncNow, TurnOffSync,
+    ChangeSyncLogin, ChangeSyncPassword, RemoveSyncDevice, ReviewSync, SetUpS3Sync, SetUpSync,
+    SetUpSyncIn, SetUpWebDavSync, SyncNow, TurnOffSync,
 };
 use crate::i18n::{t, tn};
 use crate::settings::SyncLocation;
@@ -196,18 +196,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let dialog = PasswordDialog::Change { rotate: false };
-        open_password_dialog(self.sync.clone(), dialog, None, window, cx);
-    }
-
-    pub(super) fn on_rotate_sync_key(
-        &mut self,
-        _: &RotateSyncKey,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let dialog = PasswordDialog::Change { rotate: true };
-        open_password_dialog(self.sync.clone(), dialog, None, window, cx);
+        open_password_dialog(self.sync.clone(), PasswordDialog::Change, None, window, cx);
     }
 
     pub(super) fn on_turn_off_sync(

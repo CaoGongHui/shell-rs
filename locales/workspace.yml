@@ -390,8 +390,8 @@ workspace.sync.remove_title:
   zh-CN: 移除“%{name}”？
   en: Remove “%{name}”?
 workspace.sync.remove:
-  zh-CN: 它在同步文件夹里的文件会被删除。如果设备丢失了，接着更换同步密码和密钥。
-  en: Its file in the sync folder is deleted. If the device is lost, change the sync password and key next.
+  zh-CN: 它在同步文件夹里的文件会被删除。如果设备丢失了，接着更换同步密码。
+  en: Its file in the sync folder is deleted. If the device is lost, change the sync password next.
 workspace.sync.remove_device:
   zh-CN: 移除
   en: Remove

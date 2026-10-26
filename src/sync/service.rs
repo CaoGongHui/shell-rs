@@ -550,19 +550,18 @@ impl SyncService {
         })
     }
 
-    /// 更换同步密码, and with `rotate` 更换密钥 after it: what the other
-    /// devices hold no longer opens anything new.
+    /// 更换同步密码, and the data key after it: what the other devices hold
+    /// no longer opens anything new.
     pub fn change_password(
         &mut self,
         password: Zeroizing<String>,
-        rotate: bool,
         cx: &mut Context<Self>,
     ) -> Task<Result<(), JobError>> {
         let Some(location) = self.location.clone() else {
             return Task::ready(Err(JobError::Unavailable));
         };
         let job = self.job(location, None, cx, move |remote, secrets, services| {
-            worker::new_password(remote, secrets, &password, rotate, services.kdf)
+            worker::new_password(remote, secrets, &password, services.kdf)
         });
         cx.spawn(async move |this, cx| {
             job.await?;

@@ -38,8 +38,8 @@ pub enum PasswordDialog {
         location: SyncLocation,
         reason: JoinReason,
     },
-    /// 更换同步密码, and with `rotate` the key too.
-    Change { rotate: bool },
+    /// 更换同步密码, and the data key with it.
+    Change,
 }
 
 /// Why the sync password is asked for.
@@ -74,8 +74,7 @@ impl PasswordDialog {
                 reason: JoinReason::Reset,
                 ..
             } => t!("sync.dialog.reset_title"),
-            Self::Change { rotate: false } => t!("sync.dialog.change_title"),
-            Self::Change { rotate: true } => t!("sync.dialog.rotate_title"),
+            Self::Change => t!("sync.dialog.change_title"),
         }
     }
 
@@ -94,8 +93,7 @@ impl PasswordDialog {
                 reason: JoinReason::Reset,
                 ..
             } => t!("sync.dialog.reset_description"),
-            Self::Change { rotate: false } => t!("sync.dialog.change_description"),
-            Self::Change { rotate: true } => t!("sync.dialog.rotate_description"),
+            Self::Change => t!("sync.dialog.change_description"),
         }
     }
 
@@ -107,7 +105,7 @@ impl PasswordDialog {
                 ..
             } => t!("sync.dialog.continue"),
             Self::Join { .. } => t!("sync.dialog.join"),
-            Self::Change { .. } => t!("sync.dialog.change"),
+            Self::Change => t!("sync.dialog.change"),
         }
     }
 
@@ -193,7 +191,7 @@ impl PasswordForm {
                 reason != JoinReason::NewPassword,
                 cx,
             ),
-            PasswordDialog::Change { rotate } => service.change_password(password, rotate, cx),
+            PasswordDialog::Change => service.change_password(password, cx),
         });
         self.working = true;
         cx.notify();

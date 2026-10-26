@@ -126,24 +126,21 @@ pub(super) fn join(
     save_keyring(secrets, &keyring)
 }
 
-/// A new sync password, and with `rotate` a new data key after it.
+/// A new sync password, and a new data key after it: a device that kept the
+/// old keys (a removed one) can't read anything newer.
 pub(super) fn new_password(
     store: &dyn SyncStore,
     secrets: &dyn SecretStore,
     password: &str,
-    rotate: bool,
     kdf: KdfParams,
 ) -> Result<(), JobError> {
     let keyring = load_keyring(secrets)?;
-    let mut keyring = change_password(store, &keyring, password, kdf, &mut SystemEnv)?;
+    let keyring = change_password(store, &keyring, password, kdf, &mut SystemEnv)?;
     // The password changed already: keep the keys that open with it before
     // anything else can fail.
     save_keyring(secrets, &keyring)?;
-    if rotate {
-        keyring = rotate_key(store, &keyring, &mut SystemEnv)?;
-        save_keyring(secrets, &keyring)?;
-    }
-    Ok(())
+    let keyring = rotate_key(store, &keyring, &mut SystemEnv)?;
+    save_keyring(secrets, &keyring)
 }
 
 /// Delete a device's file: it leaves the vault until it writes it again.
@@ -241,7 +238,7 @@ mod tests {
             load_keyring(&two).unwrap().vault_id()
         );
 
-        new_password(&store, &one, "staple battery horse", true, FAST).unwrap();
+        new_password(&store, &one, "staple battery horse", FAST).unwrap();
         assert_eq!(load_keyring(&one).unwrap().current_generation(), 2);
         assert!(join(&store, &two, "correct horse battery").is_err());
         join(&store, &two, "staple battery horse").unwrap();

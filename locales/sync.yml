@@ -92,9 +92,6 @@ sync.dialog.reset_title:
 sync.dialog.change_title:
   zh-CN: 更换同步密码
   en: Change sync password
-sync.dialog.rotate_title:
-  zh-CN: 更换同步密码和密钥
-  en: Change sync password and key
 sync.dialog.create_description:
   zh-CN: 这个文件夹里还没有同步。设一个同步密码，别的电脑加入时要输入它。
   en: This folder has no sync yet. Choose a sync password; your other computers ask for it when they join.
@@ -108,9 +105,6 @@ sync.dialog.reset_description:
   zh-CN: 同步已在别的设备上重置。输入现在的同步密码重新加入，这台电脑上的数据会和其他设备的合并。
   en: Sync was reset on another device. Enter its sync password to rejoin; what’s on this computer is merged with the other devices’.
 sync.dialog.change_description:
-  zh-CN: 别的设备下次同步时要输入新密码。
-  en: Your other devices ask for the new password when they next sync.
-sync.dialog.rotate_description:
   zh-CN: 同时换一把新的数据密钥：已移除的设备即使知道旧密码，也读不了之后的数据。别的设备下次同步时要输入新密码。
   en: A new data key comes with it, so a removed device can’t read anything newer even with the old password. Your other devices ask for the new password when they next sync.
 sync.dialog.create:
@@ -190,8 +184,8 @@ sync.webdav.password:
   zh-CN: 密码
   en: Password
 sync.webdav.app_password:
-  zh-CN: 地址是服务器上放同步数据的文件夹，不存在会自动建。坚果云的密码要用网页「账户信息 › 安全选项」里生成的应用密码，Nextcloud 用「设置 › 安全」里的应用密码。
-  en: The address is the server folder sync goes in; it’s made if missing. For Jianguoyun, use an app password from “Account › Security” on its website; for Nextcloud, one from “Settings › Security”.
+  zh-CN: 地址是服务器上放同步数据的文件夹，不存在会自动建。Nextcloud 要用「设置 › 安全」里生成的应用密码。
+  en: The address is the server folder sync goes in; it’s made if missing. For Nextcloud, use an app password from “Settings › Security”.
 sync.webdav.test:
   zh-CN: 测试连接
   en: Test connection
@@ -208,8 +202,8 @@ sync.webdav.test_failed:
   zh-CN: 连接失败
   en: Couldn’t connect
 sync.webdav.url_invalid:
-  zh-CN: 地址要以 https:// 或 http:// 开头，比如 https://dav.jianguoyun.com/dav/ShellRS。
-  en: The address starts with https:// or http://, such as https://dav.jianguoyun.com/dav/ShellRS.
+  zh-CN: 地址要以 https:// 或 http:// 开头，比如 https://dav.example.com/ShellRS。
+  en: The address starts with https:// or http://, such as https://dav.example.com/ShellRS.
 sync.webdav.username_missing:
   zh-CN: 输入用户名。
   en: Enter the username.
@@ -246,11 +240,11 @@ sync.s3.secret_key:
   zh-CN: Secret Access Key
   en: Secret access key
 sync.s3.note:
-  zh-CN: 区域留空就是 us-east-1，Cloudflare R2 填 auto。阿里云 OSS、腾讯云 COS 等填它们兼容 S3 的服务地址。访问密钥给这个桶的读写权限就够了，桶要先在服务商那里建好。
-  en: An empty region is us-east-1; Cloudflare R2’s is auto. For Alibaba Cloud OSS, Tencent Cloud COS and the like, enter their S3-compatible endpoint. The access key needs only to read and write this bucket, which must exist already.
+  zh-CN: 区域留空就是 us-east-1，Cloudflare R2 填 auto。阿里云 OSS、腾讯云 COS 等填它们兼容 S3 的服务地址。
+  en: An empty region is us-east-1; Cloudflare R2’s is auto. For Alibaba Cloud OSS, Tencent Cloud COS and the like, enter their S3-compatible endpoint.
 sync.s3.endpoint_invalid:
-  zh-CN: 服务地址要以 https:// 或 http:// 开头，比如 https://s3.us-east-1.amazonaws.com。
-  en: The endpoint starts with https:// or http://, such as https://s3.us-east-1.amazonaws.com.
+  zh-CN: 服务地址要以 https:// 或 http:// 开头，比如 Cloudflare R2 的 https://<ACCOUNT_ID>.r2.cloudflarestorage.com。
+  en: The endpoint starts with https:// or http://, such as Cloudflare R2’s https://<ACCOUNT_ID>.r2.cloudflarestorage.com.
 sync.s3.bucket_invalid:
   zh-CN: 输入存储桶的名称。
   en: Enter the bucket’s name.

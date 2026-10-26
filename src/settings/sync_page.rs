@@ -1,6 +1,6 @@
-//! 设置 › 同步: off, the two ways to turn it on (a folder, a WebDAV
-//! server); on, where this computer stands, the other devices, and the
-//! sync password.
+//! 设置 › 云同步: off, the three ways to turn it on (a folder, a WebDAV
+//! server, an S3 bucket); on, where this computer stands, the other
+//! devices, and the sync password.
 
 use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Sizable as _,
@@ -16,8 +16,8 @@ use shellrs_sync::RemoteDevice;
 
 use super::settings_panel::keywords;
 use crate::app::{
-    CatalogIcon, ChangeSyncLogin, ChangeSyncPassword, RemoveSyncDevice, ReviewSync, RotateSyncKey,
-    SetUpS3Sync, SetUpSync, SetUpWebDavSync, SyncNow, TurnOffSync,
+    CatalogIcon, ChangeSyncLogin, ChangeSyncPassword, RemoveSyncDevice, ReviewSync, SetUpS3Sync,
+    SetUpSync, SetUpWebDavSync, SyncNow, TurnOffSync,
 };
 use crate::i18n::{t, tn};
 use crate::settings::SyncLocation;
@@ -53,22 +53,13 @@ pub(super) fn sync_groups(sync: &Entity<SyncService>, cx: &App) -> Vec<SettingGr
         devices_group(&snapshot),
         SettingGroup::new()
             .title(t!("settings.sync.password"))
-            .items([
-                command_item(
-                    t!("settings.sync.change_password"),
-                    t!("settings.sync.change_password_description"),
-                    ("change-sync-password", t!("settings.sync.change")),
-                    busy,
-                    || Box::new(ChangeSyncPassword),
-                ),
-                command_item(
-                    t!("settings.sync.rotate"),
-                    t!("settings.sync.rotate_description"),
-                    ("rotate-sync-key", t!("settings.sync.change")),
-                    busy,
-                    || Box::new(RotateSyncKey),
-                ),
-            ]),
+            .items([command_item(
+                t!("settings.sync.change_password"),
+                t!("settings.sync.change_password_description"),
+                ("change-sync-password", t!("settings.sync.change")),
+                busy,
+                || Box::new(ChangeSyncPassword),
+            )]),
     ]
 }
 

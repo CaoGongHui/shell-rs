@@ -72,7 +72,8 @@ impl KdfParams {
 /// The keys of a vault this device can use: the data keys of every
 /// generation, and the key-encryption key, to read new generations
 /// without asking for the password again. The app keeps it in the system
-/// keychain only (`to_bytes`), never in its database.
+/// keychain only (`to_bytes`, the newest generations), never in its
+/// database.
 #[derive(Clone)]
 pub struct Keyring {
     vault_id: [u8; 16],
@@ -93,6 +94,11 @@ impl fmt::Debug for Keyring {
 
 impl Keyring {
     const MAGIC: &[u8; 4] = b"SRK1";
+    /// The generations `to_bytes` keeps, the newest: Windows' Credential
+    /// Manager holds 2560 bytes, about 25 of them. An older key comes back
+    /// from the vault, unwrapped with the key-encryption key, when a file
+    /// or the state still needs it.
+    const KEPT_GENERATIONS: usize = 8;
 
     pub fn current_generation(&self) -> u32 {
         self.current
@@ -111,15 +117,25 @@ impl Keyring {
         self.keys.get(&generation).map(|key| &**key)
     }
 
-    /// The keyring for the system keychain.
+    /// The keyring for the system keychain, with the current generation
+    /// and the newest before it.
     pub fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
-        let mut out = Zeroizing::new(Vec::with_capacity(60 + self.keys.len() * 36));
+        let mut kept: Vec<_> = self
+            .keys
+            .iter()
+            .filter(|(generation, _)| **generation != self.current)
+            .rev()
+            .take(Self::KEPT_GENERATIONS - 1)
+            .chain(self.keys.get_key_value(&self.current))
+            .collect();
+        kept.sort_by_key(|(generation, _)| **generation);
+        let mut out = Zeroizing::new(Vec::with_capacity(60 + kept.len() * 36));
         out.extend_from_slice(Self::MAGIC);
         out.extend_from_slice(&self.vault_id);
         out.extend_from_slice(&*self.kek);
         out.extend_from_slice(&self.current.to_be_bytes());
-        out.extend_from_slice(&(self.keys.len() as u32).to_be_bytes());
-        for (generation, key) in &self.keys {
+        out.extend_from_slice(&(kept.len() as u32).to_be_bytes());
+        for (generation, key) in kept {
             out.extend_from_slice(&generation.to_be_bytes());
             out.extend_from_slice(&**key);
         }
@@ -721,5 +737,27 @@ pub(crate) mod tests {
         let shown = format!("{keyring:?}");
         assert!(!shown.contains(&hex::encode(keyring.key(1).unwrap())));
         assert!(shown.contains("generations: [1, 2]"));
+    }
+
+    #[test]
+    fn the_keychain_keeps_the_newest_keys_and_the_vault_the_rest() {
+        let store = MemoryStore::new();
+        let mut env = FixedEnv::new(0, 1);
+        let mut keyring = vault(&store, &mut env);
+        for _ in 0..29 {
+            keyring = rotate_key(&store, &keyring, &mut env).unwrap();
+        }
+        let bytes = keyring.to_bytes();
+        // What the keychain gets, base64 in UTF-16 on Windows.
+        assert!(bytes.len().div_ceil(3) * 4 * 2 <= 2560);
+        let kept = Keyring::from_bytes(&bytes).unwrap();
+        assert_eq!(kept.current_generation(), 30);
+        assert_eq!(
+            kept.keys.keys().copied().collect::<Vec<_>>(),
+            (23..=30).collect::<Vec<_>>()
+        );
+        let refreshed = refresh_keyring(&store, &kept).unwrap();
+        assert_eq!(refreshed.keys.len(), 30);
+        assert_eq!(refreshed.key(1), keyring.key(1));
     }
 }

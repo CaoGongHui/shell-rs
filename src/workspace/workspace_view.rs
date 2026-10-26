@@ -2947,7 +2947,6 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_sync_now))
             .on_action(cx.listener(Self::on_review_sync))
             .on_action(cx.listener(Self::on_change_sync_password))
-            .on_action(cx.listener(Self::on_rotate_sync_key))
             .on_action(cx.listener(Self::on_turn_off_sync))
             .on_action(cx.listener(Self::on_remove_sync_device))
             .on_action(cx.listener(Self::on_copy_agent_skill))

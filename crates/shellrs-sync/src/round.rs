@@ -52,7 +52,7 @@ use crate::envelope::{self, OpenError};
 use crate::fixup;
 use crate::merge::join;
 use crate::record::{Body, Map, RawRecord, RecordSet};
-use crate::secret::{self, endpoint_secret_id};
+use crate::secret::{self, Sealed, endpoint_secret_id};
 use crate::snapshot::{self, DecodeError, DeviceInfo, Snapshot};
 use crate::state::{FileMemo, OwnMemo, SyncState};
 use crate::store::{PutCondition, RemoteFile, SyncStore, tag_base};
@@ -218,8 +218,14 @@ pub fn pull(
     let mut edited_seen = state.edited_seen.clone();
     let mut known_secrets = None;
     let mut secrets_lost = false;
+    let mut reader = Reader {
+        store,
+        keys,
+        refreshed: None,
+        checked_vault: false,
+    };
     if let Some(sealed) = &state.secrets {
-        match secret::open(sealed, keys) {
+        match reader.open_secrets(sealed)? {
             Some(secrets) => {
                 known.extend(secrets.clone());
                 known_secrets = Some(secrets);
@@ -351,12 +357,6 @@ pub fn pull(
     let listed = match store.list(layout::DEVICES.into()) {
         Err(StoreError::NotFound) => Vec::new(),
         result => result?,
-    };
-    let mut reader = Reader {
-        store,
-        keys,
-        refreshed: None,
-        checked_vault: false,
     };
     let mut gathered = Gathered::default();
     let mut own = state.own.clone();
@@ -664,6 +664,16 @@ struct Reader<'a> {
 impl Reader<'_> {
     fn keys(&self) -> &Keyring {
         self.refreshed.as_ref().unwrap_or(self.keys)
+    }
+
+    /// The state's secrets, with a key the keychain may have let go (it
+    /// keeps the newest generations only) taken from the vault again.
+    fn open_secrets(&mut self, sealed: &Sealed) -> Result<Option<RecordSet>, SyncError> {
+        if self.keys().key(sealed.generation).is_none() && !self.checked_vault {
+            self.checked_vault = true;
+            self.refreshed = Some(refresh_keyring(self.store, self.keys)?);
+        }
+        Ok(secret::open(sealed, self.keys()))
     }
 
     /// Read another device's file into `into`. One not read is not noted,

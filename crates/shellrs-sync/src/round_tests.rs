@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use crate::record::RawRecord;
 use crate::snapshot::{self, Snapshot};
 use crate::store::{MemoryStore, Op};
-use crate::testing::{Device, credential, group, host};
+use crate::testing::{Device, credential, group, host, password};
 use crate::vault::tests::vault;
 use crate::{
     Auth, Capabilities, Change, DeviceId, FixedEnv, HostData, JoinMode, Keyring, Kind, Protocol,
@@ -244,6 +244,40 @@ fn a_rotated_key_is_learned_from_the_vault() {
     assert_eq!(name(&b, "h1"), "web");
     // B's own file moves to the new key on its next upload, even with
     // nothing else new.
+    assert!(matches!(b.push(&store).unwrap(), Pushed::Uploaded { .. }));
+}
+
+#[test]
+fn keys_the_keychain_let_go_come_back_from_the_vault() {
+    let (store, _, mut a, mut b) = setup();
+    let (id, secret) = password("root", "10.0.0.1", "hunter2");
+    b.put(&id, secret);
+    a.sync(&store);
+    b.sync(&store);
+    // B moves on nine generations; its keychain keeps the newest eight,
+    // while its state's secrets and A's file are under the first.
+    for _ in 0..9 {
+        b.keys = crate::rotate_key(&store, &b.keys, &mut b.env).unwrap();
+    }
+    b.keys = Keyring::from_bytes(&b.keys.to_bytes()).unwrap();
+    assert!(b.keys.key(1).is_none());
+    a.wait(10);
+    a.put("h1", host("web", None));
+    a.sync(&store);
+
+    let pulled = b.pull(&store).unwrap();
+    assert!(
+        !pulled
+            .report
+            .warnings
+            .iter()
+            .any(|warning| matches!(warning, Warning::SecretsUnreadable)),
+        "{:?}",
+        pulled.report.warnings
+    );
+    assert!(pulled.keyring.as_ref().unwrap().key(1).is_some());
+    b.apply(&pulled);
+    assert_eq!(name(&b, "h1"), "web");
     assert!(matches!(b.push(&store).unwrap(), Pushed::Uploaded { .. }));
 }
 
