@@ -2365,8 +2365,10 @@ pub(crate) fn encode_key(keystroke: &Keystroke, mode: TermMode) -> Option<Vec<u8
         "left" => if app_cursor { b"\x1bOD" } else { b"\x1b[D" }.to_vec(),
         "home" if modifier > 1 => modified_csi('H'),
         "end" if modifier > 1 => modified_csi('F'),
-        "home" => b"\x1b[H".to_vec(),
-        "end" => b"\x1b[F".to_vec(),
+        // As xterm: zsh with oh-my-zsh turns the mode on and binds only
+        // these, terminfo's khome and kend (#70).
+        "home" => if app_cursor { b"\x1bOH" } else { b"\x1b[H" }.to_vec(),
+        "end" => if app_cursor { b"\x1bOF" } else { b"\x1b[F" }.to_vec(),
         "insert" => b"\x1b[2~".to_vec(),
         "delete" => b"\x1b[3~".to_vec(),
         "pageup" => b"\x1b[5~".to_vec(),
@@ -2533,6 +2535,28 @@ mod tests {
         assert_eq!(
             encode_key(&key("shift-up"), TermMode::default()),
             Some(b"\x1b[1;2A".to_vec())
+        );
+    }
+
+    #[test]
+    fn home_and_end_follow_the_cursor_key_mode() {
+        for (name, normal, application) in [
+            ("home", b"\x1b[H", b"\x1bOH"),
+            ("end", b"\x1b[F", b"\x1bOF"),
+        ] {
+            assert_eq!(
+                encode_key(&key(name), TermMode::default()),
+                Some(normal.to_vec())
+            );
+            assert_eq!(
+                encode_key(&key(name), TermMode::APP_CURSOR),
+                Some(application.to_vec())
+            );
+        }
+        // With a modifier the mode makes no difference, as for the arrows.
+        assert_eq!(
+            encode_key(&key("shift-home"), TermMode::APP_CURSOR),
+            Some(b"\x1b[1;2H".to_vec())
         );
     }
 
