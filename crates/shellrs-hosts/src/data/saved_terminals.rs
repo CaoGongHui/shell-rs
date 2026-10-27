@@ -4,10 +4,10 @@
 
 use std::path::PathBuf;
 
-use gpui_kit::SharedString;
+use gpui_shared_string::SharedString;
 
 use super::{Change, HostData, reordered};
-use crate::host::{
+use crate::{
     SavedTerminal, SavedTerminalId, SavedTerminalTab, TerminalDrop, TerminalGroup, TerminalGroupId,
     TerminalNode, next_terminal_name,
 };
@@ -514,7 +514,7 @@ impl HostData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::host::HostDatabase;
+    use crate::HostDatabase;
 
     fn tab(terminal: SavedTerminalId, front: bool) -> SavedTerminalTab {
         SavedTerminalTab { terminal, front }

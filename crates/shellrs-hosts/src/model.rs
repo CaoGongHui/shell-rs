@@ -1,4 +1,4 @@
-use gpui_kit::SharedString;
+use gpui_shared_string::SharedString;
 use rand::{Rng as _, distr::Alphanumeric};
 
 use crate::secrets::SecretRef;
@@ -172,7 +172,7 @@ impl ProxySettings {
     }
 }
 
-pub use crate::ssh::ProxyKind;
+pub use shellrs_ssh::ProxyKind;
 
 /// Which pane of a host's SFTP tab a bookmark belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

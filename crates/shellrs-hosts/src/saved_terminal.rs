@@ -3,7 +3,7 @@
 //! stored in the same database; the `project` module that shows them
 //! depends on this one.
 
-use gpui_kit::SharedString;
+use gpui_shared_string::SharedString;
 
 /// Stable identity of a group of local terminals. Never reused within a
 /// process.

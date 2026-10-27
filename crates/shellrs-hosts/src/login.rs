@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use crate::secrets::SecretRef;
-pub use crate::ssh::{
+pub use shellrs_ssh::{
     DEFAULT_KEY_FILES, HostLogin, JumpLogin, LoginMethod, LoginRoute, ProxyLogin,
 };
 

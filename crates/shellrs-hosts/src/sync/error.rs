@@ -3,7 +3,7 @@
 
 use shellrs_sync::SyncError;
 
-use crate::host::SecretError;
+use crate::SecretError;
 
 /// Why a sync job stopped.
 #[derive(Clone, Debug, PartialEq, Eq)]

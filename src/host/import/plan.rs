@@ -8,10 +8,9 @@ use gpui_kit::{Context, SharedString};
 
 use crate::i18n::t;
 
-use super::super::private_key::read_small;
 use super::super::{
     AuthKind, CredentialDraft, CredentialId, CredentialKind, DEFAULT_USER, ErrorMessage as _,
-    GroupPathError, HostDraft, HostDraftError, HostStore,
+    GroupPathError, HostDraft, HostDraftError, HostStore, read_small,
 };
 use super::{ImportCandidate, ImportScan};
 

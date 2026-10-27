@@ -1,10 +1,10 @@
 //! The command snippets' part of `HostData`: the snippets and their
 //! categories, written through like everything else.
 
-use gpui_kit::SharedString;
+use gpui_shared_string::SharedString;
 
 use super::{Change, HostData, edited_after};
-use crate::host::{
+use crate::{
     PublicId, Snippet, SnippetCategory, SnippetCategoryId, SnippetDraft, SnippetId, SnippetScope,
 };
 
@@ -218,7 +218,7 @@ impl HostData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::host::{AuthKind, GroupDraft, Host, HostDatabase, HostDraft, HostId};
+    use crate::{AuthKind, GroupDraft, Host, HostDatabase, HostDraft, HostId};
 
     fn draft(name: &str, category: Option<SnippetCategoryId>) -> SnippetDraft {
         SnippetDraft::new(name, format!("echo {name}"), category)

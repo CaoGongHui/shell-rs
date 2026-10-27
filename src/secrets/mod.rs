@@ -1,14 +1,14 @@
 //! 系统钥匙串（macOS Keychain Services / Windows 凭据管理器 / Secret Service）。
 //!
-//! ShellRS 的秘密只存在这里。读写接口和不碰钥匙串的实现在 `host::secrets`，
+//! ShellRS 的秘密只存在这里。读写接口和不碰钥匙串的实现在主机核心的 `secrets`，
 //! 这里是系统钥匙串本身。
 
 mod keychain;
 
 use std::sync::Arc;
 
-pub use crate::host::secrets::*;
 pub use keychain::KeychainSecretStore;
+pub use shellrs_hosts::secrets::*;
 
 /// 钥匙串里的服务名，所有条目共用。改了会让已保存的秘密全部失联。
 pub const SERVICE: &str = "shellrs";

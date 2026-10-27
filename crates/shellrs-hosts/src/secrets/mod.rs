@@ -1,7 +1,7 @@
 //! 秘密的读写接口和不碰系统钥匙串的几种实现。系统钥匙串本身
 //! （`KeychainSecretStore`）在应用里。
 //!
-//! ShellRS 的秘密只存在钥匙串里。数据库里永远不出现密码或口令，`host/database.rs`
+//! ShellRS 的秘密只存在钥匙串里。数据库里永远不出现密码或口令，`database.rs`
 //! 的 `schema_never_contains_secret_columns` 守着这条不变量。
 
 mod memory;
@@ -12,8 +12,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use zeroize::Zeroizing;
 
-pub use crate::ssh::{SecretRef, SecretSource, SharedSecretSource};
 pub use memory::{InMemorySecretStore, NoSecretStore, SecretsUnavailable};
+pub use shellrs_ssh::{SecretRef, SecretSource, SharedSecretSource};
 pub use temporary::TemporarySecretStore;
 
 /// 系统钥匙串的读写。

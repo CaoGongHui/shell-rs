@@ -224,7 +224,7 @@ pub fn read_public_key(path: &Path) -> Option<String> {
 
 /// A file's text, if it is small enough to be a key. Anything else that was
 /// picked by mistake is not read whole.
-pub(crate) fn read_small(path: &Path) -> Option<Zeroizing<String>> {
+pub fn read_small(path: &Path) -> Option<Zeroizing<String>> {
     const LARGEST_KEY: u64 = 64 * 1024;
     let mut file = File::open(path).ok()?;
     if file.metadata().ok()?.len() > LARGEST_KEY {

@@ -16,7 +16,7 @@ use shellrs_sync::{
 };
 
 use super::{JobError, SyncLocation, worker};
-use crate::host::{ApplyError, HostData};
+use crate::{ApplyError, HostData};
 
 /// Tries a round makes when its changes meet newer ones.
 const ATTEMPTS: usize = 3;

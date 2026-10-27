@@ -4,7 +4,7 @@
 
 use std::fmt;
 
-use gpui_kit::SharedString;
+use gpui_shared_string::SharedString;
 
 use super::{HostId, PublicId};
 

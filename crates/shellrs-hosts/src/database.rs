@@ -10,7 +10,7 @@ use std::{
     path::Path,
 };
 
-use gpui_kit::SharedString;
+use gpui_shared_string::SharedString;
 use rusqlite::{Connection, params};
 
 use super::{
@@ -678,7 +678,7 @@ impl HostDatabase {
     }
 
     /// An anonymous database that lives only as long as this value.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn in_memory() -> Result<Self, OpenError> {
         Self::prepare(Connection::open_in_memory()?)
     }

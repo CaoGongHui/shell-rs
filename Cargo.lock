@@ -7981,6 +7981,7 @@ dependencies = [
  "serde_yaml_ng",
  "serial2",
  "sha2 0.10.9",
+ "shellrs-hosts",
  "shellrs-ssh",
  "shellrs-sync",
  "sys-locale",
@@ -7996,6 +7997,25 @@ dependencies = [
  "zeroize",
  "zip",
  "zmodem2",
+]
+
+[[package]]
+name = "shellrs-hosts"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "gpui-pre-shared-string",
+ "rand 0.9.5",
+ "rusqlite",
+ "russh",
+ "serde",
+ "serde_json",
+ "shellrs-ssh",
+ "shellrs-sync",
+ "tempfile",
+ "url",
+ "zeroize",
 ]
 
 [[package]]

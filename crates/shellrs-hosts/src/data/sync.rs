@@ -23,21 +23,21 @@ use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use gpui_kit::SharedString;
+use gpui_shared_string::SharedString;
 use shellrs_sync::{
     self as sync, Kind, LocalRecord, LocalSnapshot, RecordData, RecordKey, SyncState,
 };
 use zeroize::Zeroizing;
 
 use super::{BookmarkMeta, Failure, HostData, SecretError};
-use crate::host::private_key::{read_small, write_key_file};
-use crate::host::{
+use crate::private_key::{read_small, write_key_file};
+use crate::secrets::{SecretRef, SecretStore};
+use crate::{
     AuthKind, BookmarkSide, Credential, CredentialDraft, CredentialId, CredentialKind,
     ForwardDraft, ForwardEndpoint, ForwardId, ForwardKind, ForwardRule, GroupDraft, GroupId, Host,
     HostDraft, HostGroup, HostId, Protocol, ProxyKind, ProxySettings, PublicId, Route, Snippet,
     SnippetCategory, SnippetCategoryId, SnippetDraft, SnippetId, SnippetScope, TelnetSettings,
 };
-use crate::secrets::{SecretRef, SecretStore};
 
 /// What one round of sync takes from the store, on the UI thread.
 #[derive(Clone)]
@@ -1411,7 +1411,7 @@ impl HostData {
         }
     }
 
-    fn write(&self, db: &crate::host::HostDatabase, write: &Write) -> rusqlite::Result<()> {
+    fn write(&self, db: &crate::HostDatabase, write: &Write) -> rusqlite::Result<()> {
         match write {
             Write::Pending(key, pending) => {
                 db.set_sync_pending(key.kind.as_str(), &key.id, *pending)
@@ -1508,8 +1508,8 @@ mod tests {
     };
 
     use super::*;
-    use crate::host::{HostDatabase, SerialSettings};
     use crate::secrets::{InMemorySecretStore, SharedSecretStore};
+    use crate::{HostDatabase, SerialSettings};
 
     /// One device: its store, keychain, key folder and sync state.
     struct Device {

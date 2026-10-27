@@ -5,7 +5,7 @@
 
 use std::cmp::Ordering;
 
-use gpui_kit::SharedString;
+use gpui_shared_string::SharedString;
 
 use super::{GroupId, HostId, PublicId};
 

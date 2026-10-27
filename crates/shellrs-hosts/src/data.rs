@@ -4,7 +4,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use gpui_kit::SharedString;
+use gpui_shared_string::SharedString;
 use zeroize::Zeroizing;
 
 use crate::secrets::{
@@ -615,7 +615,7 @@ impl HostData {
     }
 
     /// A saved host only: what the database's foreign keys may point at.
-    pub(crate) fn saved_host(&self, id: HostId) -> Option<&Host> {
+    pub fn saved_host(&self, id: HostId) -> Option<&Host> {
         self.hosts.iter().find(|host| host.id == id)
     }
 

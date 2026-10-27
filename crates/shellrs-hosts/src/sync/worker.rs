@@ -14,8 +14,8 @@ use shellrs_sync::{
 use zeroize::Zeroizing;
 
 use super::{JobError, SyncLocation, SyncServices};
-use crate::host::{SecretWork, SecretsWritten, SyncExport};
 use crate::secrets::{SecretRef, SecretStore};
+use crate::{SecretWork, SecretsWritten, SyncExport};
 
 /// The storage at `location`. A WebDAV server's or a bucket's opens with
 /// `login` (the password, the secret key), or the one the keychain keeps.

@@ -1,7 +1,7 @@
 //! How a host is reached: the host form's 「协议」. A Telnet host also keeps
 //! the prompts its 自动登录 looks for; a serial host, how its line is set.
 
-use gpui_kit::SharedString;
+use gpui_shared_string::SharedString;
 
 use super::SerialSettings;
 

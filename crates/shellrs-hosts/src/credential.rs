@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use gpui_kit::SharedString;
+use gpui_shared_string::SharedString;
 
 use crate::secrets::SecretRef;
 

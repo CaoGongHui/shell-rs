@@ -9,7 +9,7 @@ use super::{SecretRef, SecretStore, SharedSecretStore};
 /// 钥匙串外面包的一层：不保存的连接（外部连接）的密码（[`SecretRef::Temporary`]）
 /// 只记在这层内存里，其余的原样交给里面的钥匙串。
 ///
-/// `HostStore` 把注入的秘密存储包成这样，连接器读到的也是它，所以终端和 SFTP
+/// `HostData` 把注入的秘密存储包成这样，连接器读到的也是它，所以终端和 SFTP
 /// 用得上链接里的密码，而这个密码不会落进钥匙串；没有钥匙串的机器上照样能用。
 pub struct TemporarySecretStore {
     keychain: SharedSecretStore,
