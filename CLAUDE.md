@@ -63,6 +63,7 @@ cargo test --test ui new_host -- --nocapture   # 按名称片段跑单个 UI 测
 cargo test --test cli_bin                   # shellrs-cli 的端到端测试
 cargo test -p shellrs-sync                  # 只跑同步核心（不编 GPUI，快）
 cargo test -p shellrs-ssh                   # 只跑 SSH 核心（不编 GPUI）；SFTP 引擎的协议测试用本机的 sftp-server
+cargo test -p shellrs-hosts                 # 只跑主机核心（数据库、HostData、同步一轮；不编 GPUI，快）
 cargo test -p shellrs-mobile                # 手机端的 FFI 层（不带 -p 的 cargo 命令不含它，clippy 也要单独跑）
 scripts/build-ios.sh; scripts/build-android.sh   # 手机端的库和 Swift / Kotlin 绑定，产物在 target/mobile/；之后 crates/shellrs-mobile/tests/{swift,kotlin}/run.sh 编译并跑一遍绑定
 cargo test -p shellrs-sync webdav -- --include-ignored  # WebDAV 后端对本机 Apache（macOS 自带；Debian 装 apache2）；设 SHELLRS_TEST_WEBDAV_URL/_USER/_PASSWORD 改测别的服务器
@@ -77,31 +78,32 @@ cargo fmt --check
 
 ## 架构
 
-Cargo workspace，`cargo` 命令默认覆盖前三个包：
+Cargo workspace，`cargo` 命令默认覆盖前四个包：
 
 - 根包是桌面应用 `shellrs`：单个二进制 crate，带 `src/lib.rs`，好让 `tests/ui/` 驱动生产环境的 `Workspace`。
 - `crates/shellrs-sync` 是同步核心（MIT 许可，以后手机端也链接它）：不依赖 GPUI，也不依赖应用的类型；文件格式见它的 `FORMAT.md`。
 - `crates/shellrs-ssh` 是 SSH 核心（MIT 许可，桌面和手机共用）：登录（`SshConnector`、known_hosts、认证、跳板、代理）、连接上的通道（pty + shell、exec、SFTP）、探测主机系统、SFTP 传输引擎。不依赖 GPUI 和应用的类型，不产出文案。
+- `crates/shellrs-hosts` 是主机核心（MIT 许可，桌面和手机共用）：主机、分组、凭据、端口转发规则、命令片段、项目终端的模型，`HostDatabase`（结构与迁移）、`HostData`（内存为准、写穿 SQLite）、登录快照、`keys/` 里的私钥、秘密接口（`SecretStore`）和不碰钥匙串的实现；同步的导出和应用记录、一轮（`run_round`）、各任务的主体和建同步时的校验。不依赖 GPUI（模型的字符串用它单独的 `gpui-pre-shared-string`）、rust-i18n 和钥匙串，不产出文案。
 - `crates/shellrs-mobile` 是手机端的接口（MIT 许可，UniFFI 生成 Swift / Kotlin 绑定），不在 `default-members` 里，要 `-p shellrs-mobile`；用法、构建和线程规则见它的 `README.md`。
 
 模块按能力划分：功能模块不依赖 `workspace`（窗口壳），也不碰彼此的内部。
 
 - `app/`：全部用户动作（`actions.rs`）、快捷键、数据目录路径、图标、退出守卫。
-- `host/`：主机、分组、凭据、端口转发规则、命令片段的模型和 `HostStore`（内存为准、写穿 SQLite）、数据库与迁移、登录快照、主机树和对话框、导入（`import/`）。
+- `host/`：重新导出主机核心，加上应用自己的：GPUI 外壳 `HostStore`（`Deref` 到 `HostData`）、标签和错误的文案（`describe.rs`）、标签的连接状态、主机树和对话框、导入（`import/`）、`ssh://` 链接、快速连接。
 - `connection.rs`：测试连接（问答类型在核心，这里按原来的名字重新导出）。`ssh/`：重新导出核心，加上应用自己的：错误和问答的文案（`describe.rs`）、远程终端传输、测试连接的实现。`telnet/`、`serial/`：各自的终端传输。
 - `terminal/`：本地 PTY、驱动 `alacritty_terminal` 的引擎、`TerminalView`、关键字高亮、目录报告、ZMODEM、`exec --terminal`。
 - `sftp/`：重新导出核心的传输引擎（批次、并行、断点续传、重连），加上本机侧（目录、废纸篓）、引擎事件的文案和接到 SSH 的胶水。`explorer/`：SFTP 标签和右侧栏「文件」的界面、查找文件、预览。`editor/`：编辑器标签。
-- `forward/`：端口转发的运行和界面。`credential/`：凭据界面。`project/`：「项目」的树和对话框（模型在 `host/`，打开、保存和恢复终端在 `workspace/projects.rs`）。
+- `forward/`：端口转发的运行和界面。`credential/`：凭据界面。`project/`：「项目」的树和对话框（模型在主机核心，打开、保存和恢复终端在 `workspace/projects.rs`）。
 - `monitor/`、`gpu/`、`netstat/`、`processes/`、`services/`、`docker/`、`kubernetes/`、`tmux/`、`history/`、`snippets/`：右侧栏工具，各自是「命令 + 纯解析模型 + 面板」。
-- `secrets/`：钥匙串。`settings/`：设置与设置页（「云同步」页在 `sync_page.rs`）。`cli/`：外部 CLI。`update/`：在线升级。`analytics/`：匿名统计。
-- `sync/`：同步服务（什么时候同步、一轮怎么走，以及创建、加入、改密码、移除设备、关闭这些任务）和它的对话框；导出、应用记录在 `host/store/sync.rs`，处理器在 `workspace/sync.rs`。
+- `secrets/`：系统钥匙串（`KeychainSecretStore`），接口和其余实现在主机核心。`settings/`：设置与设置页（「云同步」页在 `sync_page.rs`）。`cli/`：外部 CLI。`update/`：在线升级。`analytics/`：匿名统计。
+- `sync/`：重新导出主机核心的同步，加上应用自己的：`SyncService`（什么时候同步，以及创建、加入、改密码、移除设备、关闭这些任务）、对话框和错误的文案（`describe.rs`）；一轮怎么走在核心的 `sync/round.rs`，导出、应用记录在核心的 `data/sync.rs`，处理器在 `workspace/sync.rs`。
 - `workspace/`：窗口壳，持有 store、`DockArea` 和**全部动作处理器**，按领域拆文件。`shared/`：多个功能共用的展示片段。
 
 ## 关键约定与坑
 
 ### 状态与持久化
 
-- **内存说了算，写穿。** `HostStore` 改内存 → 写库 → `notify`；写失败时内存照样改并发 `PersistFailed`，绝不静默吞掉。设置同理写穿 `settings.json`。
+- **内存说了算，写穿。** `HostData` 改内存 → 写库；`HostStore` 调完再 `settle`：失败发 `PersistFailed`、有改动才 `notify`。写失败时内存照样改，绝不静默吞掉。设置同理写穿 `settings.json`。
 - **秘密只进钥匙串**，有守卫测试；`SecretStore` 是阻塞的，只在后台调用；秘密不放进派生了 `Debug` 的结构。ShellRS 保存的私钥在 `keys/`；用户自己的私钥文件从不改动或删除。
 - **登录快照在 UI 线程解析**：工作线程拿到的是查好凭据和跳板的 `HostLogin`，不读 store。
 - **对外只给 `PublicId`**，不给内部 id。
@@ -115,7 +117,7 @@ Cargo workspace，`cargo` 命令默认覆盖前三个包：
 - 键说用途，一句话一个键，不拼片段；插值写 `%{name}`。以 `%`、`{` 开头或含 `: ` 的值要加引号，否则那条文案会悄悄没了。
 - 中文是源语言，改中文时英文一起改。实体里不存翻译好的字符串，render 时翻译，语言切换即时生效。
 - 英文按 Design Guides：sentence case、单字符 `…`、按钮写结果，不写 Please / successfully。
-- `src/i18n.rs` 的守卫测试检查两种语言齐全、键都被用到、`src/` 和 `crates/shellrs-ssh`、`crates/shellrs-mobile` 里测试以外没有中文字面量（语言名那种要留的加 `// i18n: keep`）。
+- `src/i18n.rs` 的守卫测试检查两种语言齐全、键都被用到、`src/` 和 `crates/shellrs-ssh`、`crates/shellrs-hosts`、`crates/shellrs-mobile` 里测试以外没有中文字面量（语言名那种要留的加 `// i18n: keep`）。
 
 用词表（新文案照此）：
 
@@ -198,6 +200,14 @@ Cargo workspace，`cargo` 命令默认覆盖前三个包：
 - **FFI 层**：每个数据目录一个 `Core`，它持有多线程运行时；导出的方法里不直接用 tokio，一律 spawn 到 `Core` 的运行时、包一层 abort-on-drop（Kotlin 取消协程会中止后台任务；Swift 取消 `Task` 不会，UniFFI 还没传过去）。事件用拉（`next_event`）：终端泵一直把通道读空、放进合并缓冲区（russh 没有背压，读慢了会卡住整条连接），超出上限丢最旧的并报 `OutputDropped`；提问走无界队列。
 - 测试用的 SSH 服务器在核心的 `testing` feature（`shellrs_ssh::testing`），只给别的 crate 当 dev-dependency。
 - 续传记录（数据目录的 `upload-resume/`、`download-resume/`）的文件名有金样测试钉着，手机端和桌面用同一套。
+
+### 主机核心（`crates/shellrs-hosts`）
+
+- **核心不产出文案。** label 和错误都是类型（`ProtocolKind`、`HostDraftError`、`Failure`、`SecretError`、`JobError`、`LoginError` 等），桌面在 `host/describe.rs`、`sync/describe.rs` 用扩展 trait 翻译（`KindLabel::label()`、`ErrorMessage::message()`，调用处 `use … as _`）。要起名字的地方（复制主机的「副本」、新本地终端的默认名）由调用方把名字传进来。
+- **`HostData` 不通知、不碰线程。** 写方法改内存、写库，失败、转发设置的变化和 `Changed` 放进 `take_events()`，钥匙串写入放进 `take_secret_jobs()`（`SecretJob` 跨线程跑，结果交回 `secret_done`）。外壳上同名带 `cx` 的写方法优先被找到，所以绕不过 `settle`；新加写方法要加进 `host/store.rs` 的 `settled!` 列表。经 `DerefMut` 只调读方法和 `*_unnotified`。
+- **一轮同步经 `RoundHost`**：`run_round` 只经 `with_data`（短暂拿数据）和 `background`（阻塞的步骤）和外面打交道；桌面用 `WeakEntity<HostStore>` 加 `AsyncApp` 实现，每次用完数据都 `settle`。什么时候同步留在应用的 `SyncService`。
+- **核心不依赖应用。** `Host.sidebar_tool` 存 `ToolKind::key` 的字符串（不认识的原样留着）；品牌色和按地址取的颜色是 `u32`，应用用 `rgb()` 转；User-Agent 和设备信息由应用交给 `SyncServices::system`。
+- 测试夹具：`HostDatabase::in_memory` 在 `testing` feature，应用只在 dev-dependency 里打开；`HostData::seed()` 留在普通构建里，因为 `tests/ui/` 链接的是正常编出来的库。
 
 ### 终端
 
