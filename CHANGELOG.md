@@ -4,6 +4,12 @@
 
 One section per version, titled `## [version]`, optionally followed by a date. Each section is written in English here and in Chinese in [CHANGELOG.zh.md](CHANGELOG.zh.md), in the same change. The release workflow (`.github/workflows/release.yml`) takes the section with the tag’s version, as it is, for the GitHub release. The website’s changelog shows this file in English and Japanese and CHANGELOG.zh.md in Chinese (ShellRS’s update dialog opens it with What’s new). Written in Markdown, for users.
 
+## [0.1.17-beta.1]
+
+### Fixed
+
+- On Windows without the Visual C++ Redistributable, such as Windows 11 LTSC, ShellRS didn’t start: “VCRUNTIME140.dll was not found”.
+
 ## [0.1.16]
 
 ### Added

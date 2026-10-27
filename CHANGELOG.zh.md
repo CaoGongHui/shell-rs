@@ -4,6 +4,12 @@
 
 每个版本一节，标题写成 `## [版本号]`，可以在后面加日期。每一节同时写中文（这里）和英文（[CHANGELOG.md](CHANGELOG.md)），在同一次提交里。发布流程（`.github/workflows/release.yml`）把英文版里与 tag 同版本的那一节原样作为 GitHub Release 的说明；官网的更新日志英文和日文页显示英文版，中文页显示这一份（ShellRS 的更新对话框用「查看更新内容」打开官网的更新日志）。用 Markdown 书写，面向使用者。
 
+## [0.1.17-beta.1]
+
+### 修复
+
+- 修复 Windows 11 LTSC 等没装 Visual C++ 运行库的 Windows 上，ShellRS 启动时提示「找不到 VCRUNTIME140.dll」、打不开的问题。
+
 ## [0.1.16]
 
 ### 新增
