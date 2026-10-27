@@ -54,6 +54,8 @@ on:
       - "src/testing.rs"
       - "tests/cli_bin.rs"
       - "build.rs"
+      - ".cargo/config.toml"
+      - "scripts/windows-runtime.ps1"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
@@ -88,4 +90,7 @@ jobs:
       - run: "cargo test --lib serial::"
       - run: "cargo test --lib settings::model"
       - run: cargo test --test cli_bin
+      # The programs cli_bin built start without the Visual C++ runtime.
+      - run: ./scripts/windows-runtime.ps1 target/debug
+        shell: pwsh
       - run: cargo test --locked -p shellrs-sync

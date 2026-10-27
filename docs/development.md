@@ -14,7 +14,7 @@ sudo apt-get install -y cmake clang pkg-config libfontconfig-dev \
   libx11-xcb-dev libxcb1-dev libvulkan-dev libdbus-1-dev libssl-dev
 ```
 
-Windows 只在 CI（`.github/workflows/windows.yml`）上编译和测试。
+Windows 只在 CI（`.github/workflows/windows.yml`）上编译和测试。C 运行库静态链接进 exe（`.cargo/config.toml`），程序不依赖 VC++ 运行库，LTSC 版 Windows 也能直接启动；`scripts/windows-runtime.ps1` 在 CI 里检查。
 
 ## 运行和验证
 
