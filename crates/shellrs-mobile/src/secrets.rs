@@ -1,8 +1,13 @@
-//! Saved passwords and passphrases, which the app keeps in its platform's
-//! keychain and hands over when a connection asks.
+//! The app's keychain, where every saved secret lives: passwords and
+//! passphrases, and the keys and login of sync. The app implements it on
+//! its platform's keychain; the core reads and writes it by account name,
+//! the same names as the desktop's, so synced secrets land where they are
+//! looked for.
 
+use std::fmt;
 use std::sync::Arc;
 
+use shellrs_hosts::secrets::{SecretStore, SecretsUnavailable};
 use shellrs_ssh as ssh;
 use zeroize::Zeroizing;
 
@@ -28,14 +33,19 @@ pub enum SecretRef {
         port: u16,
     },
     /// The password of a connection that is not saved, by an id the app
-    /// gave it. Keep it in memory only.
+    /// gave it. The core keeps it in memory only: the keychain never sees
+    /// it.
     Temporary { host: u64 },
+    /// Sync's keys.
+    SyncKeyring,
+    /// The password of the WebDAV server, or the secret key of the S3
+    /// bucket, sync goes through.
+    SyncLogin,
 }
 
-impl SecretRef {
-    /// The core's secrets a login reads; `None` for those it never does.
-    fn from_core(secret: &ssh::SecretRef) -> Option<Self> {
-        Some(match secret {
+impl From<&ssh::SecretRef> for SecretRef {
+    fn from(secret: &ssh::SecretRef) -> Self {
+        match secret {
             ssh::SecretRef::Password { user, host, port } => Self::Password {
                 user: user.clone(),
                 host: host.clone(),
@@ -53,8 +63,9 @@ impl SecretRef {
                 port: *port,
             },
             ssh::SecretRef::Temporary { host } => Self::Temporary { host: *host },
-            ssh::SecretRef::SyncKeyring | ssh::SecretRef::SyncLogin => return None,
-        })
+            ssh::SecretRef::SyncKeyring => Self::SyncKeyring,
+            ssh::SecretRef::SyncLogin => Self::SyncLogin,
+        }
     }
 }
 
@@ -66,6 +77,8 @@ impl From<SecretRef> for ssh::SecretRef {
             SecretRef::Credential { keychain_id } => Self::credential(keychain_id),
             SecretRef::Proxy { user, host, port } => Self::proxy(user, host, port),
             SecretRef::Temporary { host } => Self::temporary(host),
+            SecretRef::SyncKeyring => Self::SyncKeyring,
+            SecretRef::SyncLogin => Self::SyncLogin,
         }
     }
 }
@@ -77,26 +90,96 @@ pub fn account_for(secret: SecretRef) -> String {
     ssh::SecretRef::from(secret).account()
 }
 
-/// Where the app keeps saved secrets: implemented in Swift or Kotlin.
+/// The app's keychain: implemented in Swift or Kotlin, on the platform's
+/// own (Keychain Services on iOS, the Keystore on Android). Each secret is
+/// a string under an account name ([`account_for`]); keep them all under
+/// one service, as the desktop keeps them under `shellrs`.
+///
+/// Only the core writes it: a password the app saves itself is one sync
+/// never hears of. Save through the store ([`crate::HostStore`]) instead.
+///
+/// Every method is called on one of the core's background threads and
+/// may take its time, but must not wait for the main thread (Face ID, a
+/// dialog): fail with [`KeychainError::Unavailable`] instead.
 #[uniffi::export(with_foreign)]
-pub trait SecretSource: Send + Sync {
-    /// The saved secret, or nothing when none is saved or it cannot be
-    /// read now (a locked keychain): the connection then asks the user.
-    ///
-    /// Called on a background thread, and only when a server wants the
-    /// secret. Return at once: never wait for the main thread, such as for
-    /// Face ID or a dialog. Ask through the connection's prompt instead.
-    fn secret(&self, secret: SecretRef) -> Option<String>;
+pub trait Keychain: Send + Sync {
+    /// Whether there is a keychain to keep secrets in now. Without one,
+    /// the app cannot save passwords or sync.
+    fn available(&self) -> bool;
+
+    /// The secret saved under `account`, `None` when none is.
+    fn get(&self, account: String) -> Result<Option<String>, KeychainError>;
+
+    /// Save `value` under `account`, in place of what was there.
+    fn set(&self, account: String, value: String) -> Result<(), KeychainError>;
+
+    /// Delete what is saved under `account`. Nothing being there is no
+    /// failure.
+    fn delete(&self, account: String) -> Result<(), KeychainError>;
 }
 
-/// The app's secrets as the core reads them.
-pub(crate) struct AppSecrets(pub(crate) Arc<dyn SecretSource>);
+/// Why the keychain did not do what it was asked.
+#[derive(Clone, Debug, PartialEq, Eq, uniffi::Error)]
+pub enum KeychainError {
+    /// There is no keychain now, or it is locked: nothing is read or kept.
+    Unavailable,
+    /// The keychain's own failure, in its words.
+    Failed { detail: String },
+}
 
-impl ssh::SecretSource for AppSecrets {
-    fn secret(&self, secret: &ssh::SecretRef) -> anyhow::Result<Option<Zeroizing<String>>> {
-        Ok(SecretRef::from_core(secret)
-            .and_then(|secret| self.0.secret(secret))
-            .map(Zeroizing::new))
+impl fmt::Display for KeychainError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unavailable => f.write_str("no keychain"),
+            Self::Failed { detail } => f.write_str(detail),
+        }
+    }
+}
+
+impl std::error::Error for KeychainError {}
+
+/// What the app's implementation threw that it should not have.
+impl From<uniffi::UnexpectedUniFFICallbackError> for KeychainError {
+    fn from(error: uniffi::UnexpectedUniFFICallbackError) -> Self {
+        Self::Failed {
+            detail: error.reason,
+        }
+    }
+}
+
+/// The app's keychain as the hosts core uses it.
+pub(crate) struct AppKeychain(pub(crate) Arc<dyn Keychain>);
+
+impl AppKeychain {
+    fn failed(error: KeychainError) -> anyhow::Error {
+        match error {
+            // What the core knows as no keychain at all.
+            KeychainError::Unavailable => SecretsUnavailable.into(),
+            KeychainError::Failed { detail } => anyhow::Error::msg(detail),
+        }
+    }
+}
+
+impl SecretStore for AppKeychain {
+    fn get(&self, secret: &ssh::SecretRef) -> anyhow::Result<Option<Zeroizing<String>>> {
+        self.0
+            .get(secret.account())
+            .map(|value| value.map(Zeroizing::new))
+            .map_err(Self::failed)
+    }
+
+    fn set(&self, secret: &ssh::SecretRef, value: &str) -> anyhow::Result<()> {
+        self.0
+            .set(secret.account(), value.to_owned())
+            .map_err(Self::failed)
+    }
+
+    fn delete(&self, secret: &ssh::SecretRef) -> anyhow::Result<()> {
+        self.0.delete(secret.account()).map_err(Self::failed)
+    }
+
+    fn is_available(&self) -> bool {
+        self.0.available()
     }
 }
 
@@ -136,5 +219,7 @@ mod tests {
             "proxy:me@proxy:3128"
         );
         assert_eq!(account_for(SecretRef::Temporary { host: 7 }), "temporary:7");
+        assert_eq!(account_for(SecretRef::SyncKeyring), "sync:keyring");
+        assert_eq!(account_for(SecretRef::SyncLogin), "sync:login");
     }
 }

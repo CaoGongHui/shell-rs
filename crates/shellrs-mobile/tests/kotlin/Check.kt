@@ -1,12 +1,28 @@
-// The Kotlin interface builds and works: a core connects to a closed port
-// and fails, typed as the network. `run.sh` runs it on this computer's JVM.
+// The Kotlin interface builds and works: a core keeps a host with its
+// password in the app's keychain, makes a key credential, checks sync's
+// forms, and connects to a closed port and fails, typed as the network.
+// `run.sh` runs it on this computer's JVM.
 import com.shellrs.core.*
 import java.nio.file.Files
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.system.exitProcess
 import kotlinx.coroutines.runBlocking
 
-class NoSecrets : SecretSource {
-    override fun secret(secret: SecretRef): String? = null
+/** The keychain, in memory. */
+class MemoryKeychain : Keychain {
+    val secrets = ConcurrentHashMap<String, String>()
+
+    override fun available(): Boolean = true
+
+    override fun get(account: String): String? = secrets[account]
+
+    override fun set(account: String, value: String) {
+        secrets[account] = value
+    }
+
+    override fun delete(account: String) {
+        secrets.remove(account)
+    }
 }
 
 fun check(condition: Boolean, message: () -> String) {
@@ -18,13 +34,58 @@ fun check(condition: Boolean, message: () -> String) {
 
 fun main() = runBlocking {
     val folder = Files.createTempDirectory("shellrs-kotlin")
-    val config = CoreConfig(folder.toString())
-    val core = Core(config, NoSecrets())
+    val config = CoreConfig(folder.toString(), "Kotlin", "android", "0.0.0")
+    val keychain = MemoryKeychain()
+    val core = Core(config, keychain)
 
     try {
-        Core(config, NoSecrets())
+        Core(config, keychain)
         check(false) { "a second core ran on the same folder" }
-    } catch (_: SshException.DataFolderInUse) {}
+    } catch (_: CoreException.DataFolderInUse) {}
+
+    // A host, its password in the keychain under the desktop's account.
+    val store = core.store()
+    val id = store.addHost(
+        HostDraft("web", HostProtocol.Ssh, "10.0.0.1", 22u, "root", HostAuth.Password, HostRoute.Direct, null, ""),
+        SecretChange.Set("hunter2"),
+        SecretChange.Keep,
+    )
+    check(store.hosts().map { it.id } == listOf(id)) { "the host is not listed" }
+    check(keychain.secrets["password:root@10.0.0.1:22"] == "hunter2") { "no password" }
+    check(store.nextEvent() == StoreEvent.Changed) { "no change said" }
+    try {
+        store.addHost(
+            HostDraft("", HostProtocol.Ssh, " ", 22u, "", HostAuth.NoPassword, HostRoute.Direct, null, ""),
+            SecretChange.Keep,
+            SecretChange.Keep,
+        )
+        check(false) { "a host without an address was saved" }
+    } catch (error: StoreException.Host) {
+        check(error.problem == HostProblem.ADDRESS) { "not the address: ${error.problem}" }
+    }
+
+    // A key credential, its key made here.
+    val key = store.generateKey(KeyAlgorithm.ED25519)
+    check(key.publicKey("phone").startsWith("ssh-ed25519 ")) { "not an Ed25519 key" }
+    val credential = store.addCredential(
+        CredentialDraft("phone", CredentialKind.KEY, "deploy"),
+        KeyChange.Generated(key, null),
+        SecretChange.Keep,
+    )
+    check(store.credentials().map { it.id } == listOf(credential)) { "the credential is not listed" }
+    try {
+        checkPrivateKey(key.publicKey(""))
+        check(false) { "a public key passed for a private one" }
+    } catch (_: KeyProblem.PublicKey) {}
+
+    // Sync's forms.
+    check(checkNewSyncPassword("short", "short") == PasswordProblem.TOO_SHORT) { "short passed" }
+    check(randomSyncPassword().length == 23) { "not a password in groups of five" }
+    try {
+        checkWebdavLogin("not a url", "me", "secret")
+        check(false) { "a bad address passed" }
+    } catch (_: LoginProblem.UrlInvalid) {}
+    check(core.sync().status().location == null) { "sync is on" }
 
     // Nothing listens on port 1.
     val connection = core.connect(

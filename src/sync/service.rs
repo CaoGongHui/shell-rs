@@ -19,7 +19,8 @@ use shellrs_sync::{
 use zeroize::Zeroizing;
 
 use super::{
-    Attention, JobError, RoundEnd, RoundHost, SyncLocation, SyncServices, run_round, worker,
+    Attention, Blocking, JobError, RoundEnd, RoundHost, SyncLocation, SyncServices, run_round,
+    worker,
 };
 use crate::host::{HostData, HostStore};
 use crate::secrets::{SecretStore, SharedSecretStore};
@@ -657,10 +658,7 @@ impl RoundHost for DesktopRound {
             .ok()
     }
 
-    fn background<R: Send + 'static>(
-        &self,
-        work: impl FnOnce() -> R + Send + 'static,
-    ) -> impl Future<Output = R> {
+    fn background<R: Send + 'static>(&self, work: Blocking<R>) -> impl Future<Output = R> + Send {
         self.cx.background_executor().spawn(async move { work() })
     }
 }

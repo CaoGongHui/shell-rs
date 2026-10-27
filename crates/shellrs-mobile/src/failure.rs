@@ -273,8 +273,6 @@ pub enum SshError {
     Failed {
         failure: Failure,
     },
-    /// Another core runs on this data folder.
-    DataFolderInUse,
     /// What should never happen: a bug in ShellRS.
     Internal {
         detail: String,
@@ -294,7 +292,6 @@ impl fmt::Display for SshError {
         match self {
             Self::NotConnected => f.write_str("not connected"),
             Self::Closed => f.write_str("closed"),
-            Self::DataFolderInUse => f.write_str("another core runs on this data folder"),
             Self::Failed { failure } => write!(f, "failed: {:?}", failure.links),
             Self::Internal { detail } => write!(f, "internal error: {detail}"),
         }

@@ -27,3 +27,5 @@ case "$(uname)" in
 esac
 target/debug/uniffi-bindgen generate --no-format --language kotlin \
     --library "$library" --out-dir "$out/kotlin"
+# What the generated interface cannot say: Android's certificate checks.
+cp crates/shellrs-mobile/android/Tls.kt "$out/kotlin/com/shellrs/core/"

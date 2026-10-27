@@ -11,7 +11,7 @@ out=target/mobile/kotlin-check
 rm -rf "$out"
 mkdir -p "$out"
 ${KOTLINC:-kotlinc} -nowarn -classpath "$CLASSPATH" -d "$out/check.jar" \
-    target/mobile/android/kotlin/com/shellrs/core/shellrs_mobile.kt \
+    target/mobile/android/kotlin/com/shellrs/core/*.kt \
     crates/shellrs-mobile/tests/kotlin/Check.kt
 java -Djna.library.path=target/debug \
     -classpath "$out/check.jar:$CLASSPATH" CheckKt

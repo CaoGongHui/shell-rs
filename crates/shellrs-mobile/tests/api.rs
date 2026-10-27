@@ -7,19 +7,59 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use shellrs_mobile::{
-    ConnectError, Connection, ConnectionEvent, Core, CoreConfig, EntryKind, FailureLink, IoKind,
-    Login, LoginMethod, PromptKind, PromptReply, Route, SecretRef, SecretSource, SftpEvent,
-    SshError, TerminalEvent, TerminalOptions, TransferPhase,
+    ConnectError, Connection, ConnectionEvent, Core, CoreConfig, CoreError, CredentialDraft,
+    CredentialKind, EntryKind, FailureLink, GroupDraft, HostAuth, HostDraft, HostProblem,
+    HostProtocol, HostRoute, HostStore, IoKind, KeyAlgorithm, KeyChange, KeyProblem, Keychain,
+    KeychainError, Login, LoginMethod, PromptKind, PromptReply, Route, SavedSecret, SecretChange,
+    SecretProblem, SecretRef, SftpEvent, SshError, StoreError, StoreEvent, StoreFailure,
+    TerminalEvent, TerminalOptions, TransferPhase, TreeDrop, TreeNode, account_for,
+    check_private_key,
 };
 use shellrs_ssh::testing::{TEST_PASSWORD, TEST_USER, TestServer, closed_port, has_sftp_server};
 
-/// What the app's keychain holds.
+/// What the app's keychain holds, by account.
 #[derive(Default)]
-struct Keychain(Mutex<HashMap<SecretRef, String>>);
+struct TestKeychain(Mutex<HashMap<String, String>>);
 
-impl SecretSource for Keychain {
-    fn secret(&self, secret: SecretRef) -> Option<String> {
-        self.0.lock().unwrap().get(&secret).cloned()
+impl TestKeychain {
+    fn get(&self, secret: SecretRef) -> Option<String> {
+        self.0.lock().unwrap().get(&account_for(secret)).cloned()
+    }
+
+    fn set(&self, secret: SecretRef, value: &str) {
+        self.0
+            .lock()
+            .unwrap()
+            .insert(account_for(secret), value.into());
+    }
+}
+
+impl Keychain for TestKeychain {
+    fn available(&self) -> bool {
+        true
+    }
+
+    fn get(&self, account: String) -> Result<Option<String>, KeychainError> {
+        Ok(self.0.lock().unwrap().get(&account).cloned())
+    }
+
+    fn set(&self, account: String, value: String) -> Result<(), KeychainError> {
+        self.0.lock().unwrap().insert(account, value);
+        Ok(())
+    }
+
+    fn delete(&self, account: String) -> Result<(), KeychainError> {
+        self.0.lock().unwrap().remove(&account);
+        Ok(())
+    }
+}
+
+fn config(data: &Path) -> CoreConfig {
+    CoreConfig {
+        data_dir: data.display().to_string(),
+        device_name: "Test phone".into(),
+        platform: "ios".into(),
+        app_version: "0.0.0".into(),
     }
 }
 
@@ -46,21 +86,11 @@ fn login(port: u16) -> Login {
 /// A core on a data folder of its own, with `password` saved for the
 /// server at `port`.
 fn core(data: &Path, port: u16, password: Option<&str>) -> Arc<Core> {
-    let keychain = Keychain::default();
+    let keychain = TestKeychain::default();
     if let Some(password) = password {
-        keychain
-            .0
-            .lock()
-            .unwrap()
-            .insert(password_ref(port), password.into());
+        keychain.set(password_ref(port), password);
     }
-    Core::new(
-        CoreConfig {
-            data_dir: data.display().to_string(),
-        },
-        Arc::new(keychain),
-    )
-    .unwrap()
+    Core::new(config(data), Arc::new(keychain)).unwrap()
 }
 
 /// `future`, or a failed test rather than a hung one.
@@ -326,15 +356,12 @@ async fn commands_run_beside_and_the_connection_answers_a_check() {
 async fn one_data_folder_has_one_core() {
     let data = tempfile::tempdir().unwrap();
     let first = core(data.path(), 22, None);
-    let config = CoreConfig {
-        data_dir: data.path().display().to_string(),
-    };
     assert!(matches!(
-        Core::new(config.clone(), Arc::new(Keychain::default())),
-        Err(SshError::DataFolderInUse)
+        Core::new(config(data.path()), Arc::new(TestKeychain::default())),
+        Err(CoreError::DataFolderInUse)
     ));
     drop(first);
-    Core::new(config, Arc::new(Keychain::default())).unwrap();
+    Core::new(config(data.path()), Arc::new(TestKeychain::default())).unwrap();
 }
 
 /// The session's events until the transfer is over.
@@ -427,4 +454,450 @@ async fn sftp_lists_changes_and_transfers_on_the_same_connection() {
     soon(connection.open_terminal(options())).await.unwrap();
     session.end();
     assert_eq!(soon(session.next_event()).await, None);
+}
+
+/// `check` holding, or a failed test rather than a hung one.
+async fn until(mut check: impl FnMut() -> bool) {
+    soon(async {
+        while !check() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+}
+
+fn host(name: &str, address: &str) -> HostDraft {
+    HostDraft {
+        name: name.into(),
+        protocol: HostProtocol::Ssh,
+        address: address.into(),
+        port: 22,
+        user: "root".into(),
+        auth: HostAuth::Password,
+        route: HostRoute::Direct,
+        group: None,
+        notes: String::new(),
+    }
+}
+
+fn password_of(address: &str) -> SecretRef {
+    SecretRef::Password {
+        user: "root".into(),
+        host: address.into(),
+        port: 22,
+    }
+}
+
+fn set(value: &str) -> SecretChange {
+    SecretChange::Set {
+        value: value.into(),
+    }
+}
+
+/// A core with `keychain`, on `data`.
+fn core_with(data: &Path, keychain: &Arc<TestKeychain>) -> Arc<Core> {
+    Core::new(config(data), keychain.clone()).unwrap()
+}
+
+/// The store's events until `wanted` comes.
+async fn event(store: &HostStore, wanted: impl Fn(&StoreEvent) -> bool) -> StoreEvent {
+    loop {
+        let event = soon(store.next_event()).await.expect("an event");
+        if wanted(&event) {
+            return event;
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hosts_and_their_passwords_are_kept_as_the_desktop_keeps_them() {
+    let data = tempfile::tempdir().unwrap();
+    let keychain = Arc::new(TestKeychain::default());
+    let core = core_with(data.path(), &keychain);
+    let store = core.store();
+
+    let group = store
+        .add_group(GroupDraft {
+            name: " 生产 ".into(),
+            parent: None,
+        })
+        .unwrap();
+    let draft = HostDraft {
+        group: Some(group),
+        ..host("", "10.0.0.1")
+    };
+    let id = soon(store.add_host(draft, set("hunter2"), SecretChange::Keep))
+        .await
+        .unwrap();
+    // In the keychain by the time it returns, under the desktop's account.
+    assert_eq!(
+        keychain.get(password_of("10.0.0.1")).as_deref(),
+        Some("hunter2")
+    );
+    assert_eq!(soon(store.next_event()).await, Some(StoreEvent::Changed));
+    let saved = store.host(id).unwrap();
+    assert_eq!(
+        (saved.name.as_str(), saved.group, saved.auth),
+        ("10.0.0.1", Some(group), HostAuth::Password)
+    );
+    assert_eq!(store.groups()[0].name, "生产");
+    assert_eq!(
+        soon(store.saved_secret(SavedSecret::HostPassword { host: id }))
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("hunter2")
+    );
+
+    // Moved to another address, its password left as it is goes along.
+    let moved = HostDraft {
+        group: Some(group),
+        ..host("web", "10.0.0.2")
+    };
+    soon(store.update_host(id, moved, SecretChange::Keep, SecretChange::Keep))
+        .await
+        .unwrap();
+    assert_eq!(
+        keychain.get(password_of("10.0.0.2")).as_deref(),
+        Some("hunter2")
+    );
+    assert_eq!(keychain.get(password_of("10.0.0.1")), None);
+
+    let copy = store.duplicate_host(id, "web copy".into()).unwrap();
+    assert!(store.move_node(TreeNode::Host { id: copy }, TreeDrop::Top));
+    assert_eq!(store.host(copy).unwrap().group, None);
+
+    // All of it there when the app starts again.
+    drop(store);
+    drop(core);
+    let core = core_with(data.path(), &keychain);
+    let store = core.store();
+    let names: Vec<_> = store
+        .hosts()
+        .into_iter()
+        .map(|host| (host.name, host.address, host.group, host.public_id))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            (
+                "web".into(),
+                "10.0.0.2".into(),
+                Some(group),
+                saved.public_id.clone()
+            ),
+            (
+                "web copy".into(),
+                "10.0.0.2".into(),
+                None,
+                store.host(copy).unwrap().public_id
+            ),
+        ]
+    );
+    assert_ne!(names[1].3, saved.public_id);
+
+    // Deleting the group deletes the host in it, and its password with it
+    // once no host uses it.
+    store.delete_host(copy).unwrap();
+    assert_eq!(store.delete_group(group).unwrap(), [id]);
+    assert!(store.hosts().is_empty());
+    until(|| keychain.get(password_of("10.0.0.2")).is_none()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_store_says_what_is_wrong_and_changes_nothing() {
+    let data = tempfile::tempdir().unwrap();
+    let keychain = Arc::new(TestKeychain::default());
+    let core = core_with(data.path(), &keychain);
+    let store = core.store();
+    let keep = || SecretChange::Keep;
+    let add = |draft: HostDraft| store.add_host(draft, keep(), keep());
+
+    assert!(matches!(
+        soon(add(host("web", " "))).await,
+        Err(StoreError::Host {
+            problem: HostProblem::Address
+        })
+    ));
+    assert!(matches!(
+        soon(add(HostDraft {
+            group: Some(99),
+            ..host("web", "10.0.0.1")
+        }))
+        .await,
+        Err(StoreError::GroupNotFound)
+    ));
+    assert!(matches!(
+        soon(add(HostDraft {
+            auth: HostAuth::Credential { id: 99 },
+            ..host("web", "10.0.0.1")
+        }))
+        .await,
+        Err(StoreError::CredentialNotFound)
+    ));
+    assert!(matches!(
+        soon(add(HostDraft {
+            route: HostRoute::Jump {
+                hosts: vec![Some(99)]
+            },
+            ..host("web", "10.0.0.1")
+        }))
+        .await,
+        Err(StoreError::JumpHostNotFound)
+    ));
+    assert!(store.hosts().is_empty());
+
+    let bastion = soon(add(host("bastion", "10.0.0.1"))).await.unwrap();
+    let behind = HostDraft {
+        route: HostRoute::Jump {
+            hosts: vec![Some(bastion)],
+        },
+        ..host("db", "10.0.0.2")
+    };
+    let db = soon(add(behind.clone())).await.unwrap();
+    assert!(matches!(
+        soon(store.update_host(
+            db,
+            HostDraft {
+                route: HostRoute::Jump {
+                    hosts: vec![Some(db)]
+                },
+                ..behind
+            },
+            keep(),
+            keep()
+        ))
+        .await,
+        Err(StoreError::JumpThroughItself)
+    ));
+    // Another host goes through it: it stays an SSH host.
+    let telnet = HostDraft {
+        protocol: HostProtocol::Telnet {
+            user_prompt: String::new(),
+            password_prompt: String::new(),
+        },
+        port: 23,
+        ..host("bastion", "10.0.0.1")
+    };
+    assert!(matches!(
+        soon(store.update_host(bastion, telnet, keep(), keep())).await,
+        Err(StoreError::HasDependents)
+    ));
+    assert_eq!(store.host(bastion).unwrap().protocol, HostProtocol::Ssh);
+
+    let top = store
+        .add_group(GroupDraft {
+            name: "top".into(),
+            parent: None,
+        })
+        .unwrap();
+    let inner = store
+        .add_group(GroupDraft {
+            name: "inner".into(),
+            parent: Some(top),
+        })
+        .unwrap();
+    assert!(matches!(
+        store.add_group(GroupDraft {
+            name: " ".into(),
+            parent: None
+        }),
+        Err(StoreError::GroupName)
+    ));
+    assert!(matches!(
+        store.update_group(
+            top,
+            GroupDraft {
+                name: "top".into(),
+                parent: Some(inner)
+            }
+        ),
+        Err(StoreError::GroupIntoItself)
+    ));
+    assert!(matches!(store.delete_host(99), Err(StoreError::NotFound)));
+    assert!(matches!(core.connect_host(99), Err(StoreError::NotFound)));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn key_credentials_keep_their_keys_in_the_data_folder() {
+    let data = tempfile::tempdir().unwrap();
+    let keychain = Arc::new(TestKeychain::default());
+    let core = core_with(data.path(), &keychain);
+    let store = core.store();
+
+    let key = soon(store.generate_key(KeyAlgorithm::Ed25519))
+        .await
+        .unwrap();
+    let public = key.public_key("phone".into());
+    assert!(public.starts_with("ssh-ed25519 "), "{public}");
+    let draft = CredentialDraft {
+        name: "phone".into(),
+        kind: CredentialKind::Key,
+        user: "deploy".into(),
+    };
+    let id = soon(store.add_credential(
+        draft.clone(),
+        KeyChange::Generated {
+            key,
+            passphrase: Some("open sesame".into()),
+        },
+        SecretChange::Keep,
+    ))
+    .await
+    .unwrap();
+
+    let kept: Vec<_> = std::fs::read_dir(data.path().join("keys"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    let [path] = kept.as_slice() else {
+        panic!("one key file: {kept:?}");
+    };
+    let passphrase = SecretRef::Passphrase {
+        key_path: path.display().to_string(),
+    };
+    assert_eq!(
+        keychain.get(passphrase.clone()).as_deref(),
+        Some("open sesame")
+    );
+    let text = std::fs::read_to_string(path).unwrap();
+    assert!(check_private_key(text.clone()).unwrap().encrypted);
+    let shown = soon(store.public_key(id)).await.unwrap();
+    assert_eq!(
+        shown.split(' ').take(2).collect::<Vec<_>>(),
+        public.split(' ').take(2).collect::<Vec<_>>()
+    );
+
+    // A pasted key: a public one is no use.
+    assert!(matches!(
+        check_private_key(public.clone()),
+        Err(KeyProblem::PublicKey)
+    ));
+    assert!(matches!(
+        soon(store.update_credential(
+            id,
+            draft.clone(),
+            KeyChange::Text {
+                text: public,
+                passphrase: None
+            },
+            SecretChange::Keep
+        ))
+        .await,
+        Err(StoreError::Key {
+            problem: KeyProblem::PublicKey
+        })
+    ));
+
+    // A host using it logs in as its user.
+    let using = HostDraft {
+        auth: HostAuth::Credential { id },
+        user: String::new(),
+        ..host("app", "10.0.0.3")
+    };
+    let app = soon(store.add_host(using, SecretChange::Keep, SecretChange::Keep))
+        .await
+        .unwrap();
+    assert_eq!(store.host(app).unwrap().user, "deploy");
+    assert_eq!(store.hosts_using(id), [app]);
+
+    // Deleted, its hosts log in on their own; its key file and the
+    // passphrase go.
+    assert_eq!(store.delete_credential(id).unwrap(), [app]);
+    assert_eq!(store.host(app).unwrap().auth, HostAuth::NoPassword);
+    assert!(!path.exists());
+    until(|| keychain.get(passphrase.clone()).is_none()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_saved_host_connects_and_goes_to_the_front_of_the_recent_ones() {
+    let data = tempfile::tempdir().unwrap();
+    let server = TestServer::start(data.path().into()).await.unwrap();
+    let keychain = Arc::new(TestKeychain::default());
+    let core = core_with(data.path(), &keychain);
+    let store = core.store();
+    let draft = HostDraft {
+        port: server.port,
+        user: TEST_USER.into(),
+        ..host("test", "127.0.0.1")
+    };
+    let id = soon(store.add_host(draft, set(TEST_PASSWORD), SecretChange::Keep))
+        .await
+        .unwrap();
+    assert!(store.recent_hosts().is_empty());
+
+    let connection = core.connect_host(id).unwrap();
+    loop {
+        match next(&connection).await {
+            ConnectionEvent::Prompt { prompt } => {
+                assert!(matches!(prompt.kind, PromptKind::UnknownHost { .. }));
+                connection.answer(prompt.id, PromptReply::TrustAndSave);
+            }
+            ConnectionEvent::Connected { .. } => break,
+            event => panic!("{event:?}"),
+        }
+    }
+    until(|| store.recent_hosts().first().map(|host| host.id) == Some(id)).await;
+
+    let telnet = HostDraft {
+        protocol: HostProtocol::Telnet {
+            user_prompt: String::new(),
+            password_prompt: String::new(),
+        },
+        port: 23,
+        ..host("switch", "10.0.0.9")
+    };
+    let telnet = soon(store.add_host(telnet, SecretChange::Keep, SecretChange::Keep))
+        .await
+        .unwrap();
+    assert!(matches!(core.connect_host(telnet), Err(StoreError::NotSsh)));
+}
+
+/// A keychain that is locked.
+struct Locked;
+
+impl Keychain for Locked {
+    fn available(&self) -> bool {
+        false
+    }
+
+    fn get(&self, _: String) -> Result<Option<String>, KeychainError> {
+        Err(KeychainError::Unavailable)
+    }
+
+    fn set(&self, _: String, _: String) -> Result<(), KeychainError> {
+        Err(KeychainError::Unavailable)
+    }
+
+    fn delete(&self, _: String) -> Result<(), KeychainError> {
+        Err(KeychainError::Unavailable)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_password_the_keychain_did_not_take_is_said_and_the_host_kept() {
+    let data = tempfile::tempdir().unwrap();
+    let core = Core::new(config(data.path()), Arc::new(Locked)).unwrap();
+    let store = core.store();
+    let id = soon(store.add_host(host("web", "10.0.0.1"), set("hunter2"), SecretChange::Keep))
+        .await
+        .unwrap();
+    assert!(store.host(id).is_some());
+    let failed = event(&store, |event| matches!(event, StoreEvent::Failed { .. })).await;
+    assert_eq!(
+        failed,
+        StoreEvent::Failed {
+            failure: StoreFailure::Secret {
+                secret: password_of("10.0.0.1"),
+                writing: true,
+                problem: SecretProblem::Unavailable,
+            }
+        }
+    );
+    assert!(matches!(
+        soon(store.saved_secret(SavedSecret::HostPassword { host: id })).await,
+        Err(StoreError::Secret {
+            problem: SecretProblem::Unavailable
+        })
+    ));
 }

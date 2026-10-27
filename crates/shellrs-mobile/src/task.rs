@@ -9,20 +9,49 @@ use tokio::task::JoinHandle;
 
 use crate::failure::SshError;
 
+/// What a call fails with when its work never finished.
+pub(crate) trait CallError: Send + 'static {
+    /// The core is gone, and its runtime with it.
+    fn closed() -> Self;
+    /// The work panicked: a bug in ShellRS.
+    fn internal(detail: String) -> Self;
+}
+
+impl CallError for SshError {
+    fn closed() -> Self {
+        Self::Closed
+    }
+
+    fn internal(detail: String) -> Self {
+        Self::Internal { detail }
+    }
+}
+
 /// Run `future` on `runtime` and wait for it. Swift cancelling its task or
 /// Kotlin its coroutine drops the call's future, which stops the work too
 /// rather than leaving it running unseen. A panic comes back as an error.
-pub(crate) async fn run<T: Send + 'static>(
+pub(crate) async fn run<T: Send + 'static, E: CallError>(
     runtime: &Handle,
-    future: impl Future<Output = Result<T, SshError>> + Send + 'static,
-) -> Result<T, SshError> {
+    future: impl Future<Output = Result<T, E>> + Send + 'static,
+) -> Result<T, E> {
     match AbortOnDrop(runtime.spawn(future)).await {
         Ok(result) => result,
-        // The core is gone, and its runtime with it.
-        Err(error) if error.is_cancelled() => Err(SshError::Closed),
-        Err(panic) => Err(SshError::Internal {
-            detail: panic.to_string(),
-        }),
+        Err(error) if error.is_cancelled() => Err(E::closed()),
+        Err(panic) => Err(E::internal(panic.to_string())),
+    }
+}
+
+/// Run `work`, which blocks, on `runtime`'s threads for it, and wait for
+/// it. A panic goes on in the caller, to come back from [`run`].
+pub(crate) async fn blocking<R: Send + 'static>(
+    runtime: &Handle,
+    work: impl FnOnce() -> R + Send + 'static,
+) -> R {
+    match runtime.spawn_blocking(work).await {
+        Ok(result) => result,
+        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+        // The runtime is going, and the caller's task with it.
+        Err(_) => std::future::pending().await,
     }
 }
 

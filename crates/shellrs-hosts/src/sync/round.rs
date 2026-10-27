@@ -111,16 +111,20 @@ pub enum RoundEnd {
     Failed(JobError),
 }
 
+/// Work that blocks, for [`RoundHost::background`].
+pub type Blocking<R> = Box<dyn FnOnce() -> R + Send>;
+
 /// What a round needs of the app.
 pub trait RoundHost {
     /// Run `f` with the app's data, briefly; `None` once the data is gone.
     fn with_data<R>(&self, f: impl FnOnce(&mut HostData) -> R) -> Option<R>;
 
     /// Run `work`, which blocks, off the thread the round runs on.
-    fn background<R: Send + 'static>(
-        &self,
-        work: impl FnOnce() -> R + Send + 'static,
-    ) -> impl Future<Output = R>;
+    ///
+    /// `work` comes boxed: with a closure's type in the future's, rustc
+    /// cannot tell the round's future `Send`, which a multi-threaded
+    /// runtime needs.
+    fn background<R: Send + 'static>(&self, work: Blocking<R>) -> impl Future<Output = R> + Send;
 }
 
 /// One round at `location`, tried again while its changes meet newer
@@ -142,10 +146,10 @@ pub async fn run_round(
         .background({
             let (services, location, secrets) =
                 (services.clone(), location.clone(), secrets.clone());
-            move || worker::open(&services, &location, None, &*secrets)
+            Box::new(move || worker::open(&services, &location, None, &*secrets).map(Remote))
         })
         .await;
-    let remote = match remote {
+    let Remote(remote) = match remote {
         Ok(remote) => remote,
         Err(error) => return stopped(error, signs_in),
     };
@@ -162,7 +166,9 @@ pub async fn run_round(
         let pulled = host
             .background({
                 let (remote, secrets, export) = (remote.clone(), secrets.clone(), export.clone());
-                move || worker::pull_round(&*remote, &*secrets, &export, state.as_deref(), opts)
+                Box::new(move || {
+                    worker::pull_round(&*remote, &*secrets, &export, state.as_deref(), opts)
+                })
             })
             .await;
         let (pulled, keyring) = match pulled {
@@ -188,7 +194,7 @@ pub async fn run_round(
             .background({
                 let (remote, secrets, device) =
                     (remote.clone(), secrets.clone(), services.device.clone());
-                move || {
+                Box::new(move || {
                     worker::push_round(
                         &*remote,
                         &*secrets,
@@ -198,7 +204,7 @@ pub async fn run_round(
                         &device,
                         &state,
                     )
-                }
+                })
             })
             .await;
         if host
@@ -226,6 +232,11 @@ pub async fn run_round(
     }
     RoundEnd::Failed(JobError::Busy)
 }
+
+/// The storage a round opened, as [`RoundHost::background`] gives it
+/// back: a type of its own, without the lifetime a `dyn` carries, which
+/// rustc loses on the way to telling the round's future `Send`.
+struct Remote(Arc<dyn SyncStore>);
 
 /// A round's error, or what the user is to settle when only they can. A
 /// refusal is a login's to settle on a server or a bucket, a folder's

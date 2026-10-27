@@ -79,6 +79,24 @@ pub enum ProxyKind {
     Socks5,
 }
 
+impl From<ProxyKind> for ssh::ProxyKind {
+    fn from(kind: ProxyKind) -> Self {
+        match kind {
+            ProxyKind::Http => Self::Http,
+            ProxyKind::Socks5 => Self::Socks5,
+        }
+    }
+}
+
+impl From<ssh::ProxyKind> for ProxyKind {
+    fn from(kind: ssh::ProxyKind) -> Self {
+        match kind {
+            ssh::ProxyKind::Http => Self::Http,
+            ssh::ProxyKind::Socks5 => Self::Socks5,
+        }
+    }
+}
+
 impl From<LoginMethod> for ssh::LoginMethod {
     fn from(method: LoginMethod) -> Self {
         match method {
@@ -111,10 +129,7 @@ impl From<Login> for ssh::HostLogin {
                     .collect(),
             ),
             Route::Proxy { proxy } => ssh::LoginRoute::Proxy(ssh::ProxyLogin {
-                kind: match proxy.kind {
-                    ProxyKind::Http => ssh::ProxyKind::Http,
-                    ProxyKind::Socks5 => ssh::ProxyKind::Socks5,
-                },
+                kind: proxy.kind.into(),
                 host: proxy.host,
                 port: proxy.port,
                 user: proxy.user,
