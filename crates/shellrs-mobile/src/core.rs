@@ -4,11 +4,12 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use shellrs_hosts::secrets::KeychainSource;
 use shellrs_hosts::sync::SyncServices;
-use shellrs_hosts::{HostData, HostDatabase, HostId, OpenError};
-use shellrs_ssh::{self as ssh, AgentLocation, SshConnector};
+use shellrs_hosts::{HostData, HostDatabase, HostId, HostOs, OpenError};
+use shellrs_ssh::{self as ssh, AgentLocation, HostOsProbe, ProbeOutcome, SshConnector, SshHandle};
 use shellrs_sync::DeviceInfo;
 use tokio::runtime::{Handle, Runtime};
 
@@ -121,7 +122,8 @@ impl Core {
 
     /// Start connecting to a saved SSH host, and return at once: what
     /// happens comes as the connection's events. Once it is in, the host
-    /// goes to the front of the recent ones.
+    /// goes to the front of the recent ones, and what system it runs on is
+    /// asked again for its mark.
     pub fn connect_host(&self, id: u64) -> Result<Arc<Connection>, StoreError> {
         let id = HostId(id);
         let login = {
@@ -135,6 +137,9 @@ impl Core {
             }
             data.login_of(host)
         };
+        // Not through a bastion host that opened a link: another channel
+        // ends its session.
+        let shell_only = login.shell_only;
         let connection = Connection::start(
             self.handle.clone(),
             self.connector.clone(),
@@ -143,20 +148,22 @@ impl Core {
         );
         let (store, mut state) = (self.store.clone(), connection.inner.state.clone());
         self.handle.spawn(async move {
-            loop {
-                let (up, closed) = {
-                    let state = state.borrow_and_update();
-                    (
-                        matches!(*state, State::Up { .. }),
-                        matches!(*state, State::Closed),
-                    )
+            let handle = loop {
+                let handle = match &*state.borrow_and_update() {
+                    State::Up { handle, .. } => Some(handle.clone()),
+                    State::Closed => return,
+                    State::Connecting => None,
                 };
-                if up {
-                    let _ = store.with_data(|data| data.record_connection(id));
+                if let Some(handle) = handle {
+                    break handle;
                 }
-                if up || closed || state.changed().await.is_err() {
+                if state.changed().await.is_err() {
                     return;
                 }
+            };
+            let _ = store.with_data(|data| data.record_connection(id));
+            if !shell_only {
+                probe(&handle, &store, id).await;
             }
         });
         Ok(connection)
@@ -284,6 +291,31 @@ impl Drop for Core {
             runtime.shutdown_background();
         }
         release(&self.data_dir);
+    }
+}
+
+/// How long each step of [`probe`] may take.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The most a step of [`probe`] reads; the probe itself keeps less.
+const PROBE_OUTPUT_LIMIT: usize = 8 * 1024;
+
+/// Ask what system the host runs on, on channels of their own, as the
+/// desktop does each time it connects, and keep it for the host's mark. A
+/// host that will not say keeps the mark it had.
+async fn probe(handle: &SshHandle, store: &Arc<Shared>, id: HostId) {
+    let mut probe = HostOsProbe::new();
+    while let Some(command) = probe.command() {
+        let Ok(output) = ssh::run_exec(handle, command, PROBE_OUTPUT_LIMIT, PROBE_TIMEOUT).await
+        else {
+            return;
+        };
+        probe.push(&output);
+        if let ProbeOutcome::Detected(key) = probe.finish()
+            && let Some(os) = HostOs::from_stored(key)
+        {
+            let _ = store.with_data(|data| data.set_host_os(id, Some(os)));
+        }
     }
 }
 

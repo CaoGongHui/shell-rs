@@ -40,8 +40,12 @@ pub fn closed_port() -> u16 {
 pub struct TestServer {
     pub port: u16,
     seen: Arc<Mutex<Seen>>,
+    replies: Replies,
     task: JoinHandle<()>,
 }
+
+/// What a command prints, when not itself.
+type Replies = Arc<Mutex<HashMap<String, String>>>;
 
 /// What the server was told.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -67,18 +71,30 @@ impl TestServer {
             auth_rejection_time_initial: Some(Duration::ZERO),
             ..Default::default()
         });
+        let replies = Replies::default();
         let mut server = Listener {
             directory,
             seen: seen.clone(),
+            replies: replies.clone(),
         };
         let task = tokio::spawn(async move {
             let _ = server.run_on_socket(config, &listener).await;
         });
-        Ok(Self { port, seen, task })
+        Ok(Self {
+            port,
+            seen,
+            replies,
+            task,
+        })
     }
 
     pub fn seen(&self) -> Seen {
         lock(&self.seen).clone()
+    }
+
+    /// From now on `command` prints `output` rather than itself.
+    pub fn reply(&self, command: &str, output: &str) {
+        lock(&self.replies).insert(command.into(), output.into());
     }
 }
 
@@ -91,6 +107,7 @@ impl Drop for TestServer {
 struct Listener {
     directory: PathBuf,
     seen: Arc<Mutex<Seen>>,
+    replies: Replies,
 }
 
 impl server::Server for Listener {
@@ -100,6 +117,7 @@ impl server::Server for Listener {
         Handler {
             directory: self.directory.clone(),
             seen: self.seen.clone(),
+            replies: self.replies.clone(),
             channels: HashMap::new(),
             shells: HashSet::new(),
         }
@@ -109,6 +127,7 @@ impl server::Server for Listener {
 struct Handler {
     directory: PathBuf,
     seen: Arc<Mutex<Seen>>,
+    replies: Replies,
     channels: HashMap<ChannelId, russh::Channel<server::Msg>>,
     /// The channels running the shell: russh hands every channel's data to
     /// `data`, SFTP's too.
@@ -201,7 +220,7 @@ impl server::Handler for Handler {
         Ok(())
     }
 
-    /// A command prints itself and succeeds.
+    /// A command prints itself, or its reply, and succeeds.
     async fn exec_request(
         &mut self,
         channel: ChannelId,
@@ -210,8 +229,12 @@ impl server::Handler for Handler {
     ) -> anyhow::Result<()> {
         let command = String::from_utf8_lossy(command).into_owned();
         lock(&self.seen).commands.push(command.clone());
+        let output = lock(&self.replies)
+            .get(&command)
+            .cloned()
+            .unwrap_or_else(|| format!("{command}\n"));
         session.channel_success(channel)?;
-        session.data(channel, format!("{command}\n").into_bytes())?;
+        session.data(channel, output.into_bytes())?;
         session.exit_status_request(channel, 0)?;
         session.eof(channel)?;
         session.close(channel)?;
@@ -281,6 +304,8 @@ fn sftp_server() -> Option<&'static str> {
     .find(|path| std::path::Path::new(path).exists())
 }
 
-fn lock(seen: &Mutex<Seen>) -> MutexGuard<'_, Seen> {
-    seen.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }

@@ -16,6 +16,7 @@ use shellrs_mobile::{
     check_private_key,
 };
 use shellrs_ssh::testing::{TEST_PASSWORD, TEST_USER, TestServer, closed_port, has_sftp_server};
+use shellrs_ssh::{PROBE_COMMAND, WINDOWS_PROBE_COMMAND};
 
 /// What the app's keychain holds, by account.
 #[derive(Default)]
@@ -838,6 +839,11 @@ async fn a_saved_host_connects_and_goes_to_the_front_of_the_recent_ones() {
         }
     }
     until(|| store.recent_hosts().first().map(|host| host.id) == Some(id)).await;
+    // The server answers neither step of the probe as a system would: the
+    // host keeps the mark it had.
+    until(|| server.seen().commands == [PROBE_COMMAND, WINDOWS_PROBE_COMMAND]).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(store.host(id).unwrap().os, None);
 
     let telnet = HostDraft {
         protocol: HostProtocol::Telnet {
@@ -851,6 +857,43 @@ async fn a_saved_host_connects_and_goes_to_the_front_of_the_recent_ones() {
         .await
         .unwrap();
     assert!(matches!(core.connect_host(telnet), Err(StoreError::NotSsh)));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_saved_host_is_asked_what_system_it_runs_on() {
+    let data = tempfile::tempdir().unwrap();
+    let server = TestServer::start(data.path().into()).await.unwrap();
+    server.reply(
+        PROBE_COMMAND,
+        "Linux\nNAME=\"Ubuntu\"\nID=ubuntu\nID_LIKE=debian\n",
+    );
+    let keychain = Arc::new(TestKeychain::default());
+    let core = core_with(data.path(), &keychain);
+    let store = core.store();
+    let draft = HostDraft {
+        port: server.port,
+        user: TEST_USER.into(),
+        ..host("test", "127.0.0.1")
+    };
+    let id = soon(store.add_host(draft, set(TEST_PASSWORD), SecretChange::Keep))
+        .await
+        .unwrap();
+    assert_eq!(store.host(id).unwrap().os, None);
+
+    let connection = core.connect_host(id).unwrap();
+    loop {
+        match next(&connection).await {
+            ConnectionEvent::Prompt { prompt } => {
+                connection.answer(prompt.id, PromptReply::TrustAndSave);
+            }
+            ConnectionEvent::Connected { .. } => break,
+            event => panic!("{event:?}"),
+        }
+    }
+    until(|| store.host(id).unwrap().os.is_some()).await;
+    let os = store.host(id).unwrap().os.unwrap();
+    assert_eq!((os.key.as_str(), os.name.as_str()), ("ubuntu", "Ubuntu"));
+    assert_eq!(server.seen().commands, [PROBE_COMMAND]);
 }
 
 /// A keychain that is locked.

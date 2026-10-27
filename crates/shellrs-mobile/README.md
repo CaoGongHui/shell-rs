@@ -124,6 +124,10 @@ desktop for now (`connectHost` fails with `notSsh`).
   `changed` says the lists changed (here, or through sync): read them again.
 - **Ids** are valid while the core runs; across launches, name a host by
   its `publicId`, which every device shares.
+- **The host's mark.** Each time `connectHost` gets in, the host is asked
+  what system it runs on, on a channel of its own, as the desktop asks; the
+  answer goes into its `os` and comes as `changed`. A host that will not
+  say keeps the mark it had.
 - **Secrets go through the store.** Saving a host or a credential takes
   what to do with its password (`SecretChange`: keep, clear or set) and,
   for a key credential, its key (`KeyChange`: keep, pasted text, or a key
