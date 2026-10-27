@@ -22,6 +22,9 @@ cargo test --lib                            # 只跑单元测试
 cargo test --test ui                        # 只跑 UI 集成测试
 cargo test --test ui new_host -- --nocapture   # 按名称片段跑单个 UI 测试
 cargo test -p shellrs-sync                  # 只跑同步核心
+cargo test -p shellrs-ssh                   # 只跑 SSH 核心
+cargo test -p shellrs-mobile                # 手机端的 FFI 层（不带 -p 的命令不含它）
+scripts/build-ios.sh; scripts/build-android.sh   # 手机端的库和 Swift / Kotlin 绑定，产物在 target/mobile/
 cargo clippy --all-targets -- -D warnings   # 必须无警告
 cargo fmt --check
 
@@ -36,15 +39,15 @@ cargo test -- --ignored                     # 会读写真实钥匙串的测试�
 
 ## 架构
 
-Cargo workspace：根包是桌面应用 `shellrs`，单个二进制 crate，带 `src/lib.rs`，这样 `tests/ui/` 能驱动生产环境的 `Workspace`；`crates/shellrs-sync` 是同步核心（MIT 许可，不依赖 GPUI 和应用，文件格式见它的 `FORMAT.md`）。模块按能力划分，将来可拆成独立 crate；功能模块不得依赖 `workspace`（窗口壳），也不得触碰彼此的内部实现。
+Cargo workspace：根包是桌面应用 `shellrs`，单个二进制 crate，带 `src/lib.rs`，这样 `tests/ui/` 能驱动生产环境的 `Workspace`；`crates/shellrs-sync` 是同步核心（MIT 许可，不依赖 GPUI 和应用，文件格式见它的 `FORMAT.md`）；`crates/shellrs-ssh` 是 SSH 核心（MIT 许可，桌面和手机共用：登录、通道、探测主机系统、SFTP 传输引擎；不依赖 GPUI 和应用，不产出文案）；`crates/shellrs-mobile` 是手机端的 UniFFI 接口（MIT 许可，不在 `default-members` 里，见它的 `README.md`）。模块按能力划分，将来可拆成独立 crate；功能模块不得依赖 `workspace`（窗口壳），也不得触碰彼此的内部实现。
 
 - `app/` — `actions.rs` 定义全部用户命令（`gpui_kit::actions!` 单元动作 + 携带 `HostId` / `GroupId` 的 `host_action!` / `group_action!` 动作）；`paths.rs` 解析数据目录（`SHELLRS_DATA_DIR` → Windows 便携版 `shellrs.exe` 旁边的 `data` → `dirs::data_dir()/shellrs`）与数据库路径；`mod.rs` 绑定快捷键、初始化 gpui-kit 并 `set_locale("zh-CN")`；`assets.rs` 用 `icon_assets!` 把额外的 Lucide 图标并入默认图标包——额外图标用 `CatalogIcon::*`，默认包用 `IconName::*`；`OS_ICONS` 另外嵌入 `assets/icons/os/*.svg`（各操作系统的真实 logo，取自 Simple Icons，CC0；Windows 那个是自己画的四格，Simple Icons 已下架），用 `Icon::default().path(os.icon_path())` 渲染。
 - `host/` — `model.rs`（Host / HostGroup / HostDraft / GroupDraft / `HostOs`；`Host.group` 与 `HostGroup.parent` 都是 `Option<GroupId>`，`Host.os` 是 `Option<HostOs>`）、`database.rs`（`HostDatabase`：rusqlite 连接、`PRAGMA user_version` 迁移、行与模型的映射）、`store.rs`（`HostStore` 实体，**内存是唯一事实来源**，写穿到数据库）、`outline.rs`（纯函数：store → `TreeItem`，递归铺开嵌套分组；节点 id 形如 `g:<id>` / `s:<id>`；`group_options` 给表单提供按全路径标注的分组列表）、`host_panel.rs`（左侧 Dock 面板：搜索 + 树 + 右键菜单）、`host_dialog.rs`、`group_dialog.rs`（`GroupForm`、`open_group_dialog`、`confirm_delete_group`）。
 - `terminal/` — 本地终端是真的：`transport.rs`（字节流传输的 trait）、`local_pty.rs`（`portable-pty` 实现，跑在专用线程上）、`engine.rs`（驱动 `alacritty_terminal`，解析线程 + 16ms UI 轮询批量刷新）、`terminal_view.rs`（网格渲染、选区、输入编码）、`local_terminal_panel.rs`（⌘T 开的本地标签页）、`model.rs`。远程主机的传输在 `ssh/`，中间区的标签页是 `terminal_panel.rs`。共享 prompt 协议位于 `connection.rs`，`transport.rs` 通过 `TerminalPrompt` / `TerminalPromptKind` / `TerminalSecret` 重导出保持兼容。
-- `ssh/` — `probe.rs`（探测远端系统的命令与纯解析函数，外加驱动两步探测的 `HostOsProbe` 状态机）、`transport.rs`：真实的 russh 客户端。known_hosts 校验写 `<data_dir>/known_hosts`（**不碰** `~/.ssh/known_hosts`），认证链是 agent → publickey → password → keyboard-interactive。密码和私钥口令先查 `secrets`，查不到或被服务器拒绝才走 prompt 弹框；被拒绝时**不删**钥匙串条目，只在弹框说明里讲清原因。
-- `secrets/` — 系统钥匙串（`keyring` 4：macOS Keychain / Windows 凭据管理器 / Secret Service）。`SecretRef` 决定归属：密码按 `user@host:port`（改名、复制主机都不丢，同一台机器的多个主机共用一条），私钥口令按文件路径（同一把钥匙只问一次），密码凭据的密码按凭据随机生成、永不复用的 `keychain_id`（`credential:<id>`）。`SecretStore` 的三个方法全是阻塞的，**只能**在后台执行器或传输层工作线程上调用。`InMemorySecretStore` 给测试，`NoSecretStore` 给没有钥匙串的机器（界面据此禁用密码字段）。
+- `ssh/` — 重新导出 `crates/shellrs-ssh`（`SshConnector`、`probe` 探测远端系统、`HostOsProbe` 等都在那里），自己只留错误和问答的文案（`describe.rs`：核心只给类型化的错误链和问答，这里沿链逐节翻译、用「: 」连起来）、远程终端的传输（`transport.rs`）和测试连接。known_hosts 校验写 `<data_dir>/known_hosts`（**不碰** `~/.ssh/known_hosts`），认证链是 agent → publickey → password → keyboard-interactive。密码和私钥口令先查 `secrets`，查不到或被服务器拒绝才走 prompt 弹框；被拒绝时**不删**钥匙串条目，只在弹框说明里讲清原因。
+- `secrets/` — 系统钥匙串（`keyring` 4：macOS Keychain / Windows 凭据管理器 / Secret Service），经 `KeychainSource` 交给核心的 `SecretSource`。`SecretRef`（定义在核心，手机端用同样的账户名）决定归属：密码按 `user@host:port`（改名、复制主机都不丢，同一台机器的多个主机共用一条），私钥口令按文件路径（同一把钥匙只问一次），密码凭据的密码按凭据随机生成、永不复用的 `keychain_id`（`credential:<id>`）。`SecretStore` 的三个方法全是阻塞的，**只能**在后台执行器或传输层工作线程上调用。`InMemorySecretStore` 给测试，`NoSecretStore` 给没有钥匙串的机器（界面据此禁用密码字段）。
 - `explorer/` — 目录与选择快照、`DataTable` 双栏、上传确认 / 冲突对话框、进度和取消 / 恢复展示。`ExplorerAction` 统一路由到工作区；文件扫描与网络操作在后台，目录响应按请求编号丢弃过期结果。
-- `sftp/` — 可注入传输与本地目录接口、`RemotePath`、russh-sftp 3.0.0 协议适配、有界并发分块上传、UUID 临时文件、安全替换、原子 JSON 续传记录和三次自动重连。`ssh/connection.rs` 的 `SshConnector` 与终端共享认证、钥匙串服务及 known_hosts 写锁。
+- `sftp/` — 传输引擎（`RemotePath`、russh-sftp 3.0.0 协议适配、有界并发分块上传、UUID 临时文件、安全替换、原子 JSON 续传记录和三次自动重连）在 `crates/shellrs-ssh/src/sftp/`，这里重新导出，自己只留本地目录接口和废纸篓（`local.rs`）、引擎事件的文案（`describe.rs`）和接到 SSH 的胶水（`transport.rs`）。核心的 `SshConnector` 与终端共享认证、钥匙串服务及 known_hosts 写锁。
 - `workspace/` — `workspace_view.rs` 持有 `HostStore`、`DockArea`、按主机登记的面板注册表，以及**全部动作处理器**；`title_bar.rs`、`status_bar.rs`、`recent_hosts.rs`（中间区没有标签页时显示的「最近连接」开始页，**不是** Dock 面板）、`dock_skin.rs`（`WorkspaceDockSkin`：包一层 `DockSkin`，中间区为空时用 `deferred` 把开始页画在空的中间区之上；工作区在 `DockEvent::LayoutChanged` 时同步「中间区是否为空」并在刚变空时把焦点移到开始页）。
 - `update/` — 在线升级：`feed.rs` 从 `dl.shellrs.com` 取已签名的清单和安装包（reqwest，走系统代理），`verify.rs` 先验 minisign 签名（trusted comment 绑定通道和版本）再信清单、按大小和 SHA-256 信安装包，`install*.rs` 按安装方式装（macOS 整包交换、Windows 运行 Inno 安装程序、Linux 覆盖 AppImage），`updater.rs` 的 `Updater` 实体管检查、下载和重启，工作线程的事件由 UI 定时轮询。不依赖 `workspace` 和 `settings`；`new_with_services` 里的 `Updater` 没有服务、从不联网，生产路径才 `set_services` + `start`，UI 测试经 `workspace.updater()` 注入假的。详见 `CLAUDE.md`、`docs/manual.zh.md` 的「下载与更新」和 `docs/release.md`。
 - `shared/` — 多个功能共用的展示片段（`ClosableTabTitle`、`HostMark`）。
