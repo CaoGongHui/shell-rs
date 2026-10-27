@@ -1,5 +1,5 @@
 use super::{EntryKind, FileMetadata, JournalError, RemotePath};
-use crate::ssh::WrapErr as _;
+use crate::WrapErr as _;
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest as _, Sha256};

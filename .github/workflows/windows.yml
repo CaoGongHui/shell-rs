@@ -1,8 +1,9 @@
 # The Windows build, which the Macs this is developed on cannot compile:
 # the whole workspace through clippy, the external CLI's tests, including
 # the named pipe between two processes, the updater's, the local SFTP pane's
-# paths (std canonicalizes to `\\?\C:\…` there), and the sync crate's, whose
-# folder store replaces files the Windows way.
+# paths (std canonicalizes to `\\?\C:\…` there), the SSH core's but for
+# the SFTP engine's, and the sync crate's, whose folder store replaces files
+# the Windows way.
 #
 # A push runs it only when it touches code that differs on Windows (the
 # files with `cfg(windows)` and friends, and the portable copy's), the
@@ -26,16 +27,18 @@ on:
       - "src/app/system_hotkey.rs"
       - "src/main.rs"
       - "src/bin/**"
-      - "src/ssh/connection.rs"
-      - "src/ssh/probe.rs"
+      - "crates/shellrs-ssh/Cargo.toml"
+      - "crates/shellrs-ssh/src/connection.rs"
+      - "crates/shellrs-ssh/src/probe.rs"
       - "src/ssh/transport.rs"
       - "tests/ui/connection.rs"
-      - "src/sftp/download.rs"
-      - "src/sftp/journal.rs"
+      - "crates/shellrs-ssh/src/sftp/download.rs"
+      - "crates/shellrs-ssh/src/sftp/journal.rs"
+      - "crates/shellrs-ssh/src/sftp/model.rs"
+      - "crates/shellrs-ssh/src/sftp/upload.rs"
+      - "crates/shellrs-ssh/src/sftp/sync.rs"
+      - "crates/shellrs-ssh/src/sftp/tests.rs"
       - "src/sftp/local.rs"
-      - "src/sftp/model.rs"
-      - "src/sftp/upload.rs"
-      - "src/sftp/sync.rs"
       - "src/credential/credential_dialog.rs"
       - "src/settings/model.rs"
       - "src/settings/settings_panel.rs"
@@ -73,6 +76,7 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: "cargo test --locked --lib ssh::"
+      - run: "cargo test --locked -p shellrs-ssh -- --skip sftp::"
       - run: "cargo test --locked --test ui connection::"
       - run: "cargo test --lib cli::"
       - run: "cargo test --lib update::"

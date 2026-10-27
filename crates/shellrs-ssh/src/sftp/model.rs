@@ -454,7 +454,6 @@ impl TransferProgress {
         self
     }
     /// How the batch's items ended so far.
-    #[cfg(test)]
     pub fn with_details(mut self, details: Vec<TransferDetail>) -> Self {
         self.succeeded = details
             .iter()
@@ -692,7 +691,7 @@ impl PermissionEdit {
 }
 
 /// A local item's metadata as SFTP gives a remote one's.
-pub(crate) fn local_metadata(metadata: &std::fs::Metadata) -> FileMetadata {
+pub fn local_metadata(metadata: &std::fs::Metadata) -> FileMetadata {
     let kind = if metadata.is_symlink() {
         EntryKind::Symlink
     } else if metadata.is_dir() {

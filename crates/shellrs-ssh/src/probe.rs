@@ -157,6 +157,12 @@ pub enum ProbeOutcome {
     GaveUp,
 }
 
+impl Default for HostOsProbe {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HostOsProbe {
     pub fn new() -> Self {
         Self {

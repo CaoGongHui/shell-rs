@@ -11,7 +11,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::ssh::wrap_shared;
+use crate::wrap_shared;
 
 /// What the engine says, kept whole for the app to word: a typed leaf,
 /// maybe over the error that caused it. Cheap to clone.

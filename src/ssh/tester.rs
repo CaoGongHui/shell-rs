@@ -1,6 +1,6 @@
 //! Log in once with the host form's values, for its 「测试连接」 button.
 use std::{
-    sync::{Arc, Mutex, OnceLock, Weak},
+    sync::{Arc, Mutex, MutexGuard, OnceLock, Weak},
     time::Duration,
 };
 
@@ -8,12 +8,12 @@ use anyhow::Result;
 use tokio::sync::watch;
 use zeroize::Zeroizing;
 
-use super::connection::{
-    SshConnectionConfig, SshConnector, SshPrompts, lock, timeout_excluding_prompts,
-};
 use super::describe::{describe_login_error, describe_missing_credential};
-use super::error::{MissingCredential, PasswordWanted, RouteFailure, find_cause};
-use super::prompt::{ConnectionPrompt, ConnectionPromptKind, ConnectionPromptReply};
+use super::{
+    ConnectionPrompt, ConnectionPromptKind, ConnectionPromptReply, MissingCredential,
+    PasswordWanted, RouteFailure, SshConnectionConfig, SshConnector, SshPrompts, find_cause,
+    timeout_excluding_prompts,
+};
 use crate::{
     connection::{ConnectionTester, LoginTest, TelnetTest, TrustCallback},
     host::{JumpLogin, LoginMethod, LoginRoute},
@@ -225,6 +225,12 @@ fn test_broker(
     let broker = Arc::new(SshPrompts::new(events, shutdown_rx).non_interactive());
     let _ = broker_slot.set(Arc::downgrade(&broker));
     (broker, host_trust, shutdown_tx)
+}
+
+/// Lock a mutex that a panicking thread may have poisoned; the data it guards
+/// here stays usable either way.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|error| error.into_inner())
 }
 
 /// Why a test failed, in the words the notification shows.

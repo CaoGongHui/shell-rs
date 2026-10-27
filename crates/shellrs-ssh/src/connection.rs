@@ -60,7 +60,7 @@ impl From<&HostLogin> for SshConnectionConfig {
 
 impl SshConnectionConfig {
     /// See [`HostLogin::shell_only`].
-    pub(crate) fn shell_only(&self) -> bool {
+    pub fn shell_only(&self) -> bool {
         self.login.shell_only
     }
 }
@@ -144,12 +144,12 @@ impl SshConnector {
     }
 
     /// The keychain this connector reads saved secrets from.
-    pub(crate) fn secrets(&self) -> &SharedSecretSource {
+    pub fn secrets(&self) -> &SharedSecretSource {
         &self.secrets
     }
 
     /// Same as [`Self::connect`], with saved secrets read from `secrets`.
-    pub(super) async fn connect_with(
+    pub async fn connect_with(
         &self,
         config: &SshConnectionConfig,
         broker: Arc<SshPrompts>,
@@ -179,7 +179,7 @@ impl SshConnector {
     /// `broker` is shut down; the jump hosts log in with their own logins and
     /// ask through `broker`, naming the jump host. What an SSH login starts
     /// from, and all a Telnet connection is.
-    pub(crate) async fn open_route(
+    pub async fn open_route(
         &self,
         route: &LoginRoute,
         host: &str,
@@ -368,7 +368,7 @@ fn forward_failure(name: &str, (host, port): (&str, u16), problem: ForwardProble
 
 /// What carries a connection to the host: a socket, or a channel through a
 /// jump host.
-pub(crate) type Tunnel = Box<dyn ChannelStream>;
+pub type Tunnel = Box<dyn ChannelStream>;
 
 /// The key exchanges ShellRS offers, in OpenSSH's order: russh's own list
 /// leaves out the NIST curves, which servers without curve25519 (Apache
@@ -537,7 +537,7 @@ impl SshPrompts {
         self.shutdown.clone()
     }
 
-    pub(super) fn prompt_activity_receiver(&self) -> watch::Receiver<bool> {
+    pub fn prompt_activity_receiver(&self) -> watch::Receiver<bool> {
         self.prompt_activity.subscribe()
     }
 
@@ -587,7 +587,7 @@ impl SshPrompts {
 
 /// Apply the network handshake timeout without counting time spent waiting
 /// for an explicit answer from the user to a host-trust prompt.
-pub(super) async fn timeout_excluding_prompts<F>(
+pub async fn timeout_excluding_prompts<F>(
     future: F,
     mut prompt_activity: watch::Receiver<bool>,
     timeout: Duration,
@@ -629,8 +629,6 @@ where
 
 pub type SshHandle = client::Handle<SshClientHandler>;
 
-/// Lock a mutex that a panicking thread may have poisoned; the data it guards
-/// here stays usable either way.
 /// The lock of the trust file at `path`, the same for every connector of
 /// it in the process: two connections that both save a key must not lose
 /// one, whoever made their connectors.
@@ -643,6 +641,8 @@ fn known_hosts_lock(path: &Path) -> Arc<Mutex<()>> {
         .clone()
 }
 
+/// Lock a mutex that a panicking thread may have poisoned; the data it guards
+/// here stays usable either way.
 pub(super) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|error| error.into_inner())
 }
@@ -1390,8 +1390,8 @@ mod tests {
 
         // What a refused or unresolvable connect looks like coming out of
         // russh: the socket's error wrapped, under the connector's context.
-        let refused = crate::ssh::wrap(
-            crate::ssh::ConnectError::Handshake,
+        let refused = crate::wrap(
+            crate::ConnectError::Handshake,
             russh::Error::IO(Error::from(ErrorKind::ConnectionRefused)),
         );
         assert!(is_network_error(&refused));
@@ -1417,12 +1417,21 @@ mod tests {
 
     #[test]
     fn connectors_of_one_trust_file_share_its_lock() {
-        use super::SshConnector;
+        use super::{SecretRef, SshConnector};
+        use crate::SecretSource;
         use std::sync::Arc;
+        use zeroize::Zeroizing;
+
+        struct NoSecrets;
+        impl SecretSource for NoSecrets {
+            fn secret(&self, _: &SecretRef) -> anyhow::Result<Option<Zeroizing<String>>> {
+                Ok(None)
+            }
+        }
 
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("known_hosts");
-        let connector = |path| SshConnector::new(path, Arc::new(crate::secrets::NoSecretStore));
+        let connector = |path| SshConnector::new(path, Arc::new(NoSecrets));
         let (one, other) = (connector(path.clone()), connector(path));
         assert!(Arc::ptr_eq(&one.known_hosts_lock, &other.known_hosts_lock));
         let elsewhere = connector(directory.path().join("other"));

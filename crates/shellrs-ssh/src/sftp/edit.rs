@@ -7,7 +7,7 @@
 //! size and modification time the file had when it was read or last saved.
 
 use super::{EditError, EntryKind, FileMetadata, Reason, RemotePath, client::RemoteFs};
-use crate::ssh::{Wrapped, wrap};
+use crate::{Wrapped, wrap};
 use anyhow::{Result, anyhow, bail};
 use futures::{StreamExt as _, stream::FuturesUnordered};
 use std::{

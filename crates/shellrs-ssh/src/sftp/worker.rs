@@ -17,7 +17,7 @@ use super::{
     operations, sync,
     upload::UploadBatch,
 };
-use crate::ssh::{LATENCY_INTERVAL, SshConnectionConfig, SshConnector, SshPrompts};
+use crate::{LATENCY_INTERVAL, SshConnectionConfig, SshConnector, SshPrompts};
 use anyhow::{Result, anyhow};
 use async_channel::Receiver;
 use std::{

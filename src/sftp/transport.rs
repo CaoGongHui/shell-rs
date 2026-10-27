@@ -4,9 +4,8 @@
 
 use super::{
     DirectoryListing, EngineEvent, EventSink, FileBytes, FileStamp, ReadFailure, RemotePath,
-    SaveFailure, SftpChannelOpener, SftpCommand, TerminalNotConnected, TextFile, TransferProgress,
-    TransferQuestion, describe_disconnect, describe_reason, describe_reason_link, engine,
-    worker::SftpWorker,
+    SaveFailure, SftpChannelOpener, SftpCommand, SftpWorker, TerminalNotConnected, TextFile,
+    TransferProgress, TransferQuestion, describe_disconnect, describe_reason, describe_reason_link,
 };
 use crate::{
     connection::{ConnectionPrompt, Latency},
@@ -17,6 +16,7 @@ use crate::{
 use anyhow::{Result, anyhow};
 use async_channel::{Receiver, Sender};
 use futures::future::BoxFuture;
+use shellrs_ssh::sftp as engine;
 use std::{path::PathBuf, sync::Arc};
 
 /// What a worker says, with every failure in words: those of the

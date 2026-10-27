@@ -201,6 +201,8 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut files = Vec::new();
         sources(&root.join("src"), &mut files);
+        // The SSH core says nothing in words: the app words what it says.
+        sources(&root.join("crates/shellrs-ssh/src"), &mut files);
         files.sort();
         files
             .into_iter()

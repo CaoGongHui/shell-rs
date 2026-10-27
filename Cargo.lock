@@ -7840,6 +7840,7 @@ dependencies = [
  "serde_yaml_ng",
  "serial2",
  "sha2 0.10.9",
+ "shellrs-ssh",
  "shellrs-sync",
  "sys-locale",
  "tempfile",
@@ -7854,6 +7855,28 @@ dependencies = [
  "zeroize",
  "zip",
  "zmodem2",
+]
+
+[[package]]
+name = "shellrs-ssh"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-channel",
+ "base64 0.22.1",
+ "dirs 6.0.0",
+ "dunce",
+ "futures",
+ "libc",
+ "russh",
+ "russh-sftp",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "uuid",
+ "zeroize",
 ]
 
 [[package]]

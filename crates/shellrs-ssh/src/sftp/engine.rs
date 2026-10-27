@@ -7,7 +7,7 @@ use super::{
     TransferAnswer, TransferProgress, TransferQuestion, UploadRequest,
     edit::{ReadFailure, SaveFailure},
 };
-use crate::ssh::{ConnectionPrompt, ConnectionPromptReply, HostLogin, Latency, SftpChannel};
+use crate::{ConnectionPrompt, ConnectionPromptReply, HostLogin, Latency, SftpChannel};
 use anyhow::Result;
 use futures::future::BoxFuture;
 use std::sync::Arc;

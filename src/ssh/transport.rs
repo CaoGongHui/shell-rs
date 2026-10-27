@@ -1,13 +1,8 @@
 use super::describe::{describe_channel_error, describe_error, describe_login_error};
 use super::{
-    ChannelError, ConnectError,
-    connection::{SshConnectionConfig, SshConnector, SshHandle, SshPrompts},
-    latency::{LATENCY_INTERVAL, round_trip},
-    probe::{HostOsProbe, ProbeOutcome},
-    run_terminal_worker,
-    session::{
-        PtySize, open_probe, open_sftp_channel, open_shell, resize_pty, run_exec, write_shell,
-    },
+    ChannelError, ConnectError, HostOsProbe, LATENCY_INTERVAL, ProbeOutcome, PtySize,
+    SshConnectionConfig, SshConnector, SshHandle, SshPrompts, open_probe, open_sftp_channel,
+    open_shell, resize_pty, round_trip, run_exec, run_terminal_worker, write_shell,
 };
 use crate::{
     connection::Latency,
@@ -305,7 +300,7 @@ mod tests {
     use crate::secrets::{
         InMemorySecretStore, NoSecretStore, SecretRef, SecretStore as _, SharedSecretSource,
     };
-    use crate::ssh::probe::{HOST_OS_KEYS, PROBE_COMMAND, WINDOWS_PROBE_COMMAND};
+    use crate::ssh::{HOST_OS_KEYS, PROBE_COMMAND, WINDOWS_PROBE_COMMAND};
     use crate::{
         connection::{ConnectionPromptKind, ConnectionPromptReply, ConnectionSecret},
         host::{AuthKind, Host, HostLoginExt},
