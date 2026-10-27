@@ -46,10 +46,10 @@ cargo fmt --check
 
 ## 手机端
 
-iOS、Android App 经 `crates/shellrs-mobile` 链接 SSH 核心：它用 [UniFFI](https://mozilla.github.io/uniffi-rs/) 生成 Swift 和 Kotlin 绑定，是 App 唯一依赖的稳定接口。它不在 `default-members` 里，命令要带 `-p shellrs-mobile`：
+iOS、Android App 经 `crates/shellrs-mobile` 链接 SSH 核心和主机核心（保存的主机、凭据和同步）：它用 [UniFFI](https://mozilla.github.io/uniffi-rs/) 生成 Swift 和 Kotlin 绑定，是 App 唯一依赖的稳定接口。它不在 `default-members` 里，命令要带 `-p shellrs-mobile`：
 
 ```sh
-cargo test -p shellrs-mobile   # 对测试进程里的 SSH 服务器走一遍接口
+cargo test -p shellrs-mobile   # 对测试进程里的 SSH 服务器、内存钥匙串和本机文件夹的同步走一遍接口
 cargo clippy -p shellrs-mobile --all-targets -- -D warnings
 scripts/build-ios.sh           # target/mobile/ios：xcframework 和 Swift 绑定
 scripts/build-android.sh       # target/mobile/android：jniLibs 和 Kotlin 绑定
@@ -57,7 +57,7 @@ crates/shellrs-mobile/tests/swift/run.sh    # 编译 Swift 绑定，对本机构
 crates/shellrs-mobile/tests/kotlin/run.sh   # 同上，Kotlin；CLASSPATH 给 kotlin-stdlib、kotlinx-coroutines-core-jvm、JNA
 ```
 
-iOS 需要 Xcode 和 `rustup target add aarch64-apple-ios aarch64-apple-ios-sim`；Android 需要 NDK r28 或更新（`ANDROID_NDK_HOME`）、`cargo install cargo-ndk` 和 `rustup target add aarch64-linux-android x86_64-linux-android`。用法、线程规则和前后台切换时 App 该做什么见 `crates/shellrs-mobile/README.md`；CI 在 `.github/workflows/mobile.yml`。
+iOS 需要 Xcode 和 `rustup target add aarch64-apple-ios aarch64-apple-ios-sim`；Android 需要 NDK r28 或更新（`ANDROID_NDK_HOME`）、`cargo install cargo-ndk` 和 `rustup target add aarch64-linux-android x86_64-linux-android`。Android 上同步走 HTTPS 时由系统校验证书，App 要先调 `Tls.setUp(context)` 并加上 `rustls-platform-verifier` 的 AAR。用法、线程规则、什么时候同步和前后台切换时 App 该做什么见 `crates/shellrs-mobile/README.md`；CI 在 `.github/workflows/mobile.yml`。
 
 ## Kubernetes
 

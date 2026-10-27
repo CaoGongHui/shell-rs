@@ -84,7 +84,7 @@ Cargo workspace，`cargo` 命令默认覆盖前四个包：
 - `crates/shellrs-sync` 是同步核心（MIT 许可，以后手机端也链接它）：不依赖 GPUI，也不依赖应用的类型；文件格式见它的 `FORMAT.md`。
 - `crates/shellrs-ssh` 是 SSH 核心（MIT 许可，桌面和手机共用）：登录（`SshConnector`、known_hosts、认证、跳板、代理）、连接上的通道（pty + shell、exec、SFTP）、探测主机系统、SFTP 传输引擎。不依赖 GPUI 和应用的类型，不产出文案。
 - `crates/shellrs-hosts` 是主机核心（MIT 许可，桌面和手机共用）：主机、分组、凭据、端口转发规则、命令片段、项目终端的模型，`HostDatabase`（结构与迁移）、`HostData`（内存为准、写穿 SQLite）、登录快照、`keys/` 里的私钥、秘密接口（`SecretStore`）和不碰钥匙串的实现；同步的导出和应用记录、一轮（`run_round`）、各任务的主体和建同步时的校验。不依赖 GPUI（模型的字符串用它单独的 `gpui-pre-shared-string`）、rust-i18n 和钥匙串，不产出文案。
-- `crates/shellrs-mobile` 是手机端的接口（MIT 许可，UniFFI 生成 Swift / Kotlin 绑定），不在 `default-members` 里，要 `-p shellrs-mobile`；用法、构建和线程规则见它的 `README.md`。
+- `crates/shellrs-mobile` 是手机端的接口（MIT 许可，UniFFI 生成 Swift / Kotlin 绑定）：包着 SSH 核心和主机核心（主机、分组、凭据、同步），不在 `default-members` 里，要 `-p shellrs-mobile`；用法、构建和线程规则见它的 `README.md`。
 
 模块按能力划分：功能模块不依赖 `workspace`（窗口壳），也不碰彼此的内部。
 
@@ -198,6 +198,7 @@ Cargo workspace，`cargo` 命令默认覆盖前四个包：
 - **核心不依赖应用。** 秘密经 `SecretSource` 读（阻塞，放进 `spawn_blocking`）；agent、默认私钥目录、NAT64 是 connector 的配置（手机上没有 agent 和 `~/.ssh`，要开 NAT64）。核心的 Rust API 在 workspace 里随时可改。
 - **稳定的只有 `shellrs-mobile` 的接口**：改名、删字段就得和 App 一起改。导出的方法不能叫 `close`（Kotlin 的 `AutoCloseable` 占了，生成的代码编不过），结束用 `disconnect()` / `end()`。生成的 Swift、Kotlin 要编得过、跑得通：`tests/swift/run.sh`、`tests/kotlin/run.sh`（CI：`mobile.yml`）。
 - **FFI 层**：每个数据目录一个 `Core`，它持有多线程运行时；导出的方法里不直接用 tokio，一律 spawn 到 `Core` 的运行时、包一层 abort-on-drop（Kotlin 取消协程会中止后台任务；Swift 取消 `Task` 不会，UniFFI 还没传过去）。事件用拉（`next_event`）：终端泵一直把通道读空、放进合并缓冲区（russh 没有背压，读慢了会卡住整条连接），超出上限丢最旧的并报 `OutputDropped`；提问走无界队列。
+- **手机端的主机和同步**：`HostData` 放在 `Mutex` 里（`store.rs` 的 `Shared`），每次写完照桌面的 `settle` 做：钥匙串任务按顺序放到阻塞线程池、事件进 `HostStore::next_event`；保存主机、凭据的方法等钥匙串写完才返回。钥匙串是 App 实现的外部 trait `Keychain`（账户名同桌面，含 `sync:keyring`、`sync:login`），秘密只经 store 写，App 自己写进去的同步不知道。同步的位置存在数据目录的 `sync.json`，什么时候同步由 App 决定（规则写在 README）。Android 上 HTTPS 证书靠 JVM 校验：App 先调 `Tls.setUp(context)`（`src/android.rs`、`android/Tls.kt`），再加 `rustls-platform-verifier` 的 AAR。
 - 测试用的 SSH 服务器在核心的 `testing` feature（`shellrs_ssh::testing`），只给别的 crate 当 dev-dependency。
 - 续传记录（数据目录的 `upload-resume/`、`download-resume/`）的文件名有金样测试钉着，手机端和桌面用同一套。
 
@@ -205,7 +206,7 @@ Cargo workspace，`cargo` 命令默认覆盖前四个包：
 
 - **核心不产出文案。** label 和错误都是类型（`ProtocolKind`、`HostDraftError`、`Failure`、`SecretError`、`JobError`、`LoginError` 等），桌面在 `host/describe.rs`、`sync/describe.rs` 用扩展 trait 翻译（`KindLabel::label()`、`ErrorMessage::message()`，调用处 `use … as _`）。要起名字的地方（复制主机的「副本」、新本地终端的默认名）由调用方把名字传进来。
 - **`HostData` 不通知、不碰线程。** 写方法改内存、写库，失败、转发设置的变化和 `Changed` 放进 `take_events()`，钥匙串写入放进 `take_secret_jobs()`（`SecretJob` 跨线程跑，结果交回 `secret_done`）。外壳上同名带 `cx` 的写方法优先被找到，所以绕不过 `settle`；新加写方法要加进 `host/store.rs` 的 `settled!` 列表。经 `DerefMut` 只调读方法和 `*_unnotified`。
-- **一轮同步经 `RoundHost`**：`run_round` 只经 `with_data`（短暂拿数据）和 `background`（阻塞的步骤）和外面打交道；桌面用 `WeakEntity<HostStore>` 加 `AsyncApp` 实现，每次用完数据都 `settle`。什么时候同步留在应用的 `SyncService`。
+- **一轮同步经 `RoundHost`**：`run_round` 只经 `with_data`（短暂拿数据）和 `background`（阻塞的步骤）和外面打交道；桌面用 `WeakEntity<HostStore>` 加 `AsyncApp` 实现，每次用完数据都 `settle`，手机用 `Mutex<HostData>` 加 `spawn_blocking`。什么时候同步留在应用的 `SyncService`。`background` 收装箱的闭包（`Blocking<R>`）、打开的存储包成 `Remote`：不然 rustc 证不出这一轮的 future 是 `Send`，放不上多线程运行时。
 - **核心不依赖应用。** `Host.sidebar_tool` 存 `ToolKind::key` 的字符串（不认识的原样留着）；品牌色和按地址取的颜色是 `u32`，应用用 `rgb()` 转；User-Agent 和设备信息由应用交给 `SyncServices::system`。
 - 测试夹具：`HostDatabase::in_memory` 在 `testing` feature，应用只在 dev-dependency 里打开；`HostData::seed()` 留在普通构建里，因为 `tests/ui/` 链接的是正常编出来的库。
 
