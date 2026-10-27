@@ -90,6 +90,8 @@ pub struct SshConnector {
     agent: AgentLocation,
     /// Where a login without a password looks for [`DEFAULT_KEY_FILES`].
     key_dir: Option<PathBuf>,
+    /// See [`Self::with_nat64`].
+    nat64: bool,
 }
 impl SshConnector {
     /// Trusts the host keys in the file at `path`, reads saved secrets from
@@ -102,6 +104,7 @@ impl SshConnector {
             secrets,
             agent: AgentLocation::System,
             key_dir: dirs::home_dir().map(|home| home.join(".ssh")),
+            nat64: false,
         }
     }
 
@@ -115,6 +118,15 @@ impl SshConnector {
     /// tries none.
     pub fn with_default_key_dir(mut self, dir: Option<PathBuf>) -> Self {
         self.key_dir = dir;
+        self
+    }
+
+    /// Connect to IPv4 addresses as the system's resolver gives them, as
+    /// iOS asks of apps: on an IPv6-only network with NAT64, that is the
+    /// IPv6 address that reaches them, where the address as written does
+    /// not. Only Apple's systems do this; elsewhere it changes nothing.
+    pub fn with_nat64(mut self, nat64: bool) -> Self {
+        self.nat64 = nat64;
         self
     }
     /// Must run on a worker: keychain and private-key reads are blocking.
@@ -188,9 +200,10 @@ impl SshConnector {
         secrets: &SharedSecretSource,
     ) -> Result<Tunnel> {
         Ok(match route {
-            LoginRoute::Direct => Box::new(step(broker, tcp(host, port)).await?),
+            LoginRoute::Direct => Box::new(step(broker, tcp(host, port, self.nat64)).await?),
             LoginRoute::Proxy(proxy) => {
-                Box::new(step(broker, through_proxy(proxy, (host, port), secrets)).await?)
+                let proxied = through_proxy(proxy, (host, port), secrets, self.nat64);
+                Box::new(step(broker, proxied).await?)
             }
             LoginRoute::Jump(hops) => {
                 self.through_jumps(hops, (host, port), broker, secrets)
@@ -306,7 +319,7 @@ impl SshConnector {
     ) -> Result<Tunnel> {
         let tunnel = match tunnel {
             Some(tunnel) => tunnel,
-            None => Box::new(step(broker, tcp(&hop.host, hop.port)).await?),
+            None => Box::new(step(broker, tcp(&hop.host, hop.port, self.nat64)).await?),
         };
         let (handle, _) = self
             .log_in(tunnel, hop, Some(name), broker, secrets, None)
@@ -431,8 +444,8 @@ async fn step<T>(broker: &SshPrompts, future: impl Future<Output = Result<T>>) -
 
 /// A socket to `host:port`, failing the way russh's own connect does: a
 /// name that does not resolve then counts as the network failing.
-async fn tcp(host: &str, port: u16) -> Result<TcpStream> {
-    let socket = TcpStream::connect((host, port))
+async fn tcp(host: &str, port: u16, nat64: bool) -> Result<TcpStream> {
+    let socket = connect_socket(host, port, nat64)
         .await
         .map_err(russh::Error::IO)
         .wrap_err(ConnectError::Unreachable {
@@ -444,13 +457,27 @@ async fn tcp(host: &str, port: u16) -> Result<TcpStream> {
     Ok(socket)
 }
 
+/// A socket to `host:port`, which `nat64` resolves an IPv4 address for:
+/// see [`SshConnector::with_nat64`].
+async fn connect_socket(host: &str, port: u16, nat64: bool) -> std::io::Result<TcpStream> {
+    #[cfg(target_vendor = "apple")]
+    if nat64 && let Ok(ip) = host.parse::<std::net::Ipv4Addr>() {
+        let addresses = super::nat64::addresses(ip, port).await;
+        return TcpStream::connect(&addresses[..]).await;
+    }
+    #[cfg(not(target_vendor = "apple"))]
+    let _ = nat64;
+    TcpStream::connect((host, port)).await
+}
+
 /// A stream to `target` through `proxy`.
 async fn through_proxy(
     proxy: &ProxyLogin,
     (host, port): (&str, u16),
     secrets: &SharedSecretSource,
+    nat64: bool,
 ) -> Result<TcpStream> {
-    let mut socket = TcpStream::connect((proxy.host.as_str(), proxy.port))
+    let mut socket = connect_socket(&proxy.host, proxy.port, nat64)
         .await
         .map_err(|error| {
             wrap(

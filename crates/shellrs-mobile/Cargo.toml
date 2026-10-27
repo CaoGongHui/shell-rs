@@ -1,0 +1,38 @@
+[package]
+name = "shellrs-mobile"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "ShellRS for the mobile apps: the SSH core behind a stable Swift and Kotlin interface"
+license = "MIT"
+repository = "https://github.com/since2006/shell-rs"
+
+[lib]
+# A static library for iOS, a shared one for Android (and for generating the
+# bindings), and a Rust one for the tests.
+crate-type = ["lib", "staticlib", "cdylib"]
+
+# `cargo run -p shellrs-mobile --features bindgen --bin uniffi-bindgen`, as
+# the build scripts do: the generator stays out of the library.
+[[bin]]
+name = "uniffi-bindgen"
+required-features = ["bindgen"]
+
+[features]
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+anyhow = "1"
+async-channel = "2"
+futures = "0.3"
+russh = "0.63"
+russh-sftp = "=3.0.0"
+shellrs-ssh = { path = "../shellrs-ssh" }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"] }
+uniffi = "0.32"
+zeroize = "1"
+
+[dev-dependencies]
+shellrs-ssh = { path = "../shellrs-ssh", features = ["testing"] }
+tempfile = "3"
+tokio = { version = "1", features = ["net", "io-util", "test-util"] }

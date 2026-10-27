@@ -24,7 +24,9 @@ path = "src/bin/shellrs-cli.rs"
 # apps can link them as well. Cargo commands here build, test and lint them
 # too.
 [workspace]
-members = ["crates/shellrs-sync", "crates/shellrs-ssh"]
+# The mobile apps' bindings build only when asked for (`-p shellrs-mobile`):
+# their generator and its dependencies are no use to the desktop app.
+members = ["crates/shellrs-sync", "crates/shellrs-ssh", "crates/shellrs-mobile"]
 default-members = [".", "crates/shellrs-sync", "crates/shellrs-ssh"]
 resolver = "3"
 

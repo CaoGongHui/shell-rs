@@ -443,7 +443,9 @@ impl std::fmt::Display for TerminalNotConnected {
 
 impl std::error::Error for TerminalNotConnected {}
 
-pub(crate) fn is_network_error(error: &anyhow::Error) -> bool {
+/// Whether `error` is the connection failing under the SFTP session, which
+/// a transfer reconnects for, as opposed to the server refusing a request.
+pub fn is_network_error(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         if cause.is::<TerminalNotConnected>() {
             return true;

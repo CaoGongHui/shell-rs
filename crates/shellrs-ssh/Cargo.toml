@@ -28,6 +28,11 @@ tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "rt", "sy
 uuid = { version = "1", features = ["v4"] }
 zeroize = "1"
 
+[features]
+# An SSH server in the process for the tests of what builds on this crate
+# (`testing`): the mobile bindings take it as a dev-dependency.
+testing = ["tokio/process"]
+
 [target.'cfg(target_vendor = "apple")'.dependencies]
 # Plain `fsync(2)` for resume records: std's `sync_all` is the much slower
 # `F_FULLFSYNC` there.

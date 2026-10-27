@@ -21,7 +21,7 @@ mod speed;
 mod sync;
 mod upload;
 mod worker;
-pub use client::TerminalNotConnected;
+pub use client::{TerminalNotConnected, is_network_error};
 pub use control::Cancelled;
 pub use edit::{EDIT_LIMIT, FileBytes, FileStamp, ReadFailure, SaveFailure, TextFile, TextFormat};
 pub use engine::{

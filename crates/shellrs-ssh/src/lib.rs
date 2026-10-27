@@ -14,12 +14,16 @@ mod error;
 mod exec;
 mod latency;
 mod login;
+#[cfg(target_vendor = "apple")]
+mod nat64;
 mod probe;
 mod prompt;
 mod proxy;
 mod secret;
 mod session;
 pub mod sftp;
+#[cfg(feature = "testing")]
+pub mod testing;
 
 pub use connection::{
     AgentLocation, ForwardedTcpip, SshConnectionConfig, SshConnector, SshHandle, SshPrompts,
