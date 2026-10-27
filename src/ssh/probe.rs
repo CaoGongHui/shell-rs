@@ -2,8 +2,33 @@
 //!
 //! Runs once per successful connection on its own exec channel, so the user's
 //! shell never sees it and its output cannot be confused with theirs.
+//!
+//! The answer is a system's key, one of [`HOST_OS_KEYS`]: the app keeps it
+//! as it is and draws the system's mark for it.
 
-use crate::host::HostOs;
+/// Every key a probe answers with. They are stored, so they never change.
+pub const HOST_OS_KEYS: [&str; 20] = [
+    "ubuntu",
+    "debian",
+    "fedora",
+    "rhel",
+    "centos",
+    "rocky",
+    "almalinux",
+    "arch",
+    "alpine",
+    "suse",
+    "gentoo",
+    "kali",
+    "manjaro",
+    "raspbian",
+    "linux",
+    "macos",
+    "windows",
+    "freebsd",
+    "openbsd",
+    "netbsd",
+];
 
 /// One question for POSIX hosts: the kernel name, then whatever
 /// `/etc/os-release` says. stderr is dropped because macOS legitimately has no
@@ -18,25 +43,25 @@ pub const WINDOWS_PROBE_COMMAND: &str = "cmd.exe /d /c ver";
 
 /// Read the POSIX probe. `None` means the output was not recognizable, which
 /// is the signal to try [`WINDOWS_PROBE_COMMAND`].
-pub fn parse_probe(output: &str) -> Option<HostOs> {
+pub fn parse_probe(output: &str) -> Option<&'static str> {
     let kernel = output
         .lines()
         .map(str::trim)
         .find(|line| !line.is_empty())?;
     match kernel {
-        "Darwin" => Some(HostOs::MacOs),
-        "FreeBSD" => Some(HostOs::FreeBsd),
-        "OpenBSD" => Some(HostOs::OpenBsd),
-        "NetBSD" => Some(HostOs::NetBsd),
+        "Darwin" => Some("macos"),
+        "FreeBSD" => Some("freebsd"),
+        "OpenBSD" => Some("openbsd"),
+        "NetBSD" => Some("netbsd"),
         // A Linux box with no `/etc/os-release`, or one shipping an id no
         // build of ShellRS knows, still gets the generic mark.
-        "Linux" => Some(distribution(output).unwrap_or(HostOs::Linux)),
+        "Linux" => Some(distribution(output).unwrap_or("linux")),
         _ => None,
     }
 }
 
 /// Read the Windows follow-up.
-pub fn parse_windows_probe(output: &str) -> Option<HostOs> {
+pub fn parse_windows_probe(output: &str) -> Option<&'static str> {
     output
         .lines()
         .any(|line| {
@@ -54,7 +79,7 @@ pub fn parse_windows_probe(output: &str) -> Option<HostOs> {
                     .split('.')
                     .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
         })
-        .then_some(HostOs::Windows)
+        .then_some("windows")
 }
 
 /// Pick the distribution out of `/etc/os-release`.
@@ -63,7 +88,7 @@ pub fn parse_windows_probe(output: &str) -> Option<HostOs> {
 /// Pop!_OS shows Debian rather than a bare penguin. It only applies when `ID`
 /// itself is unknown, so a distribution ShellRS does know is never mistaken for
 /// its parent.
-fn distribution(output: &str) -> Option<HostOs> {
+fn distribution(output: &str) -> Option<&'static str> {
     let mut like = None;
     for line in output.lines().map(str::trim) {
         if let Some(value) = line.strip_prefix("ID=") {
@@ -79,24 +104,22 @@ fn distribution(output: &str) -> Option<HostOs> {
     like
 }
 
-fn distribution_id(id: &str) -> Option<HostOs> {
+fn distribution_id(id: &str) -> Option<&'static str> {
     Some(match id {
-        "ubuntu" => HostOs::Ubuntu,
-        "debian" => HostOs::Debian,
-        "fedora" => HostOs::Fedora,
-        "rhel" | "redhat" => HostOs::RedHat,
-        "centos" => HostOs::CentOs,
-        "rocky" => HostOs::Rocky,
-        "almalinux" => HostOs::Alma,
-        "arch" => HostOs::Arch,
-        "alpine" => HostOs::Alpine,
-        "opensuse" | "opensuse-leap" | "opensuse-tumbleweed" | "sles" | "sled" | "suse" => {
-            HostOs::Suse
-        }
-        "gentoo" => HostOs::Gentoo,
-        "kali" => HostOs::Kali,
-        "manjaro" => HostOs::Manjaro,
-        "raspbian" => HostOs::Raspbian,
+        "ubuntu" => "ubuntu",
+        "debian" => "debian",
+        "fedora" => "fedora",
+        "rhel" | "redhat" => "rhel",
+        "centos" => "centos",
+        "rocky" => "rocky",
+        "almalinux" => "almalinux",
+        "arch" => "arch",
+        "alpine" => "alpine",
+        "opensuse" | "opensuse-leap" | "opensuse-tumbleweed" | "sles" | "sled" | "suse" => "suse",
+        "gentoo" => "gentoo",
+        "kali" => "kali",
+        "manjaro" => "manjaro",
+        "raspbian" => "raspbian",
         _ => return None,
     })
 }
@@ -114,7 +137,7 @@ const MAX_PROBE_OUTPUT: usize = 8 * 1024;
 
 /// The two-step probe as a state machine, so the transport can drive it from
 /// its own IO loop instead of blocking the terminal on a round trip.
-pub(super) struct HostOsProbe {
+pub struct HostOsProbe {
     stage: Stage,
     output: Vec<u8>,
 }
@@ -126,15 +149,16 @@ enum Stage {
 }
 
 /// What to do once a probe channel closes.
-pub(super) enum ProbeOutcome {
-    Detected(HostOs),
+pub enum ProbeOutcome {
+    /// One of [`HOST_OS_KEYS`].
+    Detected(&'static str),
     /// The POSIX probe said nothing, which is what a Windows shell looks like.
     AskWindows,
     GaveUp,
 }
 
 impl HostOsProbe {
-    pub(super) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             stage: Stage::Posix,
             output: Vec::new(),
@@ -142,7 +166,7 @@ impl HostOsProbe {
     }
 
     /// The command to run for the current step, or `None` when finished.
-    pub(super) fn command(&self) -> Option<&'static str> {
+    pub fn command(&self) -> Option<&'static str> {
         match self.stage {
             Stage::Posix => Some(PROBE_COMMAND),
             Stage::Windows => Some(WINDOWS_PROBE_COMMAND),
@@ -152,14 +176,14 @@ impl HostOsProbe {
 
     /// Collect stdout. stderr is deliberately not fed in: on Windows it holds
     /// the shell's complaint about `uname`, which says nothing useful.
-    pub(super) fn push(&mut self, bytes: &[u8]) {
+    pub fn push(&mut self, bytes: &[u8]) {
         let room = MAX_PROBE_OUTPUT.saturating_sub(self.output.len());
         self.output
             .extend_from_slice(&bytes[..bytes.len().min(room)]);
     }
 
     /// The channel closed. Answer, or ask for one more step.
-    pub(super) fn finish(&mut self) -> ProbeOutcome {
+    pub fn finish(&mut self) -> ProbeOutcome {
         let output = String::from_utf8_lossy(&self.output);
         let outcome = match self.stage {
             Stage::Posix => match parse_probe(&output) {
@@ -183,8 +207,9 @@ impl HostOsProbe {
 
 #[cfg(test)]
 mod tests {
-    use super::{HostOsProbe, MAX_PROBE_OUTPUT, ProbeOutcome, parse_probe, parse_windows_probe};
-    use crate::host::HostOs;
+    use super::{
+        HOST_OS_KEYS, HostOsProbe, MAX_PROBE_OUTPUT, ProbeOutcome, parse_probe, parse_windows_probe,
+    };
 
     #[test]
     fn reads_ubuntu() {
@@ -193,43 +218,43 @@ mod tests {
              NAME=\"Ubuntu\"\n\
              ID=ubuntu\n\
              ID_LIKE=debian\n";
-        assert_eq!(parse_probe(output), Some(HostOs::Ubuntu));
+        assert_eq!(parse_probe(output), Some("ubuntu"));
     }
 
     #[test]
     fn reads_a_quoted_id() {
         let output = "Linux\nNAME=\"Rocky Linux\"\nID=\"rocky\"\nID_LIKE=\"rhel centos fedora\"\n";
-        assert_eq!(parse_probe(output), Some(HostOs::Rocky));
+        assert_eq!(parse_probe(output), Some("rocky"));
     }
 
     #[test]
     fn a_derivative_falls_back_to_what_it_is_like() {
         let output = "Linux\nNAME=\"Linux Mint\"\nID=linuxmint\nID_LIKE=ubuntu\n";
-        assert_eq!(parse_probe(output), Some(HostOs::Ubuntu));
+        assert_eq!(parse_probe(output), Some("ubuntu"));
     }
 
     #[test]
     fn an_unknown_distribution_is_still_linux() {
         let output = "Linux\nNAME=\"Something New\"\nID=somethingnew\n";
-        assert_eq!(parse_probe(output), Some(HostOs::Linux));
+        assert_eq!(parse_probe(output), Some("linux"));
     }
 
     #[test]
     fn a_linux_without_os_release_is_still_linux() {
-        assert_eq!(parse_probe("Linux\n"), Some(HostOs::Linux));
+        assert_eq!(parse_probe("Linux\n"), Some("linux"));
     }
 
     #[test]
     fn reads_the_bsds_and_macos() {
-        assert_eq!(parse_probe("Darwin\n"), Some(HostOs::MacOs));
-        assert_eq!(parse_probe("FreeBSD\n"), Some(HostOs::FreeBsd));
-        assert_eq!(parse_probe("OpenBSD\n"), Some(HostOs::OpenBsd));
-        assert_eq!(parse_probe("NetBSD\n"), Some(HostOs::NetBsd));
+        assert_eq!(parse_probe("Darwin\n"), Some("macos"));
+        assert_eq!(parse_probe("FreeBSD\n"), Some("freebsd"));
+        assert_eq!(parse_probe("OpenBSD\n"), Some("openbsd"));
+        assert_eq!(parse_probe("NetBSD\n"), Some("netbsd"));
     }
 
     #[test]
     fn leading_blank_lines_are_skipped() {
-        assert_eq!(parse_probe("\n\n  Darwin  \n"), Some(HostOs::MacOs));
+        assert_eq!(parse_probe("\n\n  Darwin  \n"), Some("macos"));
     }
 
     #[test]
@@ -243,7 +268,7 @@ mod tests {
     fn the_windows_follow_up_reads_ver() {
         assert_eq!(
             parse_windows_probe("Microsoft Windows [Version 10.0.19045.4291]\n"),
-            Some(HostOs::Windows)
+            Some("windows")
         );
         assert_eq!(parse_windows_probe(""), None);
     }
@@ -261,7 +286,7 @@ mod tests {
         assert!(output.status.success(), "{:?}", output);
         assert_eq!(
             parse_windows_probe(&String::from_utf8_lossy(&output.stdout)),
-            Some(HostOs::Windows)
+            Some("windows")
         );
     }
 
@@ -280,7 +305,7 @@ mod tests {
         assert!(output.status.success(), "{:?}", output);
         assert_eq!(
             parse_windows_probe(&String::from_utf8_lossy(&output.stdout)),
-            Some(HostOs::Windows)
+            Some("windows")
         );
     }
 
@@ -290,7 +315,7 @@ mod tests {
             "\r\nMicrosoft Windows [版本 10.0.26100.1]\r\n",
             "Microsoft Windows [Version 6.3.9600]\n",
         ] {
-            assert_eq!(parse_windows_probe(output), Some(HostOs::Windows));
+            assert_eq!(parse_windows_probe(output), Some("windows"));
         }
     }
 
@@ -311,10 +336,7 @@ mod tests {
         let mut probe = HostOsProbe::new();
         assert_eq!(probe.command(), Some(super::PROBE_COMMAND));
         probe.push(b"Linux\nID=debian\n");
-        assert!(matches!(
-            probe.finish(),
-            ProbeOutcome::Detected(HostOs::Debian)
-        ));
+        assert!(matches!(probe.finish(), ProbeOutcome::Detected("debian")));
         assert_eq!(probe.command(), None);
     }
 
@@ -325,10 +347,7 @@ mod tests {
         assert_eq!(probe.command(), Some(super::WINDOWS_PROBE_COMMAND));
 
         probe.push(b"Microsoft Windows [Version 10.0.19045.4291]\n");
-        assert!(matches!(
-            probe.finish(),
-            ProbeOutcome::Detected(HostOs::Windows)
-        ));
+        assert!(matches!(probe.finish(), ProbeOutcome::Detected("windows")));
         assert_eq!(probe.command(), None);
     }
 
@@ -338,6 +357,23 @@ mod tests {
         assert!(matches!(probe.finish(), ProbeOutcome::AskWindows));
         assert!(matches!(probe.finish(), ProbeOutcome::GaveUp));
         assert_eq!(probe.command(), None);
+    }
+
+    #[test]
+    fn every_answer_is_a_known_key() {
+        let outputs = [
+            "Linux\nID=ubuntu\n",
+            "Linux\nID=redhat\n",
+            "Linux\nID=sled\n",
+            "Linux\nID=linuxmint\nID_LIKE=ubuntu\n",
+            "Linux\n",
+            "Darwin\n",
+            "NetBSD\n",
+        ];
+        for output in outputs {
+            let key = parse_probe(output).unwrap();
+            assert!(HOST_OS_KEYS.contains(&key), "{key}");
+        }
     }
 
     #[test]

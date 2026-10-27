@@ -16,8 +16,8 @@ use super::private_key::{is_kept_in, moved_key, write_key_file};
 use super::{
     AuthKind, BookmarkSide, Credential, CredentialDraft, CredentialId, CredentialKind,
     ForwardDraft, ForwardId, ForwardRule, GroupDraft, GroupId, GroupPathError, GroupPlan, Host,
-    HostConnection, HostDatabase, HostDraft, HostGroup, HostId, HostLogin, HostNode, HostOs,
-    JumpLogin, LoginRoute, NodeDrop, Protocol, ProxyLogin, PublicId, Route, SavedTerminal,
+    HostConnection, HostDatabase, HostDraft, HostGroup, HostId, HostLogin, HostLoginExt, HostNode,
+    HostOs, JumpLogin, LoginRoute, NodeDrop, Protocol, ProxyLogin, PublicId, Route, SavedTerminal,
     SavedTerminalTab, SerialLine, Snippet, SnippetCategory, SnippetScope, SshLink, StoredData,
     TelnetLogin, TerminalGroup,
 };

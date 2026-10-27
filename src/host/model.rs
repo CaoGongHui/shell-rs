@@ -174,42 +174,7 @@ impl ProxySettings {
     }
 }
 
-/// The kind of proxy a host connects through.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ProxyKind {
-    /// An HTTP proxy, which the connection asks to `CONNECT` to the host.
-    #[default]
-    Http,
-    Socks5,
-}
-
-impl ProxyKind {
-    /// Every kind, in the order the form lists them.
-    pub const ALL: [ProxyKind; 2] = [ProxyKind::Http, ProxyKind::Socks5];
-
-    pub fn label(self) -> SharedString {
-        match self {
-            ProxyKind::Http => t!("host.proxy_kind.http"),
-            ProxyKind::Socks5 => t!("host.proxy_kind.socks5"),
-        }
-    }
-
-    /// The stored spelling.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            ProxyKind::Http => "http",
-            ProxyKind::Socks5 => "socks5",
-        }
-    }
-
-    pub fn from_stored(value: &str) -> Option<Self> {
-        match value {
-            "http" => Some(ProxyKind::Http),
-            "socks5" => Some(ProxyKind::Socks5),
-            _ => None,
-        }
-    }
-}
+pub use crate::ssh::ProxyKind;
 
 /// Which pane of a host's SFTP tab a bookmark belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

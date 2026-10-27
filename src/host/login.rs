@@ -6,10 +6,12 @@
 use std::path::PathBuf;
 
 use crate::secrets::SecretRef;
+pub use crate::ssh::{
+    DEFAULT_KEY_FILES, HostLogin, JumpLogin, LoginMethod, LoginRoute, ProxyLogin,
+};
 
 use super::{
-    AuthKind, Credential, CredentialKind, Host, ProxyKind, ProxySettings, SerialSettings,
-    TelnetSettings,
+    AuthKind, Credential, CredentialKind, Host, ProxySettings, SerialSettings, TelnetSettings,
 };
 
 /// How a host's terminal connects, looked up by the store when it connects.
@@ -126,123 +128,6 @@ pub struct SerialLine {
     pub settings: SerialSettings,
 }
 
-/// The private keys in `~/.ssh` a [`LoginMethod::NoPassword`] login tries,
-/// in order: OpenSSH's defaults, less the ones it has dropped.
-pub const DEFAULT_KEY_FILES: [&str; 3] = ["id_ed25519", "id_ecdsa", "id_rsa"];
-
-/// Which authentication methods a login tries. Each one starts by asking
-/// the server to let the user in with nothing at all, which a server without
-/// authentication grants.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LoginMethod {
-    /// A password, saved or asked for.
-    Password,
-    /// Whatever needs nothing typed: the SSH agent, then the default keys in
-    /// `~/.ssh`. A server that wants a password is refused, not asked.
-    NoPassword,
-    /// One private key file.
-    Key,
-    /// Only the SSH agent's keys.
-    Agent,
-}
-
-/// Everything a login needs. Two equal values log in the same way, which is
-/// how the store tells whether an edit has to reconnect a host: it holds
-/// nothing that only changes what the user sees, such as a name.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct HostLogin {
-    pub host: String,
-    pub port: u16,
-    pub user: String,
-    pub method: LoginMethod,
-    /// The private key of [`LoginMethod::Key`], and `None` for every other
-    /// method.
-    pub key_path: Option<PathBuf>,
-    /// The keychain entry the password step reads: the endpoint's own, or a
-    /// password credential's. Every other login keeps the endpoint's for a
-    /// server that asks for a password after the key.
-    pub password: SecretRef,
-    /// How the connection reaches the host.
-    pub route: LoginRoute,
-    /// The connection carries the terminal and nothing beside it: no
-    /// channel of its own for the system probe, the right sidebar's
-    /// commands or its 文件. A bastion host that opened ShellRS with a link serves one
-    /// session per connection and ends it when another channel comes and
-    /// goes, as Xshell and OpenSSH never make it do.
-    pub shell_only: bool,
-}
-
-/// How a connection reaches a host, with every jump host's login looked up.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub enum LoginRoute {
-    #[default]
-    Direct,
-    /// Through these hosts, in order. Each of them is reached through the
-    /// one before it, whatever its own route says.
-    Jump(Vec<JumpLogin>),
-    Proxy(ProxyLogin),
-}
-
-impl LoginRoute {
-    /// The proxy's password entry, for a route through a proxy that has one.
-    pub fn proxy_password(&self) -> Option<SecretRef> {
-        match self {
-            LoginRoute::Proxy(proxy) => proxy.password(),
-            _ => None,
-        }
-    }
-}
-
-/// One jump host on the way to a host.
-#[derive(Clone, Debug)]
-pub enum JumpLogin {
-    Host {
-        /// What the user calls it, for the questions and errors of its hop.
-        name: String,
-        /// How it logs in, directly from the hop before it.
-        login: Box<HostLogin>,
-    },
-    /// A jump host that has been deleted: the route cannot be taken.
-    Deleted,
-}
-
-/// Equal when they log in the same way: renaming a jump host does not make
-/// the hosts behind it reconnect.
-impl PartialEq for JumpLogin {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (JumpLogin::Host { login: mine, .. }, JumpLogin::Host { login: theirs, .. }) => {
-                mine == theirs
-            }
-            (JumpLogin::Deleted, JumpLogin::Deleted) => true,
-            _ => false,
-        }
-    }
-}
-
-impl Eq for JumpLogin {}
-
-/// The proxy a connection goes through.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct ProxyLogin {
-    pub kind: ProxyKind,
-    pub host: String,
-    pub port: u16,
-    pub user: Option<String>,
-}
-
-impl ProxyLogin {
-    /// Where the proxy's password is kept: only a proxy with a user name
-    /// has one.
-    pub fn password(&self) -> Option<SecretRef> {
-        self.user
-            .as_ref()
-            .map(|user| SecretRef::proxy(user, &self.host, self.port))
-    }
-}
-
 impl From<&ProxySettings> for ProxyLogin {
     fn from(proxy: &ProxySettings) -> Self {
         Self {
@@ -254,34 +139,42 @@ impl From<&ProxySettings> for ProxyLogin {
     }
 }
 
-impl HostLogin {
+/// How a saved host or credential logs in: [`HostLogin`]'s constructors
+/// from what the app saved.
+pub trait HostLoginExt {
     /// A login of the host's own rather than taken from a credential.
-    pub fn manual(
+    fn manual(
         host: impl Into<String>,
         port: u16,
         user: impl Into<String>,
         auth: AuthKind,
-    ) -> Self {
-        let host = host.into();
-        let user = user.into();
+    ) -> HostLogin;
+
+    /// A login through `credential` to `host:port`.
+    fn with_credential(host: impl Into<String>, port: u16, credential: &Credential) -> HostLogin;
+
+    /// How `host` logs in, given the credential it uses, as if it were
+    /// reached directly: its route takes the store to look up. `credential`
+    /// is ignored unless it is the one the host names, so a host whose
+    /// credential has gone logs in with what the form holds.
+    fn of(host: &Host, credential: Option<&Credential>) -> HostLogin;
+}
+
+impl HostLoginExt for HostLogin {
+    fn manual(
+        host: impl Into<String>,
+        port: u16,
+        user: impl Into<String>,
+        auth: AuthKind,
+    ) -> HostLogin {
         let method = match auth {
             AuthKind::Password => LoginMethod::Password,
             AuthKind::NoPassword => LoginMethod::NoPassword,
         };
-        Self {
-            password: SecretRef::password(&user, &host, port),
-            host,
-            port,
-            user,
-            method,
-            key_path: None,
-            route: LoginRoute::Direct,
-            shell_only: false,
-        }
+        HostLogin::new(host, port, user, method)
     }
 
-    /// A login through `credential` to `host:port`.
-    pub fn with_credential(host: impl Into<String>, port: u16, credential: &Credential) -> Self {
+    fn with_credential(host: impl Into<String>, port: u16, credential: &Credential) -> HostLogin {
         let host = host.into();
         let user = credential.user.to_string();
         let (method, key_path, password) = match credential.kind {
@@ -297,29 +190,14 @@ impl HostLogin {
                 SecretRef::password(&user, &host, port),
             ),
         };
-        Self {
-            host,
-            port,
-            user,
-            method,
+        HostLogin {
             key_path,
             password,
-            route: LoginRoute::Direct,
-            shell_only: false,
+            ..HostLogin::new(host, port, user, method)
         }
     }
 
-    /// The same login, reaching the host by `route`.
-    pub fn with_route(mut self, route: LoginRoute) -> Self {
-        self.route = route;
-        self
-    }
-
-    /// How `host` logs in, given the credential it uses, as if it were
-    /// reached directly: its route takes the store to look up. `credential`
-    /// is ignored unless it is the one the host names, so a host whose
-    /// credential has gone logs in with what the form holds.
-    pub fn of(host: &Host, credential: Option<&Credential>) -> Self {
+    fn of(host: &Host, credential: Option<&Credential>) -> HostLogin {
         match credential.filter(|credential| host.credential == Some(credential.id)) {
             Some(credential) => Self::with_credential(host.address.as_ref(), host.port, credential),
             None => Self::manual(
@@ -330,16 +208,11 @@ impl HostLogin {
             ),
         }
     }
-
-    /// `user@host:port`, for messages and as the key of resumable transfers.
-    pub fn endpoint(&self) -> String {
-        format!("{}@{}:{}", self.user, self.host, self.port)
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::super::{CredentialDraft, CredentialId, HostDraft, HostId};
+    use super::super::{CredentialDraft, CredentialId, HostDraft, HostId, ProxyKind};
     use super::*;
 
     fn host(auth: AuthKind) -> Host {
@@ -415,18 +288,6 @@ mod tests {
         let login = HostLogin::of(&host(AuthKind::NoPassword), Some(&credential));
         assert_eq!(login.method, LoginMethod::NoPassword);
         assert_eq!(login.user, "root");
-    }
-
-    #[test]
-    fn a_jump_hosts_name_is_not_part_of_the_login() {
-        let hop = |name: &str, host: &str| JumpLogin::Host {
-            name: name.into(),
-            login: Box::new(HostLogin::manual(host, 22, "root", AuthKind::Password)),
-        };
-        assert_eq!(hop("阿里云99", "10.0.0.1"), hop("跳板", "10.0.0.1"));
-        assert_ne!(hop("阿里云99", "10.0.0.1"), hop("阿里云99", "10.0.0.2"));
-        assert_ne!(hop("阿里云99", "10.0.0.1"), JumpLogin::Deleted);
-        assert_eq!(JumpLogin::Deleted, JumpLogin::Deleted);
     }
 
     #[test]

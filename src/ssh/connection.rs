@@ -1,14 +1,15 @@
 //! SSH connection and authentication shared by terminals and SFTP.
-use crate::{
-    connection::{
-        ConnectionPrompt, ConnectionPromptField, ConnectionPromptKind, ConnectionPromptReply,
-    },
-    host::{DEFAULT_KEY_FILES, HostLogin, JumpLogin, LoginMethod, LoginRoute, ProxyLogin},
-    i18n::t,
-    secrets::{SecretRef, SharedSecretStore},
-    terminal::ChannelStream,
+use super::error::{
+    AgentProblem, AgentUnreachable, AuthError, ConnectError, ForwardProblem, KnownHostsError,
+    MissingCredential, PasswordWanted, RouteFailure, WrapErr, find_cause, wrap,
 };
-use anyhow::{Context as _, Result, anyhow, bail};
+use super::login::{DEFAULT_KEY_FILES, HostLogin, JumpLogin, LoginMethod, LoginRoute, ProxyLogin};
+use super::prompt::{
+    AuthenticationRequest, ConnectionPrompt, ConnectionPromptField, ConnectionPromptKind,
+    ConnectionPromptReply, ConnectionSecret,
+};
+use super::session::ChannelStream;
+use anyhow::{Result, anyhow, bail};
 use russh::keys::{
     HashAlg, PrivateKeyWithHashAlg, PublicKey,
     known_hosts::{known_host_keys_path, learn_known_hosts_path},
@@ -33,7 +34,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 use zeroize::Zeroizing;
 
 use super::proxy::{ProxyAuth, handshake};
-use super::tester::describe_login_error;
+use super::secret::{SecretRef, SharedSecretSource, read_secret};
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
 const AUTH_RETRIES: usize = 3;
@@ -74,29 +75,46 @@ pub enum AgentLocation {
     /// An agent at this socket or pipe. Tests use it rather than change the
     /// process's environment under other tests.
     At(PathBuf),
+    /// No agent at all, as on a phone: a login that is only the agent says
+    /// it is not supported here.
+    None,
 }
 
-/// Cloneable trust and credential service. Every clone shares the trust-file lock.
+/// Cloneable trust and credential service. Every connector of one trust
+/// file shares its lock, whoever made it.
 #[derive(Clone)]
 pub struct SshConnector {
     known_hosts_path: PathBuf,
     known_hosts_lock: Arc<Mutex<()>>,
-    secrets: SharedSecretStore,
+    secrets: SharedSecretSource,
     agent: AgentLocation,
+    /// Where a login without a password looks for [`DEFAULT_KEY_FILES`].
+    key_dir: Option<PathBuf>,
 }
 impl SshConnector {
-    pub fn new(path: impl Into<PathBuf>, secrets: SharedSecretStore) -> Self {
+    /// Trusts the host keys in the file at `path`, reads saved secrets from
+    /// `secrets`, and uses the user's own agent and `~/.ssh`.
+    pub fn new(path: impl Into<PathBuf>, secrets: SharedSecretSource) -> Self {
+        let known_hosts_path = path.into();
         Self {
-            known_hosts_path: path.into(),
-            known_hosts_lock: Arc::new(Mutex::new(())),
+            known_hosts_lock: known_hosts_lock(&known_hosts_path),
+            known_hosts_path,
             secrets,
             agent: AgentLocation::System,
+            key_dir: dirs::home_dir().map(|home| home.join(".ssh")),
         }
     }
 
     /// Use the agent at `agent` instead of the user's own.
     pub fn with_agent(mut self, agent: AgentLocation) -> Self {
         self.agent = agent;
+        self
+    }
+
+    /// Look for the default keys in `dir` rather than `~/.ssh`; `None`
+    /// tries none.
+    pub fn with_default_key_dir(mut self, dir: Option<PathBuf>) -> Self {
+        self.key_dir = dir;
         self
     }
     /// Must run on a worker: keychain and private-key reads are blocking.
@@ -126,7 +144,7 @@ impl SshConnector {
     }
 
     /// The keychain this connector reads saved secrets from.
-    pub(crate) fn secrets(&self) -> &SharedSecretStore {
+    pub(crate) fn secrets(&self) -> &SharedSecretSource {
         &self.secrets
     }
 
@@ -135,7 +153,7 @@ impl SshConnector {
         &self,
         config: &SshConnectionConfig,
         broker: Arc<SshPrompts>,
-        secrets: &SharedSecretStore,
+        secrets: &SharedSecretSource,
     ) -> Result<(client::Handle<SshClientHandler>, String)> {
         self.connect_inner(config, broker, secrets, None).await
     }
@@ -144,7 +162,7 @@ impl SshConnector {
         &self,
         config: &SshConnectionConfig,
         broker: Arc<SshPrompts>,
-        secrets: &SharedSecretStore,
+        secrets: &SharedSecretSource,
         forwarded: Option<mpsc::UnboundedSender<ForwardedTcpip>>,
     ) -> Result<(client::Handle<SshClientHandler>, String)> {
         let login = &config.login;
@@ -167,7 +185,7 @@ impl SshConnector {
         host: &str,
         port: u16,
         broker: &Arc<SshPrompts>,
-        secrets: &SharedSecretStore,
+        secrets: &SharedSecretSource,
     ) -> Result<Tunnel> {
         Ok(match route {
             LoginRoute::Direct => Box::new(step(broker, tcp(host, port)).await?),
@@ -189,7 +207,7 @@ impl SshConnector {
         login: &HostLogin,
         jump_host: Option<&str>,
         broker: &Arc<SshPrompts>,
-        secrets: &SharedSecretStore,
+        secrets: &SharedSecretSource,
         forwarded: Option<mpsc::UnboundedSender<ForwardedTcpip>>,
     ) -> Result<(SshHandle, String)> {
         let fingerprint = Arc::new(Mutex::new(String::new()));
@@ -206,7 +224,7 @@ impl SshConnector {
         let connect = async {
             client::connect_stream(ssh_config(), tunnel, handler)
                 .await
-                .map_err(|error| error.context(t!("ssh.connect.failed")))
+                .wrap_err(ConnectError::Handshake)
         };
         let mut handle = step(broker, connect).await?;
         let prompts = Asker {
@@ -215,8 +233,8 @@ impl SshConnector {
         };
         let mut shutdown = broker.shutdown_receiver();
         tokio::select! {
-            result = authenticate(&mut handle, login, secrets, &self.agent, prompts) => result?,
-            _ = shutdown.changed() => bail!(t!("ssh.connect.cancelled")),
+            result = authenticate(&mut handle, login, secrets, self, prompts) => result?,
+            _ = shutdown.changed() => bail!(ConnectError::Cancelled),
         }
         let fingerprint = lock(&fingerprint).clone();
         Ok((handle, fingerprint))
@@ -229,7 +247,7 @@ impl SshConnector {
         hops: &[JumpLogin],
         target: (&str, u16),
         broker: &Arc<SshPrompts>,
-        secrets: &SharedSecretStore,
+        secrets: &SharedSecretSource,
     ) -> Result<Tunnel> {
         // Nothing is connected while the way is known to be broken.
         let hosts = hops
@@ -237,9 +255,7 @@ impl SshConnector {
             .enumerate()
             .map(|(ix, hop)| match hop {
                 JumpLogin::Host { name, login } => Ok((name.as_str(), &**login)),
-                JumpLogin::Deleted => Err(anyhow!(RouteFailure(
-                    t!("ssh.jump.deleted", number = ix + 1).into()
-                ))),
+                JumpLogin::Deleted => Err(anyhow!(RouteFailure::JumpDeleted { number: ix + 1 })),
             })
             .collect::<Result<Vec<_>>>()?;
         let mut tunnel = None;
@@ -258,17 +274,19 @@ impl SshConnector {
                 )
                 .await
                 .map_err(|error| {
-                    if error.downcast_ref::<RouteFailure>().is_some() {
+                    if find_cause::<RouteFailure>(&error).is_some() {
                         return error;
                     }
-                    let reason = describe_login_error(&error);
-                    error.context(RouteFailure(
-                        t!("ssh.jump.failed", name = name, reason = reason).into(),
-                    ))
+                    wrap(
+                        RouteFailure::Jump {
+                            name: name.to_string(),
+                        },
+                        error,
+                    )
                 })?;
             tunnel = Some(reached);
         }
-        tunnel.ok_or_else(|| anyhow!(t!("ssh.jump.none")))
+        tunnel.ok_or_else(|| anyhow!(ConnectError::NoJumpHosts))
     }
 
     /// Log in to the jump host `hop`, over `tunnel` or else directly, and
@@ -284,7 +302,7 @@ impl SshConnector {
         hop: &HostLogin,
         next: (&str, u16),
         broker: &Arc<SshPrompts>,
-        secrets: &SharedSecretStore,
+        secrets: &SharedSecretSource,
     ) -> Result<Tunnel> {
         let tunnel = match tunnel {
             Some(tunnel) => tunnel,
@@ -299,46 +317,27 @@ impl SshConnector {
                 .channel_open_direct_tcpip(next_host, u32::from(next_port), "127.0.0.1", 0)
                 .await
                 .map_err(|error| {
-                    let text: String = match &error {
+                    let problem = match &error {
                         russh::Error::ChannelOpenFailure(
                             russh::ChannelOpenFailure::ConnectFailed,
-                        ) => t!(
-                            "ssh.jump.forward.connect_failed",
-                            name = name,
-                            host = next_host,
-                            port = next_port
-                        ),
+                        ) => ForwardProblem::ConnectFailed,
                         russh::Error::ChannelOpenFailure(
                             russh::ChannelOpenFailure::AdministrativelyProhibited,
-                        ) => t!(
-                            "ssh.jump.forward.prohibited",
-                            name = name,
-                            host = next_host,
-                            port = next_port
-                        ),
-                        _ => t!(
-                            "ssh.jump.forward.channel_failed",
-                            name = name,
-                            host = next_host,
-                            port = next_port
-                        ),
-                    }
-                    .into();
+                        ) => ForwardProblem::Prohibited,
+                        _ => ForwardProblem::ChannelFailed,
+                    };
+                    let failure = forward_failure(name, next, problem);
                     // Refused like a direct connection would be, so it is
                     // retried like one.
-                    let refused = matches!(
-                        error,
-                        russh::Error::ChannelOpenFailure(russh::ChannelOpenFailure::ConnectFailed)
-                    );
-                    let error = if refused {
+                    let error = if problem == ForwardProblem::ConnectFailed {
                         anyhow::Error::from(std::io::Error::new(
                             std::io::ErrorKind::ConnectionRefused,
-                            text.clone(),
+                            failure.clone(),
                         ))
                     } else {
                         anyhow::Error::from(error)
                     };
-                    error.context(RouteFailure(text))
+                    wrap(failure, error)
                 })
         };
         // Given up on while the jump host still tries to connect (a
@@ -351,17 +350,19 @@ impl SshConnector {
             ) {
                 return error;
             }
-            error.context(RouteFailure(
-                t!(
-                    "ssh.jump.forward.timed_out",
-                    name = name,
-                    host = next_host,
-                    port = next_port
-                )
-                .into(),
-            ))
+            wrap(forward_failure(name, next, ForwardProblem::TimedOut), error)
         })?;
         Ok(Box::new(channel.into_stream()))
+    }
+}
+
+/// That the jump host `name` could not open the way on to `next`.
+fn forward_failure(name: &str, (host, port): (&str, u16), problem: ForwardProblem) -> RouteFailure {
+    RouteFailure::JumpForward {
+        name: name.to_string(),
+        host: host.to_string(),
+        port,
+        problem,
     }
 }
 
@@ -424,7 +425,7 @@ async fn step<T>(broker: &SshPrompts, future: impl Future<Output = Result<T>>) -
     let mut shutdown = broker.shutdown_receiver();
     tokio::select! {
         result = timeout_excluding_prompts(future, broker.prompt_activity_receiver(), CONNECT_TIMEOUT) => result?,
-        _ = shutdown.changed() => bail!(t!("ssh.connect.cancelled")),
+        _ = shutdown.changed() => bail!(ConnectError::Cancelled),
     }
 }
 
@@ -434,7 +435,10 @@ async fn tcp(host: &str, port: u16) -> Result<TcpStream> {
     let socket = TcpStream::connect((host, port))
         .await
         .map_err(russh::Error::IO)
-        .context(t!("ssh.route.connect_failed", host = host, port = port))?;
+        .wrap_err(ConnectError::Unreachable {
+            host: host.to_string(),
+            port,
+        })?;
     // As russh's own connect does: the terminal's keystrokes go out at once.
     let _ = socket.set_nodelay(true);
     Ok(socket)
@@ -444,54 +448,33 @@ async fn tcp(host: &str, port: u16) -> Result<TcpStream> {
 async fn through_proxy(
     proxy: &ProxyLogin,
     (host, port): (&str, u16),
-    secrets: &SharedSecretStore,
+    secrets: &SharedSecretSource,
 ) -> Result<TcpStream> {
     let mut socket = TcpStream::connect((proxy.host.as_str(), proxy.port))
         .await
         .map_err(|error| {
-            let error = anyhow::Error::from(russh::Error::IO(error));
-            let reason = describe_login_error(&error);
-            error.context(RouteFailure(
-                t!(
-                    "ssh.proxy.connect_failed",
-                    host = proxy.host,
-                    port = proxy.port,
-                    reason = reason
-                )
-                .into(),
-            ))
+            wrap(
+                RouteFailure::ProxyUnreachable {
+                    host: proxy.host.clone(),
+                    port: proxy.port,
+                },
+                russh::Error::IO(error),
+            )
         })?;
     let _ = socket.set_nodelay(true);
-    let password = proxy
-        .password()
-        .and_then(|secret| saved_secret(secrets, &secret));
+    let password = match proxy.password() {
+        Some(secret) => read_secret(secrets, &secret).await,
+        None => None,
+    };
     let auth = proxy.user.as_deref().map(|user| ProxyAuth {
         user,
         password: password.as_deref().map_or("", String::as_str),
     });
     handshake(&mut socket, proxy.kind, host, port, auth)
         .await
-        .map_err(|error| {
-            let text = error.to_string();
-            error.context(RouteFailure(text))
-        })?;
+        .wrap_err(RouteFailure::Proxy)?;
     Ok(socket)
 }
-
-/// What went wrong on the way to a host, at a jump host or at the proxy, in
-/// words that say where. The error underneath stays in the chain, so a
-/// network failure on the way is retried like any other and a missing
-/// password is still recognised.
-#[derive(Debug)]
-pub(super) struct RouteFailure(pub(super) String);
-
-impl std::fmt::Display for RouteFailure {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for RouteFailure {}
 
 /// The questions of one host on the way. A jump host's say which one: the
 /// host the user opened is a different one.
@@ -529,52 +512,6 @@ pub struct SshPrompts {
     interactive: bool,
 }
 
-/// A credential authentication needed and could not ask for, because the
-/// connection runs without anyone to answer (a connection test, or a command
-/// from the external CLI).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MissingCredential {
-    /// `rejected` when a password was tried and the server refused it.
-    Password {
-        rejected: bool,
-    },
-    /// `rejected` when a passphrase was tried and did not unlock the key.
-    Passphrase {
-        rejected: bool,
-    },
-    KeyboardInteractive,
-}
-
-impl std::fmt::Display for MissingCredential {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&match self {
-            MissingCredential::Password { rejected: true } => t!("ssh.missing.password_rejected"),
-            MissingCredential::Password { rejected: false } => t!("ssh.missing.password"),
-            MissingCredential::Passphrase { rejected: true } => {
-                t!("ssh.missing.passphrase_rejected")
-            }
-            MissingCredential::Passphrase { rejected: false } => t!("ssh.missing.passphrase"),
-            MissingCredential::KeyboardInteractive => t!("ssh.missing.keyboard_interactive"),
-        })
-    }
-}
-
-impl std::error::Error for MissingCredential {}
-
-/// A login without a password (「无密码」) that the server wanted a password
-/// from. Typed, so that a connection test with the password left empty can
-/// say that rather than point at 「无密码」.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PasswordWanted;
-
-impl std::fmt::Display for PasswordWanted {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&t!("ssh.password_wanted"))
-    }
-}
-
-impl std::error::Error for PasswordWanted {}
-
 impl SshPrompts {
     pub fn new(
         events: Arc<dyn Fn(ConnectionPrompt) -> bool + Send + Sync>,
@@ -611,12 +548,12 @@ impl SshPrompts {
         let _ = self.prompt_activity.send(true);
         let result = async {
             if !(self.events)(ConnectionPrompt::new(request_id, kind)) {
-                bail!(t!("ssh.prompt.view_closed"));
+                bail!(ConnectError::ViewClosed);
             }
             let mut shutdown = self.shutdown.clone();
             tokio::select! {
-                reply = receiver => reply.map_err(|_| anyhow!(t!("ssh.prompt.request_cancelled"))),
-                _ = shutdown.changed() => bail!(t!("ssh.connect.cancelled")),
+                reply = receiver => reply.map_err(|_| anyhow!(ConnectError::PromptCancelled)),
+                _ = shutdown.changed() => bail!(ConnectError::Cancelled),
             }
         }
         .await;
@@ -666,7 +603,7 @@ where
                 result = &mut future => return Ok(result),
                 changed = prompt_activity.changed() => {
                     if changed.is_err() {
-                        bail!(t!("ssh.connect.cancelled"));
+                        bail!(ConnectError::Cancelled);
                     }
                 }
             }
@@ -679,7 +616,7 @@ where
             _ = tokio::time::sleep(remaining) => return Err(russh::Error::ConnectionTimeout.into()),
             changed = prompt_activity.changed() => {
                 if changed.is_err() {
-                    bail!(t!("ssh.connect.cancelled"));
+                    bail!(ConnectError::Cancelled);
                 }
                 remaining = remaining.saturating_sub(started.elapsed());
                 if remaining.is_zero() && !*prompt_activity.borrow() {
@@ -694,6 +631,18 @@ pub type SshHandle = client::Handle<SshClientHandler>;
 
 /// Lock a mutex that a panicking thread may have poisoned; the data it guards
 /// here stays usable either way.
+/// The lock of the trust file at `path`, the same for every connector of
+/// it in the process: two connections that both save a key must not lose
+/// one, whoever made their connectors.
+fn known_hosts_lock(path: &Path) -> Arc<Mutex<()>> {
+    static LOCKS: Mutex<Option<HashMap<PathBuf, Arc<Mutex<()>>>>> = Mutex::new(None);
+    lock(&LOCKS)
+        .get_or_insert_with(HashMap::new)
+        .entry(path.to_path_buf())
+        .or_default()
+        .clone()
+}
+
 pub(super) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|error| error.into_inner())
 }
@@ -781,13 +730,12 @@ impl client::Handler for SshClientHandler {
             .map(|(_, saved)| saved)
             .eq(known.iter().map(|(_, saved)| saved))
         {
-            bail!(t!("ssh.known_hosts.changed_while_saving"));
+            bail!(KnownHostsError::ChangedWhileSaving);
         }
         let write_failed = || {
-            anyhow!(t!(
-                "ssh.known_hosts.write_failed",
-                path = self.known_hosts_path.display()
-            ))
+            anyhow!(KnownHostsError::WriteFailed {
+                path: self.known_hosts_path.clone(),
+            })
         };
         if !known.is_empty() {
             forget_known_host(&self.host, self.port, &self.known_hosts_path)
@@ -905,8 +853,10 @@ fn forget_known_host(host: &str, port: u16, path: &Path) -> std::io::Result<()> 
 
 fn read_known_keys(host: &str, port: u16, path: &Path) -> Result<Vec<(usize, PublicKey)>> {
     if path.exists() {
-        let contents = std::fs::read_to_string(path)
-            .with_context(|| t!("ssh.known_hosts.read_failed", path = path.display()))?;
+        let contents =
+            std::fs::read_to_string(path).wrap_err_with(|| KnownHostsError::ReadFailed {
+                path: path.to_path_buf(),
+            })?;
         for line in contents.lines().map(str::trim) {
             if line.is_empty() || line.starts_with('#') {
                 continue;
@@ -918,19 +868,24 @@ fn read_known_keys(host: &str, port: u16, path: &Path) -> Result<Vec<(usize, Pub
                     .next()
                     .is_some_and(|encoded| parse_public_key_base64(encoded).is_ok());
             if !valid {
-                bail!(t!("ssh.known_hosts.corrupt", path = path.display()));
+                bail!(KnownHostsError::Corrupt {
+                    path: path.to_path_buf(),
+                });
             }
         }
     }
-    known_host_keys_path(host, port, path)
-        .map_err(|_| anyhow!(t!("ssh.known_hosts.unreadable", path = path.display())))
+    known_host_keys_path(host, port, path).map_err(|_| {
+        anyhow!(KnownHostsError::Unreadable {
+            path: path.to_path_buf(),
+        })
+    })
 }
 
 async fn authenticate(
     handle: &mut SshHandle,
     login: &HostLogin,
-    secrets: &SharedSecretStore,
-    agent: &AgentLocation,
+    secrets: &SharedSecretSource,
+    connector: &SshConnector,
     broker: Asker<'_>,
 ) -> Result<()> {
     let user = login.user.as_str();
@@ -938,7 +893,7 @@ async fn authenticate(
     let first = handle
         .authenticate_none(user)
         .await
-        .map_err(|_| anyhow!(t!("ssh.auth.methods_unknown")))?;
+        .map_err(|_| anyhow!(AuthError::MethodsUnknown))?;
     if first.success() {
         return Ok(());
     }
@@ -949,7 +904,7 @@ async fn authenticate(
     // login that is only the agent says what went wrong with it.
     if matches!(method, LoginMethod::NoPassword | LoginMethod::Agent) {
         if methods.contains(&MethodKind::PublicKey) {
-            match try_agent(handle, user, agent).await? {
+            match try_agent(handle, user, &connector.agent).await? {
                 Ok(result) => {
                     if result.success() {
                         return Ok(());
@@ -957,21 +912,21 @@ async fn authenticate(
                     partial = is_partial(&result);
                     methods = remaining_methods(result);
                 }
-                Err(problem) if method == LoginMethod::Agent => bail!(problem.to_string()),
+                Err(problem) if method == LoginMethod::Agent => bail!(problem),
                 Err(_) => {}
             }
             if method == LoginMethod::Agent && !partial {
-                bail!(t!("ssh.auth.agent_rejected"));
+                bail!(AuthError::AgentRejected);
             }
         } else if method == LoginMethod::Agent {
-            bail!(t!("ssh.auth.agent_no_publickey"));
+            bail!(AuthError::AgentNoPublicKey);
         }
     }
 
     if matches!(method, LoginMethod::NoPassword | LoginMethod::Key)
         && methods.contains(&MethodKind::PublicKey)
     {
-        let paths = key_paths(login)?;
+        let paths = key_paths(login, connector.key_dir.as_deref())?;
         for path in paths {
             let Some(key) = load_private_key(&path, secrets, broker).await? else {
                 continue;
@@ -979,12 +934,12 @@ async fn authenticate(
             let hash = handle
                 .best_supported_rsa_hash()
                 .await
-                .map_err(|_| anyhow!(t!("ssh.auth.rsa_hash")))?
+                .map_err(|_| anyhow!(AuthError::RsaHash))?
                 .flatten();
             let result = handle
                 .authenticate_publickey(user, PrivateKeyWithHashAlg::new(Arc::new(key), hash))
                 .await
-                .map_err(|_| anyhow!(t!("ssh.auth.key_failed")))?;
+                .map_err(|_| anyhow!(AuthError::KeyFailed))?;
             if result.success() {
                 return Ok(());
             }
@@ -995,7 +950,7 @@ async fn authenticate(
             }
         }
         if method == LoginMethod::Key && !partial {
-            bail!(t!("ssh.auth.key_rejected"));
+            bail!(AuthError::KeyRejected);
         }
     }
 
@@ -1008,7 +963,7 @@ async fn authenticate(
         {
             return Err(PasswordWanted.into());
         }
-        bail!(t!("ssh.auth.no_key_accepted"));
+        bail!(AuthError::NoKeyAccepted);
     }
 
     if method == LoginMethod::Password || partial {
@@ -1018,12 +973,12 @@ async fn authenticate(
         let mut saved_rejected = false;
         if methods.contains(&MethodKind::Password) {
             // Try what the host has saved before bothering anyone.
-            if let Some(saved) = saved_secret(secrets, &login.password) {
+            if let Some(saved) = read_secret(secrets, &login.password).await {
                 saved_offered = true;
                 let result = handle
                     .authenticate_password(user, saved.to_string())
                     .await
-                    .map_err(|_| anyhow!(t!("ssh.auth.password_failed")))?;
+                    .map_err(|_| anyhow!(AuthError::PasswordFailed))?;
                 if result.success() {
                     return Ok(());
                 }
@@ -1034,11 +989,6 @@ async fn authenticate(
                 partial = is_partial(&result);
                 methods = remaining_methods(result);
             }
-            let instructions = if saved_rejected {
-                t!("ssh.auth.saved_password_rejected")
-            } else {
-                t!("ssh.auth.enter_password")
-            };
             if !partial && methods.contains(&MethodKind::Password) {
                 for _ in 0..AUTH_RETRIES {
                     let answer = ask_one_secret(
@@ -1046,15 +996,13 @@ async fn authenticate(
                         MissingCredential::Password {
                             rejected: saved_rejected,
                         },
-                        &t!("ssh.auth.prompt_title"),
-                        &instructions,
-                        &t!("ssh.auth.password_field"),
+                        AuthenticationRequest::Password { saved_rejected },
                     )
                     .await?;
                     let result = handle
                         .authenticate_password(user, answer.into_inner())
                         .await
-                        .map_err(|_| anyhow!(t!("ssh.auth.password_failed")))?;
+                        .map_err(|_| anyhow!(AuthError::PasswordFailed))?;
                     if result.success() {
                         return Ok(());
                     }
@@ -1070,15 +1018,18 @@ async fn authenticate(
             // A password login whose server takes passwords only this way
             // (ESXi) is asked for it as a single hidden question. After a
             // password that got partway, the question is a second factor.
-            let mut password =
-                (method == LoginMethod::Password && !partial).then(|| KeyboardPassword {
+            let mut password = if method == LoginMethod::Password && !partial {
+                Some(KeyboardPassword {
                     saved: if saved_offered {
                         None
                     } else {
-                        saved_secret(secrets, &login.password)
+                        read_secret(secrets, &login.password).await
                     },
                     rejected: saved_rejected,
-                });
+                })
+            } else {
+                None
+            };
             for _ in 0..AUTH_RETRIES {
                 if keyboard_interactive(handle, user, broker, password.as_mut()).await? {
                     return Ok(());
@@ -1086,7 +1037,7 @@ async fn authenticate(
             }
         }
     }
-    bail!(t!("ssh.auth.failed"))
+    bail!(AuthError::Failed)
 }
 
 /// What a password login brings to keyboard-interactive authentication.
@@ -1100,28 +1051,6 @@ struct KeyboardPassword {
 type Agent = russh::keys::agent::client::AgentClient<
     Box<dyn russh::keys::agent::client::AgentStream + Send + Unpin>,
 >;
-
-/// Why the agent's keys could not be offered at all. `Display` is the text a
-/// person reads. The cause is folded into the words rather than chained, so
-/// a missing agent is never mistaken for a network failure worth retrying.
-#[derive(Debug)]
-enum AgentProblem {
-    Unreachable(String),
-    Empty,
-    /// Every key failed to sign: a locked agent, or one that asked to
-    /// confirm and was told no.
-    Unsigned,
-}
-
-impl std::fmt::Display for AgentProblem {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&match self {
-            AgentProblem::Unreachable(reason) => t!("ssh.agent.unreachable", reason = reason),
-            AgentProblem::Empty => t!("ssh.agent.empty"),
-            AgentProblem::Unsigned => t!("ssh.agent.unsigned"),
-        })
-    }
-}
 
 /// Offer the agent's keys one after another. The result is the server's
 /// answer to the last key offered: a success, or the refusal that says what
@@ -1138,12 +1067,16 @@ async fn try_agent(
     let identities = match agent.request_identities().await {
         Ok(identities) if identities.is_empty() => return Ok(Err(AgentProblem::Empty)),
         Ok(identities) => identities,
-        Err(error) => return Ok(Err(AgentProblem::Unreachable(error.to_string()))),
+        Err(error) => {
+            return Ok(Err(AgentProblem::Unreachable(AgentUnreachable::Other(
+                error.to_string(),
+            ))));
+        }
     };
     let hash = handle
         .best_supported_rsa_hash()
         .await
-        .map_err(|_| anyhow!(t!("ssh.agent.hash")))?
+        .map_err(|_| anyhow!(AuthError::AgentHash))?
         .flatten();
     let mut last = None;
     for identity in identities {
@@ -1168,22 +1101,23 @@ async fn connect_agent(location: &AgentLocation) -> Result<Agent, AgentProblem> 
         AgentLocation::At(path) => path.clone(),
         AgentLocation::System => match std::env::var_os("SSH_AUTH_SOCK") {
             Some(path) if !path.is_empty() => PathBuf::from(path),
-            _ => {
-                return Err(AgentProblem::Unreachable(t!("ssh.agent.no_socket").into()));
-            }
+            _ => return Err(AgentProblem::Unreachable(AgentUnreachable::NoSocket)),
         },
+        AgentLocation::None => {
+            return Err(AgentProblem::Unreachable(AgentUnreachable::Unsupported));
+        }
     };
     match tokio::time::timeout(AGENT_TIMEOUT, AgentClient::connect_uds(&path)).await {
         Ok(Ok(agent)) => Ok(agent.dynamic()),
         Ok(Err(russh::keys::Error::IO(error))) if error.kind() == std::io::ErrorKind::NotFound => {
-            Err(AgentProblem::Unreachable(
-                t!("ssh.agent.missing_socket", path = path.display()).into(),
-            ))
+            Err(AgentProblem::Unreachable(AgentUnreachable::MissingSocket {
+                path,
+            }))
         }
-        Ok(Err(error)) => Err(AgentProblem::Unreachable(error.to_string())),
-        Err(_) => Err(AgentProblem::Unreachable(
-            t!("ssh.agent.no_response").into(),
-        )),
+        Ok(Err(error)) => Err(AgentProblem::Unreachable(AgentUnreachable::Other(
+            error.to_string(),
+        ))),
+        Err(_) => Err(AgentProblem::Unreachable(AgentUnreachable::NoResponse)),
     }
 }
 
@@ -1196,49 +1130,50 @@ async fn connect_agent(location: &AgentLocation) -> Result<Agent, AgentProblem> 
     let pipe = match location {
         AgentLocation::At(path) => path.as_os_str().to_owned(),
         AgentLocation::System => SYSTEM_PIPE.into(),
+        AgentLocation::None => {
+            return Err(AgentProblem::Unreachable(AgentUnreachable::Unsupported));
+        }
     };
     match tokio::time::timeout(AGENT_TIMEOUT, AgentClient::connect_named_pipe(&pipe)).await {
         Ok(Ok(agent)) => Ok(agent.dynamic()),
         Ok(Err(russh::keys::Error::IO(error))) if error.kind() == std::io::ErrorKind::NotFound => {
             Err(AgentProblem::Unreachable(
-                t!("ssh.agent.service_not_running").into(),
+                AgentUnreachable::ServiceNotRunning,
             ))
         }
-        Ok(Err(error)) => Err(AgentProblem::Unreachable(error.to_string())),
-        Err(_) => Err(AgentProblem::Unreachable(
-            t!("ssh.agent.no_response").into(),
-        )),
+        Ok(Err(error)) => Err(AgentProblem::Unreachable(AgentUnreachable::Other(
+            error.to_string(),
+        ))),
+        Err(_) => Err(AgentProblem::Unreachable(AgentUnreachable::NoResponse)),
     }
 }
 
 #[cfg(not(any(unix, windows)))]
 async fn connect_agent(location: &AgentLocation) -> Result<Agent, AgentProblem> {
     let _ = location;
-    Err(AgentProblem::Unreachable(
-        t!("ssh.agent.unsupported").into(),
-    ))
+    Err(AgentProblem::Unreachable(AgentUnreachable::Unsupported))
 }
 
-fn key_paths(login: &HostLogin) -> Result<Vec<PathBuf>> {
+fn key_paths(login: &HostLogin, key_dir: Option<&Path>) -> Result<Vec<PathBuf>> {
     if login.method == LoginMethod::Key {
         return login
             .key_path
             .clone()
             .map(|path| vec![path])
-            .ok_or_else(|| anyhow!(t!("ssh.key.not_chosen")));
+            .ok_or_else(|| anyhow!(AuthError::KeyNotChosen));
     }
-    let Some(home) = dirs::home_dir() else {
+    let Some(dir) = key_dir else {
         return Ok(Vec::new());
     };
     Ok(DEFAULT_KEY_FILES
         .into_iter()
-        .map(|name| home.join(".ssh").join(name))
+        .map(|name| dir.join(name))
         .collect())
 }
 
 async fn load_private_key(
     path: &Path,
-    secrets: &SharedSecretStore,
+    secrets: &SharedSecretSource,
     broker: Asker<'_>,
 ) -> Result<Option<russh::keys::PrivateKey>> {
     if !path.exists() {
@@ -1247,76 +1182,50 @@ async fn load_private_key(
     match load_secret_key(path, None) {
         Ok(key) => return Ok(Some(key)),
         Err(russh::keys::Error::KeyIsEncrypted) => {}
-        Err(_) => bail!(t!("ssh.key.unreadable", path = path.display())),
+        Err(_) => bail!(AuthError::KeyUnreadable {
+            path: path.to_path_buf(),
+        }),
     }
     // Passphrases are saved per key file, so one saved answer unlocks the same
     // key for every host that uses it.
     let mut saved_rejected = false;
-    if let Some(saved) = saved_secret(secrets, &SecretRef::passphrase(path)) {
+    if let Some(saved) = read_secret(secrets, &SecretRef::passphrase(path)).await {
         if let Ok(key) = load_secret_key(path, Some(saved.as_str())) {
             return Ok(Some(key));
         }
         saved_rejected = true;
     }
-    let instructions = if saved_rejected {
-        t!("ssh.key.saved_passphrase_rejected", path = path.display())
-    } else {
-        t!("ssh.key.enter_passphrase", path = path.display())
-    };
     for _ in 0..AUTH_RETRIES {
         let answer = ask_one_secret(
             broker,
             MissingCredential::Passphrase {
                 rejected: saved_rejected,
             },
-            &t!("ssh.key.prompt_title"),
-            &instructions,
-            &t!("ssh.key.passphrase_field"),
+            AuthenticationRequest::Passphrase {
+                key_path: path.to_path_buf(),
+                saved_rejected,
+            },
         )
         .await?;
         if let Ok(key) = load_secret_key(path, Some(answer.expose())) {
             return Ok(Some(key));
         }
     }
-    bail!(t!("ssh.key.too_many_attempts"))
-}
-
-/// Read a saved secret. A keychain that errors, is locked, or holds an empty
-/// value counts as nothing saved: the connection then falls back to asking,
-/// which is always better than refusing to connect.
-///
-/// This blocks. It only ever runs on the SSH worker thread, whose runtime
-/// serves this one connection, and only while authentication is already
-/// waiting on a person.
-fn saved_secret(secrets: &SharedSecretStore, secret: &SecretRef) -> Option<Zeroizing<String>> {
-    secrets
-        .get(secret)
-        .ok()
-        .flatten()
-        .filter(|value| !value.is_empty())
+    bail!(AuthError::KeyTooManyAttempts)
 }
 
 async fn ask_one_secret(
     broker: Asker<'_>,
     need: MissingCredential,
-    title: &str,
-    instructions: &str,
-    label: &str,
-) -> Result<crate::connection::ConnectionSecret> {
+    request: AuthenticationRequest,
+) -> Result<ConnectionSecret> {
     let reply = broker
-        .ask_credential(
-            need,
-            ConnectionPromptKind::authentication(
-                title,
-                instructions,
-                vec![ConnectionPromptField::new(label, false)],
-            ),
-        )
+        .ask_credential(need, ConnectionPromptKind::authentication(request))
         .await?;
     match reply {
         ConnectionPromptReply::Answers(mut answers) if answers.len() == 1 => Ok(answers.remove(0)),
-        ConnectionPromptReply::Cancel => bail!(t!("ssh.auth.cancelled")),
-        _ => bail!(t!("ssh.auth.invalid_reply")),
+        ConnectionPromptReply::Cancel => bail!(AuthError::Cancelled),
+        _ => bail!(AuthError::InvalidReply),
     }
 }
 
@@ -1334,7 +1243,7 @@ async fn keyboard_interactive(
     let mut response = handle
         .authenticate_keyboard_interactive_start(user, None)
         .await
-        .map_err(|_| anyhow!(t!("ssh.auth.keyboard_start_failed")))?;
+        .map_err(|_| anyhow!(AuthError::KeyboardStartFailed))?;
     let mut password_asked = false;
     let mut saved_sent = false;
     loop {
@@ -1375,25 +1284,21 @@ async fn keyboard_interactive(
                     } else {
                         MissingCredential::KeyboardInteractive
                     };
-                    let instructions = if !(asks_password && rejected) {
-                        instructions
-                    } else if instructions.trim().is_empty() {
-                        t!("ssh.auth.saved_password_rejected").to_string()
-                    } else {
-                        format!("{}\n{instructions}", t!("ssh.auth.saved_password_rejected"))
-                    };
                     let fields = prompts
                         .into_iter()
                         .map(|prompt| ConnectionPromptField::new(prompt.prompt, prompt.echo))
                         .collect();
+                    let request = AuthenticationRequest::KeyboardInteractive {
+                        name,
+                        instructions,
+                        fields,
+                        saved_password_rejected: asks_password && rejected,
+                    };
                     let reply = broker
-                        .ask_credential(
-                            need,
-                            ConnectionPromptKind::authentication(name, instructions, fields),
-                        )
+                        .ask_credential(need, ConnectionPromptKind::authentication(request))
                         .await?;
                     let ConnectionPromptReply::Answers(answers) = reply else {
-                        bail!(t!("ssh.auth.keyboard_cancelled"))
+                        bail!(AuthError::KeyboardCancelled)
                     };
                     answers
                         .into_iter()
@@ -1403,7 +1308,7 @@ async fn keyboard_interactive(
                 response = handle
                     .authenticate_keyboard_interactive_respond(answers)
                     .await
-                    .map_err(|_| anyhow!(t!("ssh.auth.keyboard_failed")))?;
+                    .map_err(|_| anyhow!(AuthError::KeyboardFailed))?;
             }
         }
     }
@@ -1430,14 +1335,17 @@ fn is_partial(result: &AuthResult) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::read_known_keys;
+    use super::{KnownHostsError, read_known_keys};
     #[test]
     fn malformed_known_hosts_is_blocked() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("known_hosts");
         std::fs::write(&path, "this is not a key\n").unwrap();
         let error = read_known_keys("example.test", 22, &path).unwrap_err();
-        assert!(error.to_string().contains("已损坏"));
+        assert_eq!(
+            error.downcast_ref::<KnownHostsError>(),
+            Some(&KnownHostsError::Corrupt { path })
+        );
     }
 
     #[test]
@@ -1482,9 +1390,10 @@ mod tests {
 
         // What a refused or unresolvable connect looks like coming out of
         // russh: the socket's error wrapped, under the connector's context.
-        let refused =
-            anyhow::Error::from(russh::Error::IO(Error::from(ErrorKind::ConnectionRefused)))
-                .context("无法建立 SSH 连接");
+        let refused = crate::ssh::wrap(
+            crate::ssh::ConnectError::Handshake,
+            russh::Error::IO(Error::from(ErrorKind::ConnectionRefused)),
+        );
         assert!(is_network_error(&refused));
         let unresolved = anyhow::Error::from(russh::Error::IO(Error::other("no such host")));
         assert!(is_network_error(&unresolved));
@@ -1503,8 +1412,35 @@ mod tests {
         assert!(!is_network_error(
             &Error::from(ErrorKind::PermissionDenied).into()
         ));
-        assert!(!is_network_error(&anyhow::anyhow!(
-            "认证失败：服务器未接受可用的认证方式"
-        )));
+        assert!(!is_network_error(&super::AuthError::Failed.into()));
+    }
+
+    #[test]
+    fn connectors_of_one_trust_file_share_its_lock() {
+        use super::SshConnector;
+        use std::sync::Arc;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("known_hosts");
+        let connector = |path| SshConnector::new(path, Arc::new(crate::secrets::NoSecretStore));
+        let (one, other) = (connector(path.clone()), connector(path));
+        assert!(Arc::ptr_eq(&one.known_hosts_lock, &other.known_hosts_lock));
+        let elsewhere = connector(directory.path().join("other"));
+        assert!(!Arc::ptr_eq(
+            &one.known_hosts_lock,
+            &elsewhere.known_hosts_lock
+        ));
+    }
+
+    #[test]
+    fn default_keys_are_looked_for_only_where_told() {
+        use super::{DEFAULT_KEY_FILES, HostLogin, LoginMethod, key_paths};
+        use std::path::Path;
+
+        let login = HostLogin::new("10.0.0.1", 22, "root", LoginMethod::NoPassword);
+        assert!(key_paths(&login, None).unwrap().is_empty());
+        let paths = key_paths(&login, Some(Path::new("/keys"))).unwrap();
+        assert_eq!(paths.len(), DEFAULT_KEY_FILES.len());
+        assert_eq!(paths[0], Path::new("/keys/id_ed25519"));
     }
 }

@@ -10,12 +10,11 @@ use std::net::IpAddr;
 
 use anyhow::{Result, anyhow, bail};
 use base64::Engine as _;
-use gpui_kit::SharedString;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use zeroize::Zeroizing;
 
-use crate::host::ProxyKind;
-use crate::i18n::t;
+use super::error::ProxyError;
+use super::login::ProxyKind;
 
 /// What a proxy that wants a user name and password is given.
 pub(super) struct ProxyAuth<'a> {
@@ -54,8 +53,8 @@ fn authority(host: &str, port: u16) -> String {
 
 /// An error that reads as the proxy's report on reaching the host, of the
 /// kind a direct connection would have failed with.
-fn unreachable(kind: ErrorKind, message: SharedString) -> anyhow::Error {
-    io::Error::new(kind, String::from(message)).into()
+fn unreachable(kind: ErrorKind, error: ProxyError) -> anyhow::Error {
+    io::Error::new(kind, error).into()
 }
 
 async fn http_connect<S>(
@@ -91,19 +90,27 @@ where
     };
     match status {
         Some(200..=299) => Ok(()),
-        Some(407) if authenticated => bail!(t!("ssh.proxy.bad_credentials")),
-        Some(407) => bail!(t!("ssh.proxy.auth_required")),
-        Some(403) => bail!(t!("ssh.proxy.forbidden", target = target)),
+        Some(407) if authenticated => bail!(ProxyError::BadCredentials),
+        Some(407) => bail!(ProxyError::AuthRequired),
+        Some(403) => bail!(ProxyError::Forbidden {
+            target: target.clone()
+        }),
         Some(502) => Err(unreachable(
             ErrorKind::ConnectionRefused,
-            t!("ssh.proxy.http.bad_gateway", target = target),
+            ProxyError::HttpBadGateway {
+                target: target.clone(),
+            },
         )),
         Some(504) => Err(unreachable(
             ErrorKind::TimedOut,
-            t!("ssh.proxy.http.gateway_timeout", target = target),
+            ProxyError::HttpGatewayTimeout {
+                target: target.clone(),
+            },
         )),
-        Some(_) => bail!(t!("ssh.proxy.http.refused", status = status_line)),
-        None => bail!(t!("ssh.proxy.http.unrecognized")),
+        Some(_) => bail!(ProxyError::HttpRefused {
+            status: status_line.to_string()
+        }),
+        None => bail!(ProxyError::HttpUnrecognized),
     }
 }
 
@@ -116,12 +123,12 @@ where
     let mut head = Vec::new();
     while !head.ends_with(b"\r\n\r\n") {
         if head.len() >= MAX_HEAD {
-            bail!(t!("ssh.proxy.reply_too_long"));
+            bail!(ProxyError::ReplyTooLong);
         }
         let byte = stream
             .read_u8()
             .await
-            .map_err(|_| anyhow!(t!("ssh.proxy.closed")))?;
+            .map_err(|_| anyhow!(ProxyError::Closed))?;
         head.push(byte);
     }
     Ok(String::from_utf8_lossy(&head).into_owned())
@@ -151,14 +158,14 @@ where
     let mut chosen = [0u8; 2];
     read_reply(stream, &mut chosen).await?;
     if chosen[0] != SOCKS_VERSION {
-        bail!(t!("ssh.proxy.socks.unrecognized"));
+        bail!(ProxyError::SocksUnrecognized);
     }
     match (chosen[1], auth) {
         (NO_AUTHENTICATION, _) => {}
         (USER_PASSWORD, Some(auth)) => {
             let (user, password) = (auth.user.as_bytes(), auth.password.as_bytes());
             if user.len() > 255 || password.len() > 255 {
-                bail!(t!("ssh.proxy.socks.credentials_too_long"));
+                bail!(ProxyError::SocksCredentialsTooLong);
             }
             let mut request = Zeroizing::new(Vec::with_capacity(3 + user.len() + password.len()));
             request.push(0x01);
@@ -170,13 +177,13 @@ where
             let mut status = [0u8; 2];
             read_reply(stream, &mut status).await?;
             if status[1] != 0 {
-                bail!(t!("ssh.proxy.bad_credentials"));
+                bail!(ProxyError::BadCredentials);
             }
         }
         (NO_ACCEPTABLE_METHOD | USER_PASSWORD, None) => {
-            bail!(t!("ssh.proxy.auth_required"))
+            bail!(ProxyError::AuthRequired)
         }
-        _ => bail!(t!("ssh.proxy.socks.no_password_auth")),
+        _ => bail!(ProxyError::SocksNoPasswordAuth),
     }
 
     let mut request = vec![SOCKS_VERSION, 0x01, 0x00];
@@ -193,7 +200,7 @@ where
         // host may only be known by that name on the proxy's side.
         Err(_) => {
             if host.len() > 255 {
-                bail!(t!("ssh.proxy.socks.host_too_long"));
+                bail!(ProxyError::SocksHostTooLong);
             }
             request.push(0x03);
             request.push(host.len() as u8);
@@ -207,41 +214,53 @@ where
     let mut reply = [0u8; 4];
     read_reply(stream, &mut reply).await?;
     if reply[0] != SOCKS_VERSION {
-        bail!(t!("ssh.proxy.socks.unrecognized"));
+        bail!(ProxyError::SocksUnrecognized);
     }
     match reply[1] {
         0x00 => {}
-        0x02 => bail!(t!("ssh.proxy.socks.rules_forbid", target = target)),
+        0x02 => bail!(ProxyError::SocksRulesForbid {
+            target: target.clone()
+        }),
         0x03 => {
             return Err(unreachable(
                 ErrorKind::NetworkUnreachable,
-                t!("ssh.proxy.socks.network_unreachable", target = target),
+                ProxyError::SocksNetworkUnreachable {
+                    target: target.clone(),
+                },
             ));
         }
         0x04 => {
             return Err(unreachable(
                 ErrorKind::HostUnreachable,
-                t!("ssh.proxy.socks.host_unreachable", target = target),
+                ProxyError::SocksHostUnreachable {
+                    target: target.clone(),
+                },
             ));
         }
         0x05 => {
             return Err(unreachable(
                 ErrorKind::ConnectionRefused,
-                t!("ssh.proxy.socks.refused", target = target),
+                ProxyError::SocksRefused {
+                    target: target.clone(),
+                },
             ));
         }
         0x06 => {
             return Err(unreachable(
                 ErrorKind::TimedOut,
-                t!("ssh.proxy.socks.timeout", target = target),
+                ProxyError::SocksTimeout {
+                    target: target.clone(),
+                },
             ));
         }
-        0x07 => bail!(t!("ssh.proxy.socks.no_connect")),
-        0x08 => bail!(t!("ssh.proxy.socks.address_type")),
+        0x07 => bail!(ProxyError::SocksNoConnect),
+        0x08 => bail!(ProxyError::SocksAddressType),
         _ => {
             return Err(unreachable(
                 ErrorKind::Other,
-                t!("ssh.proxy.socks.internal", target = target),
+                ProxyError::SocksInternal {
+                    target: target.clone(),
+                },
             ));
         }
     }
@@ -255,7 +274,7 @@ where
             read_reply(stream, &mut length).await?;
             usize::from(length[0])
         }
-        _ => bail!(t!("ssh.proxy.socks.unrecognized")),
+        _ => bail!(ProxyError::SocksUnrecognized),
     };
     let mut rest = vec![0u8; bound + 2];
     read_reply(stream, &mut rest).await?;
@@ -270,7 +289,7 @@ where
         .read_exact(buffer)
         .await
         .map(|_| ())
-        .map_err(|_| anyhow!(t!("ssh.proxy.closed")))
+        .map_err(|_| anyhow!(ProxyError::Closed))
 }
 
 #[cfg(test)]
@@ -376,34 +395,42 @@ mod tests {
         error.downcast_ref::<io::Error>().map(io::Error::kind)
     }
 
+    /// What the proxy answered, bare or inside the I/O error it came in.
+    fn proxy_answer(error: anyhow::Error) -> ProxyError {
+        if let Some(io) = error.downcast_ref::<io::Error>() {
+            return io
+                .get_ref()
+                .and_then(|inner| inner.downcast_ref::<ProxyError>())
+                .cloned()
+                .expect("a proxy's answer");
+        }
+        error.downcast::<ProxyError>().expect("a proxy's answer")
+    }
+
     #[test]
     fn an_http_proxys_refusal_says_why() {
         let error = http_answer("HTTP/1.1 407 Proxy Authentication Required\r\n\r\n", None);
-        assert_eq!(
-            error.to_string(),
-            "代理服务器要求认证，请填写代理的用户名和密码"
-        );
+        assert_eq!(proxy_answer(error), ProxyError::AuthRequired);
         let error = http_answer(
             "HTTP/1.1 407 Proxy Authentication Required\r\n\r\n",
             Some(("me", "wrong")),
         );
-        assert_eq!(error.to_string(), "代理服务器拒绝了用户名或密码");
+        assert_eq!(proxy_answer(error), ProxyError::BadCredentials);
 
         // A host the proxy cannot reach fails like an unreachable host.
         let error = http_answer("HTTP/1.1 502 Bad Gateway\r\n\r\n", None);
         assert_eq!(io_kind(&error), Some(ErrorKind::ConnectionRefused));
         assert_eq!(
-            error.to_string(),
-            "代理服务器无法连接到 db.internal:22：连接失败（HTTP 502）"
+            proxy_answer(error),
+            ProxyError::HttpBadGateway {
+                target: "db.internal:22".into()
+            }
         );
         let error = http_answer("HTTP/1.1 504 Gateway Timeout\r\n\r\n", None);
         assert_eq!(io_kind(&error), Some(ErrorKind::TimedOut));
 
         let error = http_answer("SSH-2.0-OpenSSH\r\n\r\n", None);
-        assert_eq!(
-            error.to_string(),
-            "代理服务器的回复无法识别，请确认它是 HTTP 代理"
-        );
+        assert_eq!(proxy_answer(error), ProxyError::HttpUnrecognized);
     }
 
     #[test]
@@ -417,7 +444,7 @@ mod tests {
                 }
             }
         });
-        assert_eq!(result.unwrap_err().to_string(), "代理服务器的回复过长");
+        assert_eq!(proxy_answer(result.unwrap_err()), ProxyError::ReplyTooLong);
     }
 
     /// A SOCKS5 proxy that wants `auth` (or nothing), checks the request for
@@ -517,15 +544,12 @@ mod tests {
 
         let (result, _) = socks5("10.0.0.5", Some(("me", "wrong")), me, request.clone(), 0);
         assert_eq!(
-            result.unwrap_err().to_string(),
-            "代理服务器拒绝了用户名或密码"
+            proxy_answer(result.unwrap_err()),
+            ProxyError::BadCredentials
         );
 
         let (result, _) = socks5("10.0.0.5", None, me, request, 0);
-        assert_eq!(
-            result.unwrap_err().to_string(),
-            "代理服务器要求认证，请填写代理的用户名和密码"
-        );
+        assert_eq!(proxy_answer(result.unwrap_err()), ProxyError::AuthRequired);
     }
 
     #[test]
@@ -542,8 +566,10 @@ mod tests {
         }
         let (result, _) = socks5("10.0.0.5", None, None, request, 5);
         assert_eq!(
-            result.unwrap_err().to_string(),
-            "代理服务器无法连接到 10.0.0.5:22：连接被拒绝"
+            proxy_answer(result.unwrap_err()),
+            ProxyError::SocksRefused {
+                target: "10.0.0.5:22".into()
+            }
         );
     }
 }

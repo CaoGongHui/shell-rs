@@ -13,12 +13,10 @@ use russh::ChannelMsg;
 use tokio::sync::watch;
 
 use super::connection::{
-    MissingCredential, SshConnectionConfig, SshConnector, SshPrompts, lock,
-    timeout_excluding_prompts,
+    SshConnectionConfig, SshConnector, SshPrompts, lock, timeout_excluding_prompts,
 };
-use super::tester::describe_login_error;
-use crate::connection::{ConnectionPrompt, ConnectionPromptKind};
-use crate::i18n::t;
+use super::error::{MissingCredential, wrap};
+use super::prompt::{ConnectionPrompt, ConnectionPromptKind};
 
 /// How long logging in may take.
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(20);
@@ -53,20 +51,60 @@ pub enum ExecErrorKind {
     Aborted,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Why a command did not run to its end: its kind, and the error that
+/// says what happened, for the app to word.
+#[derive(Debug)]
 pub struct ExecError {
     pub kind: ExecErrorKind,
-    pub message: String,
+    pub error: anyhow::Error,
 }
 
 impl ExecError {
-    fn new(kind: ExecErrorKind, message: impl Into<String>) -> Self {
+    fn new(kind: ExecErrorKind, error: impl Into<anyhow::Error>) -> Self {
         Self {
             kind,
-            message: message.into(),
+            error: error.into(),
         }
     }
 }
+
+/// What went wrong running a command, beyond logging in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExecFailure {
+    /// Over the error that kept the runtime from starting.
+    RuntimeFailed,
+    /// Over the channel's error.
+    CommandFailed,
+    Aborted,
+    Refused,
+    Disconnected,
+    HostKeyChanged {
+        endpoint: String,
+    },
+    HostKeyUnknown {
+        endpoint: String,
+    },
+}
+
+impl std::fmt::Display for ExecFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RuntimeFailed => f.write_str("couldn't start the connection"),
+            Self::CommandFailed => f.write_str("couldn't run the command"),
+            Self::Aborted => f.write_str("nothing read the output, so the command was abandoned"),
+            Self::Refused => f.write_str("the server refused to run the command"),
+            Self::Disconnected => f.write_str("the connection closed before the command finished"),
+            Self::HostKeyChanged { endpoint } => {
+                write!(f, "the host key of {endpoint} doesn't match the saved one")
+            }
+            Self::HostKeyUnknown { endpoint } => {
+                write!(f, "the host key of {endpoint} isn't trusted yet")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ExecFailure {}
 
 /// Log in, run `command`, pass its output to `output` as it arrives, and
 /// return how it ended. Blocks, with a runtime of its own, so it belongs on
@@ -86,7 +124,7 @@ pub fn run_command(
         .map_err(|error| {
             ExecError::new(
                 ExecErrorKind::Connect,
-                t!("ssh.exec.runtime_failed", error = error),
+                wrap(ExecFailure::RuntimeFailed, error),
             )
         })?;
     runtime.block_on(run(connector, config, command, output))
@@ -132,7 +170,7 @@ async fn run(
     )
     .await
     .and_then(|result| result);
-    let (handle, _) = connected.map_err(|error| describe_failure(&error, *lock(&seen), config))?;
+    let (handle, _) = connected.map_err(|error| login_failure(error, *lock(&seen), config))?;
 
     let result = run_on(&handle, command, output).await;
     let _ = handle
@@ -149,13 +187,13 @@ async fn run_on(
     let channel_error = |error: russh::Error| {
         ExecError::new(
             ExecErrorKind::Connect,
-            t!("ssh.exec.command_failed", error = error),
+            wrap(ExecFailure::CommandFailed, error),
         )
     };
     let mut channel = handle.channel_open_session().await.map_err(channel_error)?;
     channel.exec(true, command).await.map_err(channel_error)?;
     channel.eof().await.map_err(channel_error)?;
-    let aborted = |_| ExecError::new(ExecErrorKind::Aborted, t!("ssh.exec.aborted"));
+    let aborted = |_| ExecError::new(ExecErrorKind::Aborted, ExecFailure::Aborted);
     let mut exit = None;
     // Until the channel closes, not just until EOF: the exit status can
     // arrive after the last output.
@@ -174,20 +212,19 @@ async fn run_on(
                 exit = Some(ExecExit::Signal(format!("{signal_name:?}")))
             }
             Some(ChannelMsg::Failure) => {
-                return Err(ExecError::new(
-                    ExecErrorKind::Connect,
-                    t!("ssh.exec.refused"),
-                ));
+                return Err(ExecError::new(ExecErrorKind::Connect, ExecFailure::Refused));
             }
             Some(ChannelMsg::Close) | None => break,
             Some(_) => {}
         }
     }
-    exit.ok_or_else(|| ExecError::new(ExecErrorKind::Connect, t!("ssh.exec.disconnected")))
+    exit.ok_or_else(|| ExecError::new(ExecErrorKind::Connect, ExecFailure::Disconnected))
 }
 
-fn describe_failure(
-    error: &anyhow::Error,
+/// Why logging in failed, sorted for the caller: the host key the check
+/// saw, a credential nobody could give, or anything else.
+fn login_failure(
+    error: anyhow::Error,
     seen: HostKeySeen,
     config: &SshConnectionConfig,
 ) -> ExecError {
@@ -195,33 +232,17 @@ fn describe_failure(
     if seen.changed {
         return ExecError::new(
             ExecErrorKind::HostKeyChanged,
-            t!("ssh.exec.host_key_changed", endpoint = endpoint),
+            ExecFailure::HostKeyChanged { endpoint },
         );
     }
     if seen.unknown {
         return ExecError::new(
             ExecErrorKind::HostKeyUnknown,
-            t!("ssh.exec.host_key_unknown", endpoint = endpoint),
+            ExecFailure::HostKeyUnknown { endpoint },
         );
     }
-    if let Some(need) = error
-        .chain()
-        .find_map(|cause| cause.downcast_ref::<MissingCredential>())
-    {
-        let message = match need {
-            MissingCredential::Password { rejected: false } => t!("ssh.exec.no_saved_password"),
-            MissingCredential::Password { rejected: true } => {
-                t!("ssh.exec.saved_password_rejected")
-            }
-            MissingCredential::Passphrase { rejected: false } => {
-                t!("ssh.exec.no_saved_passphrase")
-            }
-            MissingCredential::Passphrase { rejected: true } => {
-                t!("ssh.exec.saved_passphrase_rejected")
-            }
-            MissingCredential::KeyboardInteractive => t!("ssh.exec.keyboard_interactive"),
-        };
-        return ExecError::new(ExecErrorKind::MissingCredential, message);
+    if error.chain().any(|cause| cause.is::<MissingCredential>()) {
+        return ExecError::new(ExecErrorKind::MissingCredential, error);
     }
-    ExecError::new(ExecErrorKind::Connect, describe_login_error(error))
+    ExecError::new(ExecErrorKind::Connect, error)
 }

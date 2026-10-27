@@ -31,9 +31,9 @@ use crate::secrets::SecretRef;
 use super::secret_fields::SecretFields;
 use super::{
     AuthKind, COMMON_BAUD_RATES, Credential, CredentialId, CredentialKind, DEFAULT_USER, DataBits,
-    FlowControl, GroupId, Host, HostDraft, HostDraftError, HostId, HostLogin, HostStore, Parity,
-    Protocol, ProtocolKind, ProxyKind, ProxySettings, Route, SSH_PORT, SerialLine, SerialSettings,
-    StopBits, TELNET_PORT, TelnetSettings, group_options,
+    FlowControl, GroupId, Host, HostDraft, HostDraftError, HostId, HostLogin, HostLoginExt,
+    HostStore, Parity, Protocol, ProtocolKind, ProxyKind, ProxySettings, Route, SSH_PORT,
+    SerialLine, SerialSettings, StopBits, TELNET_PORT, TelnetSettings, group_options,
 };
 pub use crate::shared::DeleteHandler;
 use crate::shared::{
@@ -557,7 +557,7 @@ impl HostForm {
             SelectState::new(
                 ProxyKind::ALL
                     .iter()
-                    .map(|kind| kind.label())
+                    .map(|kind| proxy_kind_label(*kind))
                     .collect::<Vec<_>>(),
                 Some(IndexPath::new(proxy_kind_ix)),
                 window,
@@ -2276,7 +2276,7 @@ fn ask_to_trust(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let description = prompt.description();
+    let description = crate::ssh::unknown_host_description(&prompt);
     window.open_alert_dialog(cx, move |alert, _, _| {
         let answer = |trusted: bool| {
             let reply = reply.clone();
@@ -2520,6 +2520,13 @@ pub fn join_sentences(sentences: Vec<SharedString>) -> Option<SharedString> {
         text.push_str(&sentence);
     }
     (!text.is_empty()).then(|| text.into())
+}
+
+fn proxy_kind_label(kind: ProxyKind) -> SharedString {
+    match kind {
+        ProxyKind::Http => t!("host.proxy_kind.http"),
+        ProxyKind::Socks5 => t!("host.proxy_kind.socks5"),
+    }
 }
 
 #[cfg(test)]

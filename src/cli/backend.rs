@@ -18,7 +18,8 @@ use crate::sftp::{
     UploadRequest,
 };
 use crate::ssh::{
-    ExecErrorKind, ExecExit, ExecStream, SshConnectionConfig, SshConnector, run_command,
+    ExecErrorKind, ExecExit, ExecStream, SshConnectionConfig, SshConnector, describe_exec_error,
+    run_command,
 };
 
 /// How often a transfer reports progress to the command.
@@ -146,15 +147,16 @@ impl CliBackend for SshCliBackend {
                 Ok(signal_exit_code(&signal))
             }
             Err(error) => {
+                let message = describe_exec_error(&error);
                 // A bastion host's link logs in once; its terminal is open.
                 let message = if target.login().shell_only
                     && matches!(
                         error.kind,
                         ExecErrorKind::MissingCredential | ExecErrorKind::Connect
                     ) {
-                    t!("cli.exec.try_terminal", message = error.message).to_string()
+                    t!("cli.exec.try_terminal", message = message).to_string()
                 } else {
-                    error.message
+                    message
                 };
                 Err(CliError::new(
                     match error.kind {

@@ -32,8 +32,8 @@ pub use host_dialog::{
 pub use host_panel::{HostPanel, host_menu, import_menu_items};
 pub use import::{ImportHandler, ImportOutcome, ImportSource, open_import_dialog};
 pub use login::{
-    DEFAULT_KEY_FILES, HostConnection, HostLogin, JumpLogin, LoginMethod, LoginRoute, ProxyLogin,
-    SerialLine, TelnetAutoLogin, TelnetLogin,
+    DEFAULT_KEY_FILES, HostConnection, HostLogin, HostLoginExt, JumpLogin, LoginMethod, LoginRoute,
+    ProxyLogin, SerialLine, TelnetAutoLogin, TelnetLogin,
 };
 pub use model::*;
 pub use outline::{

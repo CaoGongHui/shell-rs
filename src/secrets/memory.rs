@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use anyhow::{Result, bail};
 use zeroize::Zeroizing;
 
-use super::{SecretRef, SecretStore};
+use super::{SecretRef, SecretSource, SecretStore};
 use crate::i18n::t;
 
 /// 进程内的秘密存储，给测试用：行为和真钥匙串一致，但什么都不落地。
@@ -27,6 +27,13 @@ impl InMemorySecretStore {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+
+/// 测试里连接直接读它。
+impl SecretSource for InMemorySecretStore {
+    fn secret(&self, secret: &SecretRef) -> Result<Option<Zeroizing<String>>> {
+        self.get(secret)
     }
 }
 
@@ -54,6 +61,12 @@ impl SecretStore for InMemorySecretStore {
 /// 用在没有系统钥匙串的机器上：读永远是空，写明确报错，界面据此把密码字段
 /// 禁用掉。也是 `HostStore` 的默认值，所以单元测试不会碰到任何秘密存储。
 pub struct NoSecretStore;
+
+impl SecretSource for NoSecretStore {
+    fn secret(&self, _: &SecretRef) -> Result<Option<Zeroizing<String>>> {
+        Ok(None)
+    }
+}
 
 impl SecretStore for NoSecretStore {
     fn get(&self, _: &SecretRef) -> Result<Option<Zeroizing<String>>> {
