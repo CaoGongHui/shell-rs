@@ -2,7 +2,7 @@ use super::{
     client::RemoteFs,
     control::TransferControl,
     download::DownloadBatch,
-    edit::{read_text, read_whole, write_in_place},
+    edit::{ReadFailure, SaveFailure, read_text, read_whole, write_in_place},
     journal::{DownloadJournal, Journal, SourceMetadata, partial_path},
     upload::UploadBatch,
     *,
@@ -397,7 +397,7 @@ impl Answers {
             let mut choices = choices.into_iter();
             while let Ok(event) = receiver.recv().await {
                 match event {
-                    SftpEvent::Question(q) => {
+                    EngineEvent::Question(q) => {
                         seen_questions.lock().unwrap().push(q.kind());
                         let (choice, for_all) =
                             choices.next().unwrap_or((TransferChoice::Cancel, false));
@@ -405,7 +405,7 @@ impl Answers {
                             .send((q.id(), TransferAnswer::new(choice, for_all)))
                             .await;
                     }
-                    SftpEvent::Progress(snapshot) => {
+                    EngineEvent::Progress(snapshot) => {
                         seen_progress.lock().unwrap().push(snapshot);
                     }
                     _ => {}
@@ -414,7 +414,7 @@ impl Answers {
         });
         Self {
             control: TransferControl {
-                events,
+                events: EventSink::channel(events),
                 cancel: watch,
                 answers: rx,
             },
@@ -929,7 +929,7 @@ fn directory_permission_error_is_reported_as_failure() {
         assert_eq!(batch.meter.progress.succeeded(), 0);
         let detail = &batch.meter.progress.details()[0];
         assert_eq!(detail.outcome(), TransferOutcome::Failed);
-        assert!(detail.reason().unwrap().contains("permission denied"));
+        assert!(format!("{:#}", detail.reason().unwrap()).contains("permission denied"));
     });
 }
 
@@ -1069,67 +1069,6 @@ fn paths_and_journals_reject_unsafe_identity() {
                 .is_err()
         );
     });
-}
-
-/// Drives are titled as WinSCP does: the letter, then what kind it is.
-#[test]
-fn drives_are_titled_by_letter_and_kind() {
-    assert_eq!(Place::Drive('C', DriveKind::Local).title(), "C: 本地磁盘");
-    assert_eq!(
-        Place::Drive('E', DriveKind::Removable).title(),
-        "E: 可移动磁盘"
-    );
-    assert_eq!(
-        Place::Drive('Z', DriveKind::Network).title(),
-        "Z: 网络驱动器"
-    );
-    assert_eq!(
-        Place::Drive('F', DriveKind::Optical).title(),
-        "F: CD 驱动器"
-    );
-    assert_eq!(Place::Drive('G', DriveKind::Other).title(), "G:");
-}
-
-/// Without the drives, the local pane could not leave the one it started on.
-#[cfg(windows)]
-#[test]
-fn local_listing_places_include_the_system_drive() {
-    let system = std::env::var("SystemDrive").unwrap();
-    let letter = system.chars().next().unwrap().to_ascii_uppercase();
-    let places = SystemLocalDirectoryProvider.places();
-    assert!(
-        places.contains(&(
-            Place::Drive(letter, DriveKind::Local),
-            std::path::PathBuf::from(format!("{letter}:\\"))
-        )),
-        "{places:?}"
-    );
-}
-
-/// On Windows std canonicalizes to `\\?\C:\…`, which the pane showed as is.
-#[test]
-fn local_listing_reports_the_path_people_type() {
-    let tmp = tempfile::tempdir().unwrap();
-    let listing = SystemLocalDirectoryProvider.list(tmp.path()).unwrap();
-    assert!(!listing.path().starts_with(r"\\?\"), "{}", listing.path());
-    // Still the directory asked for, links resolved.
-    assert_eq!(
-        std::fs::canonicalize(listing.path()).unwrap(),
-        std::fs::canonicalize(tmp.path()).unwrap()
-    );
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn local_listing_rejects_unrepresentable_names() {
-    use std::os::unix::ffi::OsStringExt as _;
-    let tmp = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
-    std::fs::write(
-        tmp.path().join(std::ffi::OsString::from_vec(vec![0xff])),
-        [],
-    )
-    .unwrap();
-    assert!(SystemLocalDirectoryProvider.list(tmp.path()).is_err());
 }
 
 #[cfg(unix)]
@@ -1410,7 +1349,10 @@ fn rename_and_create_refuse_existing_names() {
         )
         .await
         .unwrap_err();
-        assert_eq!(error.to_string(), "已有名为「b」的项目");
+        assert_eq!(
+            error.downcast_ref::<SftpError>(),
+            Some(&SftpError::Exists { name: "b".into() })
+        );
         assert_eq!(remote.bytes("/b"), b"b");
         super::operations::run(
             &remote,
@@ -2125,7 +2067,8 @@ fn directories_large_files_and_binary_files_are_refused() {
         let refusal = |path: &'static str| {
             let remote = &remote;
             async move {
-                ReadFailure::from_error(read_text(remote, &remote_path(path)).await.unwrap_err())
+                let error = read_text(remote, &remote_path(path)).await.unwrap_err();
+                ReadFailure::from_error(error, |why| why)
             }
         };
         assert_eq!(refusal("/etc").await, ReadFailure::NotFile);
@@ -2180,14 +2123,20 @@ fn a_save_over_a_file_changed_or_removed_since_is_refused() {
         let error = write_in_place(&remote, &path, b"mine 2\n".to_vec(), Some(file.stamp()))
             .await
             .unwrap_err();
-        assert_eq!(SaveFailure::from_error(error), SaveFailure::Changed);
+        assert_eq!(
+            SaveFailure::from_error(error, |why| why),
+            SaveFailure::Changed
+        );
         assert_eq!(remote.bytes("/etc/app.conf"), b"someone else's\n");
 
         remote.nodes.borrow_mut().remove("/etc/app.conf");
         let error = write_in_place(&remote, &path, b"mine 2\n".to_vec(), Some(file.stamp()))
             .await
             .unwrap_err();
-        assert_eq!(SaveFailure::from_error(error), SaveFailure::Changed);
+        assert_eq!(
+            SaveFailure::from_error(error, |why| why),
+            SaveFailure::Changed
+        );
 
         // Saving anyway creates it again.
         write_in_place(&remote, &path, b"mine 2\n".to_vec(), None)
@@ -2213,7 +2162,7 @@ fn a_save_that_fails_after_truncating_is_interrupted() {
         .unwrap_err();
         assert!(super::client::is_network_error(&error));
         assert!(matches!(
-            SaveFailure::from_error(error),
+            SaveFailure::from_error(error, |why| why),
             SaveFailure::Interrupted(_)
         ));
     });
@@ -2271,7 +2220,10 @@ fn openssh_protocol_edits_in_place_through_links_keeping_mode_and_hard_links() {
         let error = write_in_place(&client, &link, b"mine\n".to_vec(), Some(stamp))
             .await
             .unwrap_err();
-        assert_eq!(SaveFailure::from_error(error), SaveFailure::Changed);
+        assert_eq!(
+            SaveFailure::from_error(error, |why| why),
+            SaveFailure::Changed
+        );
         assert_eq!(std::fs::read(&real).unwrap(), b"theirs, longer\n");
 
         // Too large, without reading it.
@@ -2281,63 +2233,12 @@ fn openssh_protocol_edits_in_place_through_links_keeping_mode_and_hard_links() {
             .await
             .unwrap_err();
         assert_eq!(
-            ReadFailure::from_error(error),
+            ReadFailure::from_error(error, |why| why),
             ReadFailure::TooLarge(EDIT_LIMIT + 1)
         );
         drop(client);
         let _ = process.kill().await;
     });
-}
-
-#[cfg(unix)]
-#[test]
-fn local_files_are_edited_in_place_through_links() {
-    use std::os::unix::fs::PermissionsExt as _;
-    let temp = tempfile::tempdir().unwrap();
-    let provider = SystemLocalDirectoryProvider;
-    let real = temp.path().join("real.conf");
-    std::fs::write(&real, b"\xEF\xBB\xBFold\n").unwrap();
-    std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
-    let link = temp.path().join("link.conf");
-    std::os::unix::fs::symlink(&real, &link).unwrap();
-
-    let file = read_local_text(&provider, &link).unwrap();
-    assert_eq!(file.text(), "old\n");
-    assert!(file.format().bom());
-    let stamp = write_local_text(
-        &provider,
-        &link,
-        &file.format().encode("new\n"),
-        Some(file.stamp()),
-    )
-    .unwrap();
-    assert!(
-        std::fs::symlink_metadata(&link)
-            .unwrap()
-            .file_type()
-            .is_symlink()
-    );
-    assert_eq!(std::fs::read(&real).unwrap(), b"\xEF\xBB\xBFnew\n");
-    assert_eq!(
-        std::fs::metadata(&real).unwrap().permissions().mode() & 0o777,
-        0o600
-    );
-
-    std::fs::write(&real, b"theirs, longer\n").unwrap();
-    assert_eq!(
-        write_local_text(&provider, &link, b"mine\n", Some(stamp)),
-        Err(SaveFailure::Changed)
-    );
-    assert_eq!(
-        read_local_text(&provider, temp.path()),
-        Err(ReadFailure::NotFile)
-    );
-    let big = std::fs::File::create(temp.path().join("big.log")).unwrap();
-    big.set_len(EDIT_LIMIT + 1).unwrap();
-    assert_eq!(
-        read_local_text(&provider, &temp.path().join("big.log")),
-        Err(ReadFailure::TooLarge(EDIT_LIMIT + 1))
-    );
 }
 
 #[test]
@@ -2352,7 +2253,7 @@ fn a_binary_file_is_read_whole_for_a_preview_within_its_limit() {
         assert_eq!(bytes.into_inner(), image);
         let error = read_whole(&remote, &path, 1000).await.unwrap_err();
         assert_eq!(
-            ReadFailure::from_error(error),
+            ReadFailure::from_error(error, |why| why),
             ReadFailure::TooLarge(300_000)
         );
     });

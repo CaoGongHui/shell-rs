@@ -232,6 +232,13 @@ fn login_reason(causes: &[Cause<'_>]) -> String {
     chain_text(causes)
 }
 
+/// One link of a chain in words, as [`describe_chain`] words each: for the
+/// layers above this one, which word their own links and leave the rest
+/// here. `rest` is what lies under it.
+pub fn describe_link(cause: Cause<'_>, rest: &[Cause<'_>]) -> String {
+    link(cause, rest)
+}
+
 /// One link of a chain in words. `rest` is what lies under it, which the
 /// links that name where something failed go on to say.
 fn link(cause: Cause<'_>, rest: &[Cause<'_>]) -> String {

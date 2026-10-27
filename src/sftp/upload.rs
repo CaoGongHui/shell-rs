@@ -1,6 +1,7 @@
 use super::{
-    EntryKind, FileMetadata, RESUME_THRESHOLD, RemotePath, TransferAnswer, TransferChoice,
-    TransferDetail, TransferDirection, TransferPhase, TransferQuestionKind, UploadRequest,
+    EntryKind, FileMetadata, RESUME_THRESHOLD, Reason, RemotePath, SftpError, TransferAnswer,
+    TransferChoice, TransferDetail, TransferDirection, TransferPhase, TransferQuestionKind,
+    UploadError, UploadRequest,
     client::{RemoteFs, is_network_error},
     control::{Cancelled, TargetGuard, TransferControl},
     file_size,
@@ -9,10 +10,8 @@ use super::{
     model::local_metadata,
     parallel,
 };
-use crate::i18n::{t, tn};
 use anyhow::{Result, anyhow, bail};
 use futures::{StreamExt as _, stream::FuturesUnordered};
-use gpui_kit::SharedString;
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet, VecDeque},
@@ -27,7 +26,8 @@ struct UploadItem {
     source: PathBuf,
     target: RemotePath,
     metadata: FileMetadata,
-    error: Option<String>,
+    /// Why the scan could not tell what to upload.
+    error: Option<Reason>,
 }
 pub(crate) struct UploadBatch {
     items: Vec<UploadItem>,
@@ -94,7 +94,7 @@ impl UploadBatch {
                 None => source
                     .file_name()
                     .and_then(|n| n.to_str())
-                    .ok_or_else(|| anyhow!(t!("sftp.upload.source_name_not_utf8")))?,
+                    .ok_or_else(|| anyhow!(UploadError::SourceNameNotUtf8))?,
             };
             let target = request.destination().join(name)?;
             stack.push((source, target));
@@ -110,7 +110,7 @@ impl UploadBatch {
                         source,
                         target,
                         metadata: FileMetadata::new(EntryKind::Other, 0, None, None),
-                        error: Some(error.to_string()),
+                        error: Some(anyhow::Error::from(error).into()),
                     });
                     continue;
                 }
@@ -124,7 +124,7 @@ impl UploadBatch {
                         let name = entry
                             .file_name()
                             .into_string()
-                            .map_err(|_| anyhow!(t!("sftp.error.file_name_not_utf8")))?;
+                            .map_err(|_| anyhow!(SftpError::FileNameNotUtf8))?;
                         children.push((entry.path(), target.join(&name)?));
                     }
                     children.sort_by(|a, b| a.0.cmp(&b.0));
@@ -133,7 +133,7 @@ impl UploadBatch {
                 .await;
                 match read {
                     Ok(children) => stack.extend(children.into_iter().rev()),
-                    Err(e) => scan_error = Some(e.to_string()),
+                    Err(e) => scan_error = Some(e.into()),
                 }
             } else if metadata.kind() == EntryKind::File {
                 total_bytes = total_bytes.saturating_add(metadata.size());
@@ -173,7 +173,7 @@ impl UploadBatch {
     }
     pub fn verify_host(&self, fingerprint: &str) -> Result<()> {
         if self.host_key != fingerprint {
-            bail!(t!("sftp.transfer.host_key_changed"));
+            bail!(SftpError::HostKeyChanged);
         }
         Ok(())
     }
@@ -279,7 +279,7 @@ impl<R: RemoteFs> Upload<'_, R> {
         );
         let _target_guard = TargetGuard::acquire(
             format!("{}\0{}", self.endpoint, item.target),
-            &t!("sftp.upload.target_busy"),
+            UploadError::TargetBusy,
         )?;
         loop {
             let blocked = self
@@ -287,36 +287,35 @@ impl<R: RemoteFs> Upload<'_, R> {
                 .borrow()
                 .iter()
                 .any(|p| item.target.as_str().starts_with(&format!("{p}/")));
-            let result = if blocked {
-                Err(anyhow!(t!("sftp.upload.parent_missing")))
-            } else if let Some(error) = &item.error {
-                Err(anyhow!("{error}"))
+            let reason = if blocked {
+                Reason::new(UploadError::ParentMissing)
+            } else if let Some(reason) = &item.error {
+                reason.clone()
             } else {
-                self.upload_item(&item, file).await
-            };
-            let error = match result {
-                Ok(done) => {
-                    let target = item.target.to_string();
-                    let detail = if done {
-                        TransferDetail::done(target)
-                    } else {
-                        TransferDetail::skipped(target)
-                    };
-                    self.meter
-                        .borrow_mut()
-                        .settle(file, detail, size, self.control);
-                    return Ok(Vec::new());
+                match self.upload_item(&item, file).await {
+                    Ok(done) => {
+                        let target = item.target.to_string();
+                        let detail = if done {
+                            TransferDetail::done(target)
+                        } else {
+                            TransferDetail::skipped(target)
+                        };
+                        self.meter
+                            .borrow_mut()
+                            .settle(file, detail, size, self.control);
+                        return Ok(Vec::new());
+                    }
+                    Err(error) if error.is::<Cancelled>() || is_network_error(&error) => {
+                        return Err(error);
+                    }
+                    Err(error) => Reason::from(error),
                 }
-                Err(error) if error.is::<Cancelled>() || is_network_error(&error) => {
-                    return Err(error);
-                }
-                Err(error) => error,
             };
             let answer = self
                 .ask(
                     TransferQuestionKind::Error,
                     item.target.as_str(),
-                    &t!("sftp.upload.failed", error = format!("{error:#}")),
+                    reason.under(UploadError::Failed),
                 )
                 .await?;
             if answer.choice() == TransferChoice::Retry {
@@ -347,7 +346,7 @@ impl<R: RemoteFs> Upload<'_, R> {
             }
             self.meter.borrow_mut().settle(
                 file,
-                TransferDetail::failed(item.target.to_string(), format!("{error:#}")),
+                TransferDetail::failed(item.target.to_string(), reason),
                 size,
                 self.control,
             );
@@ -365,7 +364,7 @@ impl<R: RemoteFs> Upload<'_, R> {
         &self,
         kind: TransferQuestionKind,
         path: &str,
-        message: &str,
+        message: Reason,
     ) -> Result<TransferAnswer> {
         let _turn = self.asking.lock().await;
         self.question(kind, path, message).await
@@ -376,7 +375,7 @@ impl<R: RemoteFs> Upload<'_, R> {
         &self,
         kind: TransferQuestionKind,
         path: &str,
-        message: &str,
+        message: Reason,
     ) -> Result<TransferAnswer> {
         self.meter
             .borrow_mut()
@@ -401,7 +400,7 @@ impl<R: RemoteFs> Upload<'_, R> {
             .as_ref()
             .is_some_and(|m| m.kind() == EntryKind::Directory)
         {
-            bail!(t!("sftp.upload.folder_in_the_way"));
+            bail!(UploadError::FolderInTheWay);
         }
         let for_all = || (!changed).then(|| **self.all_conflicts.borrow()).flatten();
         if let Some(choice) = for_all() {
@@ -414,21 +413,21 @@ impl<R: RemoteFs> Upload<'_, R> {
         }
         let message = match original {
             Some(metadata) => {
-                let modified = format!("{:?}", metadata.modified());
+                let (size, modified) = (metadata.size(), metadata.modified().map(u64::from));
                 if changed {
-                    tn!(
-                        "sftp.upload.exists_changed",
-                        metadata.size(),
-                        modified = modified
-                    )
+                    UploadError::ExistsChanged { size, modified }
                 } else {
-                    tn!("sftp.upload.exists", metadata.size(), modified = modified)
+                    UploadError::Exists { size, modified }
                 }
             }
-            None => t!("sftp.upload.target_gone"),
+            None => UploadError::TargetGone,
         };
         let answer = self
-            .question(TransferQuestionKind::Conflict, target.as_str(), &message)
+            .question(
+                TransferQuestionKind::Conflict,
+                target.as_str(),
+                Reason::new(message),
+            )
             .await?;
         if answer.apply_to_all() && !changed {
             **self.all_conflicts.borrow_mut() = Some(answer.choice());
@@ -448,7 +447,7 @@ impl<R: RemoteFs> Upload<'_, R> {
                     .ask(
                         TransferQuestionKind::InvalidResume,
                         item.target.as_str(),
-                        &t!("sftp.upload.source_now_folder"),
+                        Reason::new(UploadError::SourceNowFolder),
                     )
                     .await?;
                 if answer.choice() != TransferChoice::Restart {
@@ -459,7 +458,7 @@ impl<R: RemoteFs> Upload<'_, R> {
             return self.make_directory(item).await;
         }
         if item.metadata.kind() == EntryKind::Other {
-            bail!(t!("sftp.upload.special_file"));
+            bail!(UploadError::SpecialFile);
         }
         let mut approved = false;
         if existing_record.is_none()
@@ -486,7 +485,7 @@ impl<R: RemoteFs> Upload<'_, R> {
         {
             match control.run(fs.metadata(&item.target)).await? {
                 Some(metadata) if metadata.kind() == EntryKind::Directory => return Ok(!self.sync),
-                Some(_) => bail!(t!("sftp.upload.target_not_folder")),
+                Some(_) => bail!(UploadError::TargetNotFolder),
                 None => {}
             }
         }
@@ -644,7 +643,7 @@ impl<R: RemoteFs> Upload<'_, R> {
             let length = writes
                 .next()
                 .await
-                .ok_or_else(|| anyhow!(t!("sftp.upload.pipeline_ended")))??;
+                .ok_or_else(|| anyhow!(UploadError::PipelineEnded))??;
             sent += length;
             self.meter.borrow_mut().advance(file, length, sent, control);
         }
@@ -671,7 +670,7 @@ impl<R: RemoteFs> Upload<'_, R> {
                     .ask(
                         TransferQuestionKind::Resume,
                         item.target.as_str(),
-                        &t!("sftp.upload.resume_found"),
+                        Reason::new(UploadError::ResumeFound),
                     )
                     .await?;
                 match answer.choice() {
@@ -721,7 +720,7 @@ impl<R: RemoteFs> Upload<'_, R> {
                         .ask(
                             TransferQuestionKind::Resume,
                             item.target.as_str(),
-                            &t!("sftp.upload.resume_found"),
+                            Reason::new(UploadError::ResumeFound),
                         )
                         .await?;
                     match answer.choice() {
@@ -740,7 +739,7 @@ impl<R: RemoteFs> Upload<'_, R> {
                         .await?
                         .into_os_string()
                         .into_string()
-                        .map_err(|_| anyhow!(t!("sftp.upload.link_target_not_utf8")))?,
+                        .map_err(|_| anyhow!(UploadError::LinkTargetNotUtf8))?,
                 );
             }
             self.journal.save(&record).await?;
@@ -764,12 +763,12 @@ impl<R: RemoteFs> Upload<'_, R> {
             let target = record
                 .link_target
                 .as_ref()
-                .ok_or_else(|| anyhow!(t!("sftp.upload.record_without_link")))?;
+                .ok_or_else(|| anyhow!(UploadError::RecordWithoutLink))?;
             if let Some(existing) = control.run(fs.metadata(&record.temporary)).await? {
                 if existing.kind() != EntryKind::Symlink
                     || control.run(fs.readlink(&record.temporary)).await? != *target
                 {
-                    bail!(t!("sftp.upload.temporary_link_changed"));
+                    bail!(UploadError::TemporaryLinkChanged);
                 }
             } else {
                 control.run(fs.symlink(target, &record.temporary)).await?;
@@ -777,21 +776,19 @@ impl<R: RemoteFs> Upload<'_, R> {
             Ok(())
         };
         if let Err(error) = uploaded {
-            if error.is::<InvalidResume>() {
-                let answer = self
-                    .ask(
-                        TransferQuestionKind::InvalidResume,
-                        item.target.as_str(),
-                        &error.to_string(),
-                    )
-                    .await?;
-                if answer.choice() == TransferChoice::Restart {
-                    self.discard_record(&record).await?;
-                    return Box::pin(self.upload_item(item, file)).await;
-                }
-                return Ok(false);
+            let InvalidResume(why) = error.downcast::<InvalidResume>()?;
+            let answer = self
+                .ask(
+                    TransferQuestionKind::InvalidResume,
+                    item.target.as_str(),
+                    Reason::new(why),
+                )
+                .await?;
+            if answer.choice() == TransferChoice::Restart {
+                self.discard_record(&record).await?;
+                return Box::pin(self.upload_item(item, file)).await;
             }
-            return Err(error);
+            return Ok(false);
         }
         // The temporary is whole. Nothing records it: another try of a file
         // still being written finds nothing left to write.
@@ -837,17 +834,17 @@ impl<R: RemoteFs> Upload<'_, R> {
         let source_metadata = record
             .source_metadata
             .clone()
-            .ok_or_else(|| anyhow!(t!("sftp.upload.record_without_source")))?;
+            .ok_or_else(|| anyhow!(UploadError::RecordWithoutSource))?;
         let remote = match partial {
             Some(partial) => partial,
             None => control.run(fs.metadata(&record.temporary)).await?,
         };
         if remote.as_ref().is_some_and(|m| m.kind() != EntryKind::File) {
-            return Err(InvalidResume(t!("sftp.upload.temporary_kind_changed")).into());
+            return Err(InvalidResume(UploadError::TemporaryKindChanged).into());
         }
         let resume_offset = remote.as_ref().map(FileMetadata::size).unwrap_or(0);
         if resume_offset > source_metadata.size {
-            return Err(InvalidResume(t!("sftp.upload.partial_too_large")).into());
+            return Err(InvalidResume(UploadError::PartialTooLarge).into());
         }
         let handle = control
             .run(fs.open(&record.temporary, remote.is_none()))
@@ -934,22 +931,22 @@ impl<R: RemoteFs> Upload<'_, R> {
             {
                 fs.rename(&record.backup, &record.target).await?;
             }
-            bail!(t!("sftp.upload.publish_unconfirmed"));
+            bail!(UploadError::PublishUnconfirmed);
         }
         if !self
             .matches_expected_item(&record.temporary, record)
             .await?
         {
-            bail!(t!("sftp.upload.temporary_changed"));
+            bail!(UploadError::TemporaryChanged);
         }
         let backup = control.run(fs.metadata(&record.backup)).await?;
         let current = control.run(fs.metadata(&record.target)).await?;
         if backup.is_some() {
             if current.is_some() {
-                bail!(t!("sftp.upload.target_created"));
+                bail!(UploadError::TargetCreated);
             }
             if backup != record.original {
-                bail!(t!("sftp.upload.backup_changed"));
+                bail!(UploadError::BackupChanged);
             }
             record.phase = PublishPhase::BackedUp;
             self.journal.save(record).await?;
@@ -1028,7 +1025,7 @@ impl<R: RemoteFs> Upload<'_, R> {
     async fn cleanup(&self, record: &ResumeRecord) -> Result<()> {
         if let Some(backup) = self.fs.metadata(&record.backup).await? {
             if Some(backup) != record.original {
-                bail!(t!("sftp.upload.backup_changed_after_publish"));
+                bail!(UploadError::BackupChangedAfterPublish);
             }
             self.fs.remove(&record.backup).await?;
         }
@@ -1060,18 +1057,20 @@ async fn discard_record<F: RemoteFs>(
         if fs.metadata(&record.target).await?.is_none() {
             fs.rename(&record.backup, &record.target).await?;
         } else {
-            bail!(t!("sftp.upload.backup_and_target"));
+            bail!(UploadError::BackupAndTarget);
         }
     }
     fs.remove(&record.temporary).await?;
     journal.remove(record).await
 }
 
+/// A partial file that cannot be resumed from, and why: asked about rather
+/// than failed.
 #[derive(Debug)]
-struct InvalidResume(SharedString);
+struct InvalidResume(UploadError);
 impl std::fmt::Display for InvalidResume {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+        self.0.fmt(f)
     }
 }
 impl std::error::Error for InvalidResume {}

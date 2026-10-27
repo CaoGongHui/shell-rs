@@ -7,8 +7,9 @@
 //! flushed to the disk on its own.
 
 use super::{
-    DownloadRequest, EntryKind, FileMetadata, RESUME_THRESHOLD, RemotePath, TransferAnswer,
-    TransferChoice, TransferDetail, TransferDirection, TransferPhase, TransferQuestionKind,
+    DownloadError, DownloadRequest, EntryKind, FileMetadata, RESUME_THRESHOLD, Reason, RemotePath,
+    SftpError, TransferAnswer, TransferChoice, TransferDetail, TransferDirection, TransferPhase,
+    TransferQuestionKind,
     client::{RemoteFs, is_network_error},
     control::{Cancelled, TargetGuard, TransferControl},
     file_size,
@@ -16,7 +17,6 @@ use super::{
     meter::{FileId, TransferMeter},
     parallel,
 };
-use crate::i18n::{t, tn};
 use anyhow::{Result, anyhow, bail};
 use futures::{StreamExt as _, stream::FuturesUnordered};
 use std::{
@@ -35,7 +35,8 @@ struct DownloadItem {
     source: RemotePath,
     target: PathBuf,
     metadata: FileMetadata,
-    error: Option<String>,
+    /// Why the scan could not tell what to download.
+    error: Option<Reason>,
 }
 
 pub(crate) struct DownloadBatch {
@@ -65,7 +66,7 @@ fn local_name(name: &str) -> Result<&str> {
         name.contains(['/', '\0'])
     };
     if invalid || matches!(name, "" | "." | "..") {
-        bail!(t!("sftp.download.name_invalid", name = name));
+        bail!(DownloadError::NameInvalid { name: name.into() });
     }
     Ok(name)
 }
@@ -110,7 +111,7 @@ impl DownloadBatch {
                         target: request.destination().join(source.file_name()),
                         source,
                         metadata: FileMetadata::new(EntryKind::Other, 0, None, None),
-                        error: Some(error.to_string()),
+                        error: Some(error.into()),
                     });
                     continue;
                 }
@@ -121,14 +122,14 @@ impl DownloadBatch {
                     let found = control.run(fs.metadata(&source)).await;
                     let error = match found {
                         Ok(Some(metadata)) => Ok(metadata),
-                        Ok(None) => Err(t!("sftp.download.source_missing").to_string()),
+                        Ok(None) => Err(Reason::new(DownloadError::SourceMissing)),
                         Err(error)
                             if super::client::is_network_error(&error)
                                 || error.is::<Cancelled>() =>
                         {
                             return Err(error);
                         }
-                        Err(error) => Err(error.to_string()),
+                        Err(error) => Err(error.into()),
                     };
                     match error {
                         Ok(metadata) => metadata,
@@ -162,7 +163,7 @@ impl DownloadBatch {
                     {
                         return Err(error);
                     }
-                    Err(error) => scan_error = Some(error.to_string()),
+                    Err(error) => scan_error = Some(error.into()),
                 }
             } else if metadata.kind() == EntryKind::File {
                 total_bytes = total_bytes.saturating_add(metadata.size());
@@ -190,7 +191,7 @@ impl DownloadBatch {
 
     pub fn verify_host(&self, fingerprint: &str) -> Result<()> {
         if self.host_key != fingerprint {
-            bail!(t!("sftp.transfer.host_key_changed"));
+            bail!(SftpError::HostKeyChanged);
         }
         Ok(())
     }
@@ -291,7 +292,7 @@ impl<R: RemoteFs> Download<'_, R> {
         );
         let _target_guard = TargetGuard::acquire(
             format!("local\0{}", item.target.display()),
-            &t!("sftp.download.target_busy"),
+            DownloadError::TargetBusy,
         )?;
         loop {
             let blocked = self
@@ -299,47 +300,46 @@ impl<R: RemoteFs> Download<'_, R> {
                 .borrow()
                 .iter()
                 .any(|dir| item.target.starts_with(dir) && item.target != *dir);
-            let result = if blocked {
-                Err(anyhow!(t!("sftp.download.parent_missing")))
-            } else if let Some(error) = &item.error {
-                Err(anyhow!("{error}"))
+            let reason = if blocked {
+                Reason::new(DownloadError::ParentMissing)
+            } else if let Some(reason) = &item.error {
+                reason.clone()
             } else {
-                self.download_item(&item, file).await
-            };
-            let error = match result {
-                Ok(true) => {
-                    self.meter.borrow_mut().settle(
-                        file,
-                        TransferDetail::done(target),
-                        size,
-                        self.control,
-                    );
-                    return Ok(Vec::new());
-                }
-                Ok(false) => {
-                    self.meter.borrow_mut().settle(
-                        file,
-                        TransferDetail::skipped(target),
-                        size,
-                        self.control,
-                    );
-                    if item.metadata.kind() == EntryKind::Directory {
-                        self.blocked_directories
-                            .borrow_mut()
-                            .push(item.target.clone());
+                match self.download_item(&item, file).await {
+                    Ok(true) => {
+                        self.meter.borrow_mut().settle(
+                            file,
+                            TransferDetail::done(target),
+                            size,
+                            self.control,
+                        );
+                        return Ok(Vec::new());
                     }
-                    return Ok(Vec::new());
+                    Ok(false) => {
+                        self.meter.borrow_mut().settle(
+                            file,
+                            TransferDetail::skipped(target),
+                            size,
+                            self.control,
+                        );
+                        if item.metadata.kind() == EntryKind::Directory {
+                            self.blocked_directories
+                                .borrow_mut()
+                                .push(item.target.clone());
+                        }
+                        return Ok(Vec::new());
+                    }
+                    Err(error) if error.is::<Cancelled>() || is_network_error(&error) => {
+                        return Err(error);
+                    }
+                    Err(error) => Reason::from(error),
                 }
-                Err(error) if error.is::<Cancelled>() || is_network_error(&error) => {
-                    return Err(error);
-                }
-                Err(error) => error,
             };
             let answer = self
                 .ask(
                     TransferQuestionKind::Error,
                     item.source.as_str(),
-                    &t!("sftp.download.failed", error = format!("{error:#}")),
+                    reason.under(DownloadError::Failed),
                 )
                 .await?;
             if answer.choice() == TransferChoice::Retry {
@@ -351,7 +351,7 @@ impl<R: RemoteFs> Download<'_, R> {
                     item.target
                         .parent()
                         .map(Path::to_path_buf)
-                        .ok_or_else(|| anyhow!(t!("sftp.download.target_invalid")))?,
+                        .ok_or_else(|| anyhow!(DownloadError::TargetInvalid))?,
                 )?;
                 let scanned = DownloadBatch::scan(
                     &request,
@@ -377,7 +377,7 @@ impl<R: RemoteFs> Download<'_, R> {
             }
             self.meter.borrow_mut().settle(
                 file,
-                TransferDetail::failed(target, format!("{error:#}")),
+                TransferDetail::failed(target, reason),
                 size,
                 self.control,
             );
@@ -395,7 +395,7 @@ impl<R: RemoteFs> Download<'_, R> {
         &self,
         kind: TransferQuestionKind,
         path: &str,
-        message: &str,
+        message: Reason,
     ) -> Result<TransferAnswer> {
         let _turn = self.asking.lock().await;
         self.question(kind, path, message).await
@@ -406,7 +406,7 @@ impl<R: RemoteFs> Download<'_, R> {
         &self,
         kind: TransferQuestionKind,
         path: &str,
-        message: &str,
+        message: Reason,
     ) -> Result<TransferAnswer> {
         self.meter
             .borrow_mut()
@@ -427,7 +427,7 @@ impl<R: RemoteFs> Download<'_, R> {
         changed: bool,
     ) -> Result<bool> {
         if existing.is_dir() {
-            bail!(t!("sftp.download.folder_in_the_way"));
+            bail!(DownloadError::FolderInTheWay);
         }
         let for_all = || (!changed).then(|| **self.all_conflicts.borrow()).flatten();
         if let Some(choice) = for_all() {
@@ -443,21 +443,17 @@ impl<R: RemoteFs> Download<'_, R> {
             .ok()
             .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|time| time.as_secs());
-        let modified = format!("{modified:?}");
+        let size = existing.len();
         let message = if changed {
-            tn!(
-                "sftp.download.exists_changed",
-                existing.len(),
-                modified = modified
-            )
+            DownloadError::ExistsChanged { size, modified }
         } else {
-            tn!("sftp.download.exists", existing.len(), modified = modified)
+            DownloadError::Exists { size, modified }
         };
         let answer = self
             .question(
                 TransferQuestionKind::Conflict,
                 &target.display().to_string(),
-                &message,
+                Reason::new(message),
             )
             .await?;
         if answer.apply_to_all() && !changed {
@@ -471,7 +467,7 @@ impl<R: RemoteFs> Download<'_, R> {
         match item.metadata.kind() {
             EntryKind::Directory => match existing {
                 Some(metadata) if metadata.is_dir() => Ok(true),
-                Some(_) => bail!(t!("sftp.download.file_in_the_way")),
+                Some(_) => bail!(DownloadError::FileInTheWay),
                 None => {
                     tokio::fs::create_dir(&item.target).await?;
                     Ok(true)
@@ -487,7 +483,7 @@ impl<R: RemoteFs> Download<'_, R> {
                 create_link(&link, &item.target, existing.is_some()).await?;
                 Ok(true)
             }
-            EntryKind::Other => bail!(t!("sftp.download.special_file")),
+            EntryKind::Other => bail!(DownloadError::SpecialFile),
             EntryKind::File if item.metadata.size() < RESUME_THRESHOLD => {
                 self.download_small(item, existing, file).await
             }
@@ -557,22 +553,21 @@ impl<R: RemoteFs> Download<'_, R> {
         let mut offset = 0;
         if let Some(partial) = &partial {
             if !partial.is_file() {
-                bail!(t!(
-                    "sftp.download.partial_not_file",
-                    path = temporary.display()
-                ));
+                bail!(DownloadError::PartialNotFile {
+                    path: temporary.clone()
+                });
             }
             if partial.len() > item.metadata.size() || (record.is_some() && !resumable) {
                 let reason = if partial.len() > item.metadata.size() {
-                    t!("sftp.download.partial_too_large")
+                    DownloadError::PartialTooLarge
                 } else {
-                    t!("sftp.download.source_changed")
+                    DownloadError::SourceChanged
                 };
                 let answer = self
                     .ask(
                         TransferQuestionKind::InvalidResume,
                         item.source.as_str(),
-                        &reason,
+                        Reason::new(reason),
                     )
                     .await?;
                 if answer.choice() != TransferChoice::Restart {
@@ -585,7 +580,7 @@ impl<R: RemoteFs> Download<'_, R> {
                     .ask(
                         TransferQuestionKind::Resume,
                         item.source.as_str(),
-                        &t!("sftp.download.resume_found"),
+                        Reason::new(DownloadError::ResumeFound),
                     )
                     .await?;
                 match answer.choice() {
@@ -695,10 +690,10 @@ impl<R: RemoteFs> Download<'_, R> {
                 let (at, len, bytes) = reads
                     .next()
                     .await
-                    .ok_or_else(|| anyhow!(t!("sftp.download.pipeline_ended")))?;
+                    .ok_or_else(|| anyhow!(DownloadError::PipelineEnded))?;
                 let bytes = match bytes? {
                     Some(bytes) if !bytes.is_empty() => bytes,
-                    _ => bail!(t!("sftp.download.source_shrank")),
+                    _ => bail!(DownloadError::SourceShrank),
                 };
                 let got = bytes.len().min(len as usize);
                 if got < len as usize {
@@ -811,5 +806,5 @@ async fn create_link(link: &str, target: &Path, replace: bool) -> Result<()> {
 
 #[cfg(not(unix))]
 async fn create_link(_: &str, _: &Path, _: bool) -> Result<()> {
-    bail!(t!("sftp.download.links_unsupported"))
+    bail!(DownloadError::LinksUnsupported)
 }

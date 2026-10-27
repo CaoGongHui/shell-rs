@@ -7,10 +7,8 @@ use std::{collections::HashMap, path::Path};
 
 use anyhow::Result;
 
-use crate::i18n::t;
-
 use super::{
-    EntryKind, RemotePath, TransferChoice, TransferDetail, TransferQuestionKind,
+    EntryKind, Reason, RemotePath, SftpError, TransferChoice, TransferDetail, TransferQuestionKind,
     client::{RemoteFs, is_network_error},
     control::{Cancelled, TransferControl},
     model::local_metadata,
@@ -48,7 +46,7 @@ pub(super) async fn prune<F: RemoteFs>(
             Ok(there) => there,
             Err(error) if gives_up(&error) => return Err(error),
             Err(error) => {
-                fail(&mut pruned, &remote, &error, control).await?;
+                fail(&mut pruned, &remote, error, control).await?;
                 continue;
             }
         };
@@ -73,7 +71,7 @@ pub(super) async fn prune<F: RemoteFs>(
                         }
                         Err(error) if gives_up(&error) => return Err(error),
                         Err(error) => {
-                            if !fail(&mut pruned, &path, &error, control).await? {
+                            if !fail(&mut pruned, &path, error, control).await? {
                                 break;
                             }
                         }
@@ -96,20 +94,23 @@ fn gives_up(error: &anyhow::Error) -> bool {
 async fn fail(
     pruned: &mut Pruned,
     path: &RemotePath,
-    error: &anyhow::Error,
+    error: anyhow::Error,
     control: &TransferControl,
 ) -> Result<bool> {
-    let message = t!("sftp.sync.delete_failed", error = format!("{error:#}"));
+    let reason = Reason::from(error);
     let answer = control
-        .ask(TransferQuestionKind::Error, path.as_str(), &message)
+        .ask(
+            TransferQuestionKind::Error,
+            path.as_str(),
+            reason.under(SftpError::DeleteFailed),
+        )
         .await?;
     if answer.choice() == TransferChoice::Retry {
         return Ok(true);
     }
-    pruned.failures.push(TransferDetail::failed(
-        path.to_string(),
-        format!("{error:#}"),
-    ));
+    pruned
+        .failures
+        .push(TransferDetail::failed(path.to_string(), reason));
     Ok(false)
 }
 

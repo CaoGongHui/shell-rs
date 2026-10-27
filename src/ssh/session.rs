@@ -16,6 +16,13 @@ pub trait ChannelStream: AsyncRead + AsyncWrite + Unpin + Send {}
 
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> ChannelStream for T {}
 
+/// An SFTP channel on a connection, and the fingerprint of the host key that
+/// connection checked, which resumed transfers verify.
+pub struct SftpChannel {
+    pub stream: Box<dyn ChannelStream>,
+    pub fingerprint: String,
+}
+
 /// A terminal's size, in cells and in pixels. Pixels may be 0 when unknown.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PtySize {

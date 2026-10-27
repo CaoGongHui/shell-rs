@@ -21,13 +21,13 @@ pub use connection::{
 };
 pub use describe::{
     authentication_fields, authentication_instructions, authentication_title, describe_chain,
-    describe_channel_error, describe_error, describe_exec_error, describe_login_error,
-    describe_missing_credential, latency_label, unknown_host_description,
+    describe_channel_error, describe_error, describe_exec_error, describe_link,
+    describe_login_error, describe_missing_credential, latency_label, unknown_host_description,
 };
 pub use error::{
     AgentProblem, AgentUnreachable, AuthError, ChannelError, ConnectError, ForwardProblem,
     KnownHostsError, MissingCredential, PasswordWanted, ProxyError, RouteFailure, WrapErr, Wrapped,
-    find_cause, link_as, wrap,
+    find_cause, link_as, wrap, wrap_shared,
 };
 pub use exec::{ExecError, ExecErrorKind, ExecExit, ExecFailure, ExecStream, run_command};
 pub use latency::{LATENCY_INTERVAL, Latency, LatencyLevel, round_trip};
@@ -42,8 +42,8 @@ pub use prompt::{
 };
 pub use secret::{SecretRef, SecretSource, SharedSecretSource, read_secret};
 pub use session::{
-    ChannelStream, PtySize, open_probe, open_sftp_channel, open_shell, resize_pty, run_exec,
-    write_shell,
+    ChannelStream, PtySize, SftpChannel, open_probe, open_sftp_channel, open_shell, resize_pty,
+    run_exec, write_shell,
 };
 pub use tester::SshConnectionTester;
 pub use transport::SshTerminalTransportProvider;

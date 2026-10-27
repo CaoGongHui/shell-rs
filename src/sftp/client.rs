@@ -1,8 +1,8 @@
-use super::{DirectoryEntry, DirectoryListing, EntryKind, FileMetadata, RemotePath};
-use crate::connection::Latency;
-use crate::i18n::t;
-use crate::ssh::{SshConnectionConfig, SshConnector, SshHandle, SshPrompts};
-use crate::terminal::TerminalChannels;
+use super::{
+    DirectoryEntry, DirectoryListing, EntryKind, FileMetadata, RemotePath, SftpChannelOpener,
+    SftpError,
+};
+use crate::ssh::{Latency, SshConnectionConfig, SshConnector, SshHandle, SshPrompts};
 use anyhow::{Result, anyhow, bail};
 use futures::StreamExt as _;
 use russh_sftp::{
@@ -80,23 +80,19 @@ impl SftpClient {
             Self::initialize(channel.into_stream(), Some(ssh), fingerprint).await
         })
         .await
-        .map_err(|_| anyhow!(t!("sftp.client.start_timeout")))?
+        .map_err(|_| anyhow!(SftpError::StartTimeout))?
     }
-    /// Start SFTP on a channel beside a remote terminal's shell, on the
-    /// terminal's connection: no login of its own, and no round trips to
-    /// measure, since the connection is the terminal's.
-    pub async fn on_terminal(terminal: &TerminalChannels) -> Result<Self> {
-        let channel = terminal
-            .open_sftp()
-            .await
-            .map_err(|_| TerminalNotConnected)?
-            .map_err(|refusal| anyhow!(refusal))?;
+    /// Start SFTP on a channel `opener` opens on a connection someone else
+    /// holds, such as beside a remote terminal's shell: no login of its own,
+    /// and no round trips to measure, since the connection is not its own.
+    pub async fn on_channel(opener: &dyn SftpChannelOpener) -> Result<Self> {
+        let channel = opener.open().await?;
         tokio::time::timeout(
             std::time::Duration::from_secs(15),
             Self::initialize(channel.stream, None, channel.fingerprint),
         )
         .await
-        .map_err(|_| anyhow!(t!("sftp.client.start_timeout")))?
+        .map_err(|_| anyhow!(SftpError::StartTimeout))?
     }
     async fn initialize<S>(stream: S, ssh: Option<SshHandle>, fingerprint: String) -> Result<Self>
     where
@@ -109,7 +105,7 @@ impl SftpClient {
         });
         let version = raw.init().await?;
         if version.version != 3 {
-            bail!(t!("sftp.client.no_v3"));
+            bail!(SftpError::NoV3);
         }
         // No extension is used, even when offered: a bastion host that offers
         // `fsync@openssh.com` has been seen to end the whole session on it.
@@ -165,7 +161,7 @@ impl SftpClient {
             &response
                 .files
                 .first()
-                .ok_or_else(|| anyhow!(t!("sftp.client.no_path")))?
+                .ok_or_else(|| anyhow!(SftpError::NoPath))?
                 .filename,
         )?)
     }
@@ -339,7 +335,7 @@ impl RemoteFs for SftpClient {
                 .await?
                 .files
                 .first()
-                .ok_or_else(|| anyhow!(t!("sftp.client.no_link_target")))?
+                .ok_or_else(|| anyhow!(SftpError::NoLinkTarget))?
                 .filename,
         )
     }
@@ -433,15 +429,15 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for WatchedStream<S> {
     }
 }
 
-/// The terminal 文件 rides on has no connection to open a channel on: not
+/// The terminal a channel rides on has no connection to open it on: not
 /// up yet, gone, or between reconnects. Retried like a dropped network,
 /// since the terminal may well be back by the next attempt.
 #[derive(Debug)]
-pub(crate) struct TerminalNotConnected;
+pub struct TerminalNotConnected;
 
 impl std::fmt::Display for TerminalNotConnected {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&t!("sftp.client.terminal_not_connected"))
+        formatter.write_str("the terminal isn't connected")
     }
 }
 
@@ -525,7 +521,7 @@ pub(crate) fn parse_longname(line: &str) -> Option<(String, String)> {
 // they can become a path for navigation or mutation.
 fn checked_text(value: &str) -> Result<String> {
     if value.contains('\u{fffd}') {
-        bail!(t!("sftp.client.ambiguous_name"));
+        bail!(SftpError::AmbiguousName);
     }
     Ok(value.to_string())
 }

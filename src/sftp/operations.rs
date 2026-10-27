@@ -2,8 +2,7 @@
 //! permissions. Trees are walked with an explicit stack and symbolic links
 //! are never followed.
 
-use super::{EntryKind, RemoteOperation, RemotePath, client::RemoteFs};
-use crate::i18n::t;
+use super::{EntryKind, RemoteOperation, RemotePath, SftpError, client::RemoteFs};
 use anyhow::{Result, bail};
 
 pub(crate) async fn run<F: RemoteFs>(fs: &F, operation: &RemoteOperation) -> Result<()> {
@@ -16,13 +15,17 @@ pub(crate) async fn run<F: RemoteFs>(fs: &F, operation: &RemoteOperation) -> Res
         }
         RemoteOperation::Rename { from, to } => {
             if fs.metadata(to).await?.is_some() {
-                bail!(t!("sftp.error.exists", name = to.file_name()));
+                bail!(SftpError::Exists {
+                    name: to.file_name().into()
+                });
             }
             fs.rename(from, to).await
         }
         RemoteOperation::CreateDirectory { path } => {
             if fs.metadata(path).await?.is_some() {
-                bail!(t!("sftp.error.exists", name = path.file_name()));
+                bail!(SftpError::Exists {
+                    name: path.file_name().into()
+                });
             }
             fs.mkdir(path).await
         }

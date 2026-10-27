@@ -1,7 +1,6 @@
-use super::{EntryKind, FileMetadata, RemotePath};
-use crate::i18n::t;
-use anyhow::{Context as _, Result, bail};
-use gpui_kit::SharedString;
+use super::{EntryKind, FileMetadata, JournalError, RemotePath};
+use crate::ssh::WrapErr as _;
+use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest as _, Sha256};
 use std::{
@@ -19,7 +18,7 @@ impl SourceMetadata {
     pub async fn read(path: &Path) -> Result<Self> {
         let metadata = tokio::fs::symlink_metadata(path).await?;
         if !metadata.is_file() {
-            bail!(t!("sftp.journal.source_not_file"));
+            bail!(JournalError::SourceNotFile);
         }
         Ok(Self {
             size: metadata.len(),
@@ -88,19 +87,19 @@ impl ResumeRecord {
             || self.source != source
             || &self.target != target
         {
-            bail!(t!("sftp.journal.mismatch"));
+            bail!(JournalError::Mismatch);
         }
         if self.temporary != RemotePath::new(format!("{}.filepart", target.as_str()))?
             || !managed_backup_path(&self.backup, target)
         {
-            bail!(t!("sftp.journal.temporary_invalid"));
+            bail!(JournalError::TemporaryInvalid);
         }
         if self
             .original
             .as_ref()
             .is_some_and(|m| m.kind() == EntryKind::Directory)
         {
-            bail!(t!("sftp.journal.replaces_folder"));
+            bail!(JournalError::ReplacesFolder);
         }
         Ok(())
     }
@@ -142,7 +141,7 @@ impl Journal {
     ) -> Result<Option<ResumeRecord>> {
         read_record(
             &self.path(endpoint, source, target),
-            t!("sftp.journal.upload_damaged"),
+            JournalError::UploadDamaged,
         )
         .await
     }
@@ -157,11 +156,11 @@ impl Journal {
 
 /// Read a record, if there is one. `damaged` is what to say when the file
 /// is there and cannot be understood.
-async fn read_record<T: DeserializeOwned>(path: &Path, damaged: SharedString) -> Result<Option<T>> {
+async fn read_record<T: DeserializeOwned>(path: &Path, damaged: JournalError) -> Result<Option<T>> {
     match tokio::fs::read(path).await {
-        Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes).context(damaged)?)),
+        Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes).wrap_err(damaged)?)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error).context(t!("sftp.journal.unreadable")),
+        Err(error) => Err(error).wrap_err(JournalError::Unreadable),
     }
 }
 
@@ -189,7 +188,7 @@ async fn write_atomic(root: &Path, path: &Path, bytes: &[u8]) -> Result<()> {
     sync(file).await?;
     tokio::fs::rename(&temp, path)
         .await
-        .context(t!("sftp.journal.unsaved"))?;
+        .wrap_err(JournalError::Unsaved)?;
     #[cfg(unix)]
     {
         sync(tokio::fs::File::open(root).await?).await?;
@@ -197,7 +196,7 @@ async fn write_atomic(root: &Path, path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Flush a file to the disk, as `sync_all` does, but on macOS with a plain
+/// Flush a file to the disk, as `sync_all` does, but on Apple's systems with a plain
 /// `fsync`: std's `F_FULLFSYNC` also empties the drive's own cache, some
 /// 10 ms each time, which SQLite does not do there by default either.
 pub(crate) async fn sync(file: tokio::fs::File) -> std::io::Result<()> {
@@ -209,7 +208,7 @@ pub(crate) async fn sync(file: tokio::fs::File) -> std::io::Result<()> {
 
 /// [`sync`], blocking.
 pub(crate) fn sync_file(file: &std::fs::File) -> std::io::Result<()> {
-    #[cfg(target_os = "macos")]
+    #[cfg(target_vendor = "apple")]
     {
         use std::os::fd::AsRawFd as _;
         // SAFETY: the descriptor is the open file's own, for the call.
@@ -219,7 +218,7 @@ pub(crate) fn sync_file(file: &std::fs::File) -> std::io::Result<()> {
             Err(std::io::Error::last_os_error())
         }
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(target_vendor = "apple"))]
     {
         file.sync_all()
     }
@@ -279,7 +278,7 @@ impl DownloadRecord {
             || self.target != target
             || self.temporary != partial_path(target)
         {
-            bail!(t!("sftp.journal.mismatch"));
+            bail!(JournalError::Mismatch);
         }
         Ok(())
     }
@@ -319,7 +318,7 @@ impl DownloadJournal {
     ) -> Result<Option<DownloadRecord>> {
         read_record(
             &self.path(endpoint, source, target),
-            t!("sftp.journal.download_damaged"),
+            JournalError::DownloadDamaged,
         )
         .await
     }
@@ -329,5 +328,37 @@ impl DownloadJournal {
     }
     pub async fn remove(&self, record: &DownloadRecord) -> Result<()> {
         remove_if_present(&self.path(&record.endpoint, &record.source, &record.target)).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DownloadJournal, Journal, RemotePath};
+    use std::path::Path;
+
+    /// Records are found again by their file name: one that changed would
+    /// lose every transfer left to resume.
+    #[test]
+    fn record_names_never_change() {
+        let root = Path::new("/records");
+        let target = RemotePath::new("/srv/www/index.html").unwrap();
+        let upload = Journal::new(root.into()).path(
+            "root@10.0.0.1:22",
+            Path::new("/home/me/index.html"),
+            &target,
+        );
+        assert_eq!(
+            upload,
+            root.join("57c7d5d6e5e211f62c4bb24b5c9631e6f4235d3ec6ee8748c1343ce71a0bed23.json")
+        );
+        let download = DownloadJournal::new(root.into()).path(
+            "root@10.0.0.1:22",
+            &target,
+            Path::new("/home/me/index.html"),
+        );
+        assert_eq!(
+            download,
+            root.join("408f1db18c527479432101dee6562deee38dd802091cd972af239a93065b19d3.json")
+        );
     }
 }

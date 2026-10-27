@@ -1,25 +1,25 @@
+//! One SFTP connection's worker: it connects, serves listings, operations
+//! and the editor's files alongside one transfer batch at a time, and
+//! reconnects a batch whose connection dropped.
+
 use super::{
-    EntryKind, ReadFailure, RemotePath, SaveFailure, SftpCommand, SftpEvent, SftpRoute,
-    SftpTransport, SftpTransportProvider, TransferDetail, TransferDirection, TransferPhase,
-    TransferProgress,
+    Disconnect, EngineEvent, EntryKind, EventSink, Reason, RemotePath, SftpCommand, SftpError,
+    TransferDetail, TransferDirection, TransferPhase, TransferProgress,
     client::RemoteFs as _,
     client::{SftpClient, is_network_error},
     control::{Cancelled, TransferControl},
     download::DownloadBatch,
-    edit,
+    edit::{self, ReadFailure, SaveFailure},
+    engine::SftpRoute,
     journal::{DownloadJournal, Journal},
     meter::TransferMeter,
     model::{scp_local_target, scp_remote_target},
     operations, sync,
     upload::UploadBatch,
 };
-use crate::{
-    host::HostLogin,
-    i18n::{t, tn},
-    ssh::{LATENCY_INTERVAL, SshConnectionConfig, SshConnector, SshPrompts, describe_login_error},
-};
+use crate::ssh::{LATENCY_INTERVAL, SshConnectionConfig, SshConnector, SshPrompts};
 use anyhow::{Result, anyhow};
-use async_channel::{Receiver, Sender};
+use async_channel::Receiver;
 use std::{
     path::PathBuf,
     sync::{
@@ -31,46 +31,40 @@ use std::{
 use tokio::sync::{RwLock, watch};
 
 /// The answer to a request that needs the connection while there is none.
-fn not_connected() -> String {
-    t!("sftp.worker.not_connected").into()
+fn not_connected() -> Reason {
+    Reason::new(SftpError::NotConnected)
 }
 
 /// How often the latency task looks for a connection to measure, and for
 /// the one it is measuring to be dropped.
 const LATENCY_POLL: Duration = Duration::from_millis(250);
 
-pub struct SshSftpTransportProvider {
+/// One worker lifetime, run on the caller's runtime; see
+/// [`run`](Self::run).
+pub struct SftpWorker {
     connector: SshConnector,
-    resume_dir: PathBuf,
-    download_resume_dir: PathBuf,
-}
-impl SshSftpTransportProvider {
-    /// Upload and download resume records live in separate directories.
-    pub fn new(connector: SshConnector, resume_dir: PathBuf, download_resume_dir: PathBuf) -> Self {
-        Self {
-            connector,
-            resume_dir,
-            download_resume_dir,
-        }
-    }
-}
-impl SftpTransportProvider for SshSftpTransportProvider {
-    fn create(&self, login: &HostLogin, route: SftpRoute) -> Box<dyn SftpTransport> {
-        Box::new(SshSftpTransport {
-            connector: self.connector.clone(),
-            config: SshConnectionConfig::from(login),
-            route,
-            journal: Journal::new(self.resume_dir.clone()),
-            download_journal: DownloadJournal::new(self.download_resume_dir.clone()),
-        })
-    }
-}
-struct SshSftpTransport {
-    connector: SshConnector,
-    config: SshConnectionConfig,
     route: SftpRoute,
+    endpoint: String,
     journal: Journal,
     download_journal: DownloadJournal,
+}
+
+impl SftpWorker {
+    /// Upload and download resume records live in separate directories.
+    pub fn new(
+        connector: SshConnector,
+        route: SftpRoute,
+        resume_dir: PathBuf,
+        download_resume_dir: PathBuf,
+    ) -> Self {
+        Self {
+            connector,
+            endpoint: route.endpoint(),
+            route,
+            journal: Journal::new(resume_dir),
+            download_journal: DownloadJournal::new(download_resume_dir),
+        }
+    }
 }
 
 /// The host's one transfer batch, whichever way it goes.
@@ -102,8 +96,8 @@ impl TransferBatch {
     }
     /// Say what a reconnecting batch is waiting for; the next phase
     /// other than reconnecting clears it.
-    fn set_note(&mut self, note: String) {
-        self.meter().progress.note = Some(note);
+    fn set_note(&mut self, note: SftpError) {
+        self.meter().progress.note = Some(Reason::new(note));
     }
     async fn run(&mut self, client: &SftpClient, control: &TransferControl) -> Result<()> {
         match self {
@@ -118,36 +112,25 @@ impl TransferBatch {
         }
     }
 }
-impl SftpTransport for SshSftpTransport {
-    fn run(
-        self: Box<Self>,
-        commands: Receiver<SftpCommand>,
-        events: Sender<SftpEvent>,
-    ) -> Result<()> {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?
-            .block_on(self.run_async(commands, events))
-    }
-}
-impl SshSftpTransport {
+impl SftpWorker {
     async fn connect(
         &self,
         prompts: Arc<SshPrompts>,
-        events: &Sender<SftpEvent>,
+        events: &EventSink,
         shutdown: &watch::Receiver<bool>,
         shared: &RwLock<Option<Arc<SftpClient>>>,
     ) -> Result<Arc<SftpClient>> {
-        events.send(SftpEvent::Connecting).await?;
+        events.send(EngineEvent::Connecting).await?;
         let mut stop = shutdown.clone();
         // A terminal's channel measures no latency: the terminal already
         // shows its connection's.
         let client = async {
             match &self.route {
-                SftpRoute::Login => {
-                    SftpClient::connect(&self.connector, &self.config, prompts).await
+                SftpRoute::Login(login) => {
+                    SftpClient::connect(&self.connector, &SshConnectionConfig::from(login), prompts)
+                        .await
                 }
-                SftpRoute::Terminal(terminal) => SftpClient::on_terminal(terminal).await,
+                SftpRoute::Channel { opener, .. } => SftpClient::on_channel(opener.as_ref()).await,
             }
         };
         let client = tokio::select! {
@@ -156,21 +139,20 @@ impl SshSftpTransport {
         };
         let home = client.canonicalize(&RemotePath::new(".")?).await?;
         *shared.write().await = Some(client.clone());
-        events.send(SftpEvent::Connected { home }).await?;
+        events.send(EngineEvent::Connected { home }).await?;
         Ok(client)
     }
-    async fn run_async(
-        &self,
-        commands: Receiver<SftpCommand>,
-        events: Sender<SftpEvent>,
-    ) -> Result<()> {
+
+    /// Serve `commands` until `Shutdown`, or until they close, telling
+    /// `events` what happens.
+    pub async fn run(self, commands: Receiver<SftpCommand>, events: EventSink) -> Result<()> {
         let (shutdown_tx, shutdown) = watch::channel(false);
         let (cancel_tx, cancel) = watch::channel(false);
         let (answers_tx, answers) = async_channel::unbounded();
         let (operations_tx, operations) = async_channel::bounded(1);
         let prompt_events = events.clone();
         let prompts = Arc::new(SshPrompts::new(
-            Arc::new(move |p| prompt_events.try_send(SftpEvent::Prompt(p)).is_ok()),
+            Arc::new(move |p| prompt_events.try_send(EngineEvent::Prompt(p))),
             shutdown.clone(),
         ));
         let client: Arc<RwLock<Option<Arc<SftpClient>>>> = Arc::new(RwLock::new(None));
@@ -199,9 +181,7 @@ impl SshSftpTransport {
                             prompts.cancel_all();
                             *client.write().await = None;
                             let _ = events
-                                .send(SftpEvent::Disconnected(
-                                    t!("sftp.worker.disconnected").into(),
-                                ))
+                                .send(EngineEvent::Disconnected(Disconnect::ByUser))
                                 .await;
                         }
                         SftpCommand::Shutdown => break,
@@ -215,16 +195,14 @@ impl SshSftpTransport {
                                         Ok(listing) => Ok(listing),
                                         Err(error) => {
                                             drop_broken(&shared, &connected, &events, &error).await;
-                                            Err(t!(
-                                                "sftp.worker.list_failed",
-                                                error = format!("{error:#}")
-                                            )
-                                            .into())
+                                            Err(Reason::from(error).under(SftpError::ListFailed))
                                         }
                                     },
                                     None => Err(not_connected()),
                                 };
-                                let _ = events.send(SftpEvent::Listed { request_id, result }).await;
+                                let _ = events
+                                    .send(EngineEvent::Listed { request_id, result })
+                                    .await;
                             });
                         }
                         SftpCommand::Operate {
@@ -243,14 +221,14 @@ impl SshSftpTransport {
                                             Err(error) => {
                                                 drop_broken(&shared, &connected, &events, &error)
                                                     .await;
-                                                Err(format!("{error:#}"))
+                                                Err(error.into())
                                             }
                                         }
                                     }
                                     None => Err(not_connected()),
                                 };
                                 let _ = events
-                                    .send(SftpEvent::Operated { request_id, result })
+                                    .send(EngineEvent::Operated { request_id, result })
                                     .await;
                             });
                         }
@@ -266,14 +244,14 @@ impl SshSftpTransport {
                                             Err(error) => {
                                                 drop_broken(&shared, &connected, &events, &error)
                                                     .await;
-                                                Err(ReadFailure::from_error(error))
+                                                Err(ReadFailure::from_error(error, |why| why))
                                             }
                                         }
                                     }
                                     None => Err(ReadFailure::Failed(not_connected())),
                                 };
                                 let _ = events
-                                    .send(SftpEvent::FileRead { request_id, result })
+                                    .send(EngineEvent::FileRead { request_id, result })
                                     .await;
                             });
                         }
@@ -295,14 +273,14 @@ impl SshSftpTransport {
                                             Err(error) => {
                                                 drop_broken(&shared, &connected, &events, &error)
                                                     .await;
-                                                Err(ReadFailure::from_error(error))
+                                                Err(ReadFailure::from_error(error, |why| why))
                                             }
                                         }
                                     }
                                     None => Err(ReadFailure::Failed(not_connected())),
                                 };
                                 let _ = events
-                                    .send(SftpEvent::BytesRead { request_id, result })
+                                    .send(EngineEvent::BytesRead { request_id, result })
                                     .await;
                             });
                         }
@@ -328,20 +306,20 @@ impl SshSftpTransport {
                                         Ok(stamp) => Ok(stamp),
                                         Err(error) => {
                                             drop_broken(&shared, &connected, &events, &error).await;
-                                            Err(SaveFailure::from_error(error))
+                                            Err(SaveFailure::from_error(error, |why| why))
                                         }
                                     },
                                     None => Err(SaveFailure::Failed(not_connected())),
                                 };
                                 let _ = events
-                                    .send(SftpEvent::FileWritten { request_id, result })
+                                    .send(EngineEvent::FileWritten { request_id, result })
                                     .await;
                             });
                         }
                         command => {
                             if busy.swap(true, Ordering::AcqRel) {
                                 let _ = events
-                                    .send(SftpEvent::Notice(t!("sftp.worker.busy").into()))
+                                    .send(EngineEvent::Notice(Reason::new(SftpError::Busy)))
                                     .await;
                             } else {
                                 cancel_tx.send_replace(false);
@@ -371,7 +349,9 @@ impl SshSftpTransport {
             Ok(connected) => *client.write().await = Some(connected),
             Err(error) => {
                 let _ = events
-                    .send(SftpEvent::Disconnected(describe_login_error(&error)))
+                    .send(EngineEvent::Disconnected(Disconnect::LoginFailed(
+                        error.into(),
+                    )))
                     .await;
             }
         }
@@ -412,9 +392,11 @@ impl SshSftpTransport {
                     Ok(connected) => *client.write().await = Some(connected),
                     Err(error) => {
                         events
-                            .send(SftpEvent::Disconnected(describe_login_error(&error)))
+                            .send(EngineEvent::Disconnected(Disconnect::LoginFailed(
+                                error.into(),
+                            )))
                             .await?;
-                        events.send(SftpEvent::Idle).await?;
+                        events.send(EngineEvent::Idle).await?;
                         busy.store(false, Ordering::Release);
                         continue;
                     }
@@ -436,7 +418,7 @@ impl SshSftpTransport {
                 if let SftpCommand::Upload(request) = &operation {
                     batch = None;
                     events
-                        .send(SftpEvent::Progress(TransferProgress::default()))
+                        .send(EngineEvent::Progress(TransferProgress::default()))
                         .await?;
                     let mut pruned = sync::Pruned::default();
                     let request = if let Some(delete) = request.sync_deletes() {
@@ -449,10 +431,9 @@ impl SshSftpTransport {
                             .filter(|path| path.is_dir())
                             .map(|path| dunce::simplified(&path).to_path_buf())
                             .ok_or_else(|| {
-                                anyhow!(t!(
-                                    "sftp.worker.local_folder_missing",
-                                    path = source.display()
-                                ))
+                                anyhow!(SftpError::LocalFolderMissing {
+                                    path: source.clone()
+                                })
                             })?;
                         let target =
                             sync_target(connected.as_ref(), request.destination(), &control)
@@ -476,8 +457,11 @@ impl SshSftpTransport {
                         let (directory, name) = scp_remote_target(destination, is_directory);
                         // Some servers resolve a path that is not there, so
                         // ask whether it is a directory too.
-                        let missing =
-                            || anyhow!(t!("sftp.worker.remote_folder_missing", path = directory));
+                        let missing = || {
+                            anyhow!(SftpError::RemoteFolderMissing {
+                                path: directory.to_string()
+                            })
+                        };
                         let resolved = control
                             .run(connected.canonicalize(&directory))
                             .await
@@ -499,7 +483,7 @@ impl SshSftpTransport {
                     let mut upload = control
                         .run(UploadBatch::scan(
                             &request,
-                            &self.config.endpoint(),
+                            &self.endpoint,
                             connected.fingerprint(),
                             self.journal.clone(),
                             &control,
@@ -520,17 +504,14 @@ impl SshSftpTransport {
                             .await
                             .is_ok_and(|metadata| metadata.is_dir())
                         {
-                            anyhow::bail!(t!(
-                                "sftp.worker.local_folder_missing",
-                                path = directory.display()
-                            ));
+                            anyhow::bail!(SftpError::LocalFolderMissing { path: directory });
                         }
                         request.clone().resolved(directory, name)
                     } else {
                         request.clone()
                     };
                     events
-                        .send(SftpEvent::Progress(TransferProgress {
+                        .send(EngineEvent::Progress(TransferProgress {
                             direction: TransferDirection::Download,
                             ..TransferProgress::default()
                         }))
@@ -538,7 +519,7 @@ impl SshSftpTransport {
                     batch = Some(TransferBatch::Download(
                         DownloadBatch::scan(
                             request,
-                            &self.config.endpoint(),
+                            &self.endpoint,
                             connected.fingerprint(),
                             self.download_journal.clone(),
                             connected.as_ref(),
@@ -556,7 +537,7 @@ impl SshSftpTransport {
                     }
                     batch = None;
                     events
-                        .send(SftpEvent::Progress(TransferProgress {
+                        .send(EngineEvent::Progress(TransferProgress {
                             direction,
                             phase: TransferPhase::Completed,
                             ..Default::default()
@@ -567,21 +548,22 @@ impl SshSftpTransport {
             }
             .await;
             if let Err(error) = prepared {
-                events.send(SftpEvent::Notice(error.to_string())).await?;
+                let reason = Reason::from(error);
+                events.send(EngineEvent::Notice(reason.clone())).await?;
                 if let Some(batch) = &mut batch {
                     batch.phase(TransferPhase::Stopped, &control);
                 } else {
                     events
-                        .send(SftpEvent::Progress(TransferProgress {
+                        .send(EngineEvent::Progress(TransferProgress {
                             direction,
                             phase: TransferPhase::Stopped,
-                            details: vec![TransferDetail::failed("", error.to_string())],
+                            details: vec![TransferDetail::failed("", reason)],
                             ..Default::default()
                         }))
                         .await?;
                 }
                 // Done, as far as whoever sent the batch is concerned.
-                events.send(SftpEvent::Idle).await?;
+                events.send(EngineEvent::Idle).await?;
                 busy.store(false, Ordering::Release);
                 continue;
             }
@@ -599,7 +581,7 @@ impl SshSftpTransport {
                             } else {
                                 Err(std::io::Error::new(
                                     std::io::ErrorKind::NotConnected,
-                                    t!("sftp.worker.not_connected_short").to_string(),
+                                    SftpError::NoConnection,
                                 )
                                 .into())
                             }
@@ -610,20 +592,14 @@ impl SshSftpTransport {
                         Err(error) if is_network_error(&error) => {
                             *client.write().await = None;
                             events
-                                .send(SftpEvent::Disconnected(
-                                    t!("sftp.worker.dropped_kept").into(),
-                                ))
+                                .send(EngineEvent::Disconnected(Disconnect::DroppedKept))
                                 .await?;
                             let mut recovered = false;
                             while reconnects < 3 {
-                                batch.set_note(
-                                    tn!(
-                                        "sftp.worker.reconnect_in",
-                                        [1, 3, 10][reconnects],
-                                        attempt = reconnects + 1
-                                    )
-                                    .into(),
-                                );
+                                batch.set_note(SftpError::ReconnectIn {
+                                    seconds: [1, 3, 10][reconnects],
+                                    attempt: reconnects + 1,
+                                });
                                 batch.phase(TransferPhase::Reconnecting, &control);
                                 let delay = Duration::from_secs([1, 3, 10][reconnects]);
                                 reconnects += 1;
@@ -648,18 +624,19 @@ impl SshSftpTransport {
                                             break;
                                         }
                                         Err(error) => {
-                                            events
-                                                .send(SftpEvent::Notice(error.to_string()))
-                                                .await?;
+                                            events.send(EngineEvent::Notice(error.into())).await?;
                                             break;
                                         }
                                     },
                                     Err(error) => {
-                                        events
-                                            .send(SftpEvent::Disconnected(error.to_string()))
-                                            .await?;
                                         // Authentication/trust failures must require user action.
-                                        if !is_network_error(&error) {
+                                        let give_up = !is_network_error(&error);
+                                        events
+                                            .send(EngineEvent::Disconnected(Disconnect::Failed(
+                                                error.into(),
+                                            )))
+                                            .await?;
+                                        if give_up {
                                             break;
                                         }
                                     }
@@ -673,7 +650,7 @@ impl SshSftpTransport {
                         }
                         Err(error) => {
                             if !error.is::<Cancelled>() {
-                                events.send(SftpEvent::Notice(error.to_string())).await?;
+                                events.send(EngineEvent::Notice(error.into())).await?;
                             }
                             batch.phase(TransferPhase::Stopped, &control);
                             break;
@@ -685,7 +662,7 @@ impl SshSftpTransport {
                 }
             }
             busy.store(false, Ordering::Release);
-            events.send(SftpEvent::Idle).await?;
+            events.send(EngineEvent::Idle).await?;
         }
         router.abort();
         latency.abort();
@@ -706,10 +683,16 @@ async fn sync_target(
         Some(metadata) if metadata.kind() == EntryKind::Directory => {
             control.run(fs.canonicalize(destination)).await?
         }
-        Some(_) => anyhow::bail!(t!("sftp.worker.not_a_folder", path = destination)),
+        Some(_) => anyhow::bail!(SftpError::NotAFolder {
+            path: destination.to_string()
+        }),
         None => {
             let parent = destination.parent();
-            let missing = || anyhow!(t!("sftp.worker.remote_folder_missing", path = parent));
+            let missing = || {
+                anyhow!(SftpError::RemoteFolderMissing {
+                    path: parent.to_string()
+                })
+            };
             let parent = control
                 .run(fs.canonicalize(&parent))
                 .await
@@ -729,7 +712,7 @@ async fn sync_target(
         }
     };
     if target.is_root() {
-        anyhow::bail!(t!("sftp.worker.sync_to_root"));
+        anyhow::bail!(SftpError::SyncToRoot);
     }
     Ok(target)
 }
@@ -738,7 +721,7 @@ async fn sync_target(
 /// at once, transfers or not. The client is held only for a ping, and let go
 /// as soon as it is no longer the one in use, so 断开 still closes the
 /// connection at once.
-async fn measure_latency(shared: Arc<RwLock<Option<Arc<SftpClient>>>>, events: Sender<SftpEvent>) {
+async fn measure_latency(shared: Arc<RwLock<Option<Arc<SftpClient>>>>, events: EventSink) {
     let mut measured = Weak::new();
     let mut last = Instant::now();
     loop {
@@ -758,7 +741,7 @@ async fn measure_latency(shared: Arc<RwLock<Option<Arc<SftpClient>>>>, events: S
         };
         drop(connected);
         if let Some(latency) = latency
-            && events.send(SftpEvent::Latency(latency)).await.is_err()
+            && events.send(EngineEvent::Latency(latency)).await.is_err()
         {
             break;
         }
@@ -783,7 +766,7 @@ async fn replaced(shared: &RwLock<Option<Arc<SftpClient>>>, connected: &Arc<Sftp
 async fn drop_broken(
     shared: &RwLock<Option<Arc<SftpClient>>>,
     connected: &Arc<SftpClient>,
-    events: &Sender<SftpEvent>,
+    events: &EventSink,
     error: &anyhow::Error,
 ) {
     if is_network_error(error) {
@@ -796,13 +779,13 @@ async fn drop_broken(
 async fn forget(
     shared: &RwLock<Option<Arc<SftpClient>>>,
     connected: &Arc<SftpClient>,
-    events: &Sender<SftpEvent>,
+    events: &EventSink,
 ) {
     let mut current = shared.write().await;
     if current.as_ref().is_some_and(|c| Arc::ptr_eq(c, connected)) {
         *current = None;
         let _ = events
-            .send(SftpEvent::Disconnected(t!("sftp.worker.dropped").into()))
+            .send(EngineEvent::Disconnected(Disconnect::Dropped))
             .await;
     }
 }

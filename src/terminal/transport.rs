@@ -49,14 +49,7 @@ pub struct ExecRequest {
     pub reply: mpsc::Sender<ExecResult>,
 }
 
-pub use crate::ssh::ChannelStream;
-
-/// An SFTP channel on the terminal's own connection, and the fingerprint of
-/// the host key that connection checked, which resumed transfers verify.
-pub struct SftpChannel {
-    pub stream: Box<dyn ChannelStream>,
-    pub fingerprint: String,
-}
+pub use crate::ssh::{ChannelStream, SftpChannel};
 
 /// Answered once on `reply` with the channel, or with why the server or the
 /// terminal would not open it. A request sent while the terminal logs in

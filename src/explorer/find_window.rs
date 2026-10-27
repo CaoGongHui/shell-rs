@@ -21,7 +21,7 @@ use crate::{
     },
     host::ConnectionState,
     i18n::{UiLocale, t, tn},
-    sftp::{DirectoryListing, RemotePath, SftpCommand},
+    sftp::{DirectoryListing, RemotePath, SftpCommand, describe_sftp_error},
     shared::{dismiss_form_error, form_error_notification},
 };
 use gpui_kit::component::{
@@ -290,7 +290,7 @@ impl FindFiles {
                         .commands
                         .try_send(SftpCommand::List { request_id, path });
                 }
-                Err(error) => refused.push((request_id, Err(error.to_string()))),
+                Err(error) => refused.push((request_id, Err(describe_sftp_error(&error)))),
             }
         }
         for (request_id, result) in refused {

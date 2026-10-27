@@ -1,7 +1,9 @@
-use super::{SftpEvent, TransferAnswer, TransferChoice, TransferQuestion, TransferQuestionKind};
-use crate::i18n::t;
+use super::{
+    EngineEvent, EventSink, Reason, TransferAnswer, TransferChoice, TransferQuestion,
+    TransferQuestionKind,
+};
 use anyhow::Result;
-use async_channel::{Receiver, Sender};
+use async_channel::Receiver;
 use std::{
     collections::HashSet,
     future::Future,
@@ -9,17 +11,19 @@ use std::{
 };
 use tokio::sync::watch;
 static NEXT_QUESTION: AtomicU64 = AtomicU64::new(1);
+/// The user stopped the batch, or the worker is going away. The progress
+/// made is kept.
 #[derive(Debug)]
-pub(crate) struct Cancelled;
+pub struct Cancelled;
 impl std::fmt::Display for Cancelled {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&t!("sftp.transfer.cancelled"))
+        f.write_str("transfer stopped; its progress is kept")
     }
 }
 impl std::error::Error for Cancelled {}
 
 pub(crate) struct TransferControl {
-    pub events: Sender<SftpEvent>,
+    pub events: EventSink,
     pub cancel: watch::Receiver<bool>,
     pub answers: Receiver<(u64, TransferAnswer)>,
 }
@@ -48,12 +52,12 @@ impl TransferControl {
         &self,
         kind: TransferQuestionKind,
         path: &str,
-        message: &str,
+        message: impl Into<Reason>,
     ) -> Result<TransferAnswer> {
         self.check()?;
         let id = NEXT_QUESTION.fetch_add(1, Ordering::Relaxed);
         self.events
-            .send(SftpEvent::Question(TransferQuestion::new(
+            .send(EngineEvent::Question(TransferQuestion::new(
                 id, kind, path, message,
             )))
             .await?;
@@ -79,10 +83,14 @@ impl TransferControl {
 pub(crate) struct TargetGuard(String);
 static ACTIVE_TARGETS: std::sync::Mutex<Option<HashSet<String>>> = std::sync::Mutex::new(None);
 impl TargetGuard {
-    pub fn acquire(key: String, busy: &str) -> Result<Self> {
+    /// Fails with `busy` while another session holds `key`.
+    pub fn acquire<E>(key: String, busy: E) -> Result<Self>
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
         let mut active = ACTIVE_TARGETS.lock().unwrap_or_else(|e| e.into_inner());
         if !active.get_or_insert_with(HashSet::new).insert(key.clone()) {
-            anyhow::bail!("{busy}");
+            return Err(busy.into());
         }
         Ok(Self(key))
     }

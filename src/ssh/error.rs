@@ -9,6 +9,7 @@
 use std::error::Error;
 use std::fmt;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// A typed error over the error that made it happen. anyhow's own `context`
 /// hides the context's type from the links of [`anyhow::Error::chain`];
@@ -17,12 +18,18 @@ use std::path::PathBuf;
 #[derive(Debug)]
 pub struct Wrapped<E> {
     error: E,
-    cause: anyhow::Error,
+    /// Shared, so one cause can be told under several layers.
+    cause: Arc<anyhow::Error>,
 }
 
 impl<E> Wrapped<E> {
     pub fn error(&self) -> &E {
         &self.error
+    }
+
+    /// What lies under the layer.
+    pub fn into_cause(self) -> Arc<anyhow::Error> {
+        self.cause
     }
 }
 
@@ -34,7 +41,7 @@ impl<E: fmt::Display> fmt::Display for Wrapped<E> {
 
 impl<E: Error + 'static> Error for Wrapped<E> {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
-        Some(self.cause.as_ref())
+        Some((*self.cause).as_ref())
     }
 }
 
@@ -43,10 +50,15 @@ pub fn wrap<E: Error + Send + Sync + 'static>(
     error: E,
     cause: impl Into<anyhow::Error>,
 ) -> anyhow::Error {
-    anyhow::Error::new(Wrapped {
-        error,
-        cause: cause.into(),
-    })
+    wrap_shared(error, Arc::new(cause.into()))
+}
+
+/// `error` over a cause that is told elsewhere too.
+pub fn wrap_shared<E: Error + Send + Sync + 'static>(
+    error: E,
+    cause: Arc<anyhow::Error>,
+) -> anyhow::Error {
+    anyhow::Error::new(Wrapped { error, cause })
 }
 
 /// [`wrap`] on a result's error, as anyhow's `Context` does it.

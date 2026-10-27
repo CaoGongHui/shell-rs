@@ -4,8 +4,8 @@
 use std::time::{Duration, Instant};
 
 use super::{
-    SftpEvent, TransferDetail, TransferDirection, TransferOutcome, TransferPhase, TransferProgress,
-    control::TransferControl, speed::TransferClock,
+    EngineEvent, TransferDetail, TransferDirection, TransferOutcome, TransferPhase,
+    TransferProgress, control::TransferControl, speed::TransferClock,
 };
 
 /// While bytes move, progress goes to the UI no more often than this.
@@ -59,7 +59,7 @@ impl TransferMeter {
     pub fn emit(&self, control: &TransferControl) {
         let _ = control
             .events
-            .try_send(SftpEvent::Progress(self.progress.clone()));
+            .try_send(EngineEvent::Progress(self.progress.clone()));
     }
 
     /// Enter a phase and say so. Only transferring counts towards the time
