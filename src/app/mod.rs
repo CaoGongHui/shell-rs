@@ -32,6 +32,7 @@ pub use window_hiding::{MainWindow, bring_forward, hide_when_closed, restore_win
 use gpui_kit::component::Theme;
 use gpui_kit::*;
 
+use crate::host::{ErrorMessage, OpenError};
 use crate::i18n::t;
 
 /// Key context of the host panel, for bindings that only apply there.
@@ -71,6 +72,10 @@ pub fn app_identity() -> &'static str {
 /// What the window says when the local database cannot be opened: the run
 /// goes on, keeping its changes in memory only.
 pub fn database_unavailable(error: &anyhow::Error) -> SharedString {
+    let error = match error.downcast_ref::<OpenError>() {
+        Some(error) => error.message(),
+        None => error.to_string().into(),
+    };
     t!("app.database_unavailable", error = error)
 }
 

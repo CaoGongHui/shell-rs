@@ -1,10 +1,6 @@
 //! How a serial host's line is set. The device itself is the host's
 //! `address`.
 
-use gpui_kit::SharedString;
-
-use crate::i18n::t;
-
 /// The baud rates the host form offers. Any other rate can be typed.
 pub const COMMON_BAUD_RATES: [u32; 12] = [
     1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600, 1500000,
@@ -93,14 +89,6 @@ impl Parity {
     /// Every parity, in the order the form lists them.
     pub const ALL: [Parity; 3] = [Parity::None, Parity::Odd, Parity::Even];
 
-    pub fn label(self) -> SharedString {
-        match self {
-            Parity::None => t!("host.parity.none"),
-            Parity::Odd => t!("host.parity.odd"),
-            Parity::Even => t!("host.parity.even"),
-        }
-    }
-
     /// The stored spelling, also the external CLI's.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -167,14 +155,6 @@ impl FlowControl {
     /// Every mode, in the order the form lists them.
     pub const ALL: [FlowControl; 3] =
         [FlowControl::None, FlowControl::RtsCts, FlowControl::XonXoff];
-
-    pub fn label(self) -> SharedString {
-        match self {
-            FlowControl::None => t!("host.flow.none"),
-            FlowControl::RtsCts => "RTS/CTS".into(),
-            FlowControl::XonXoff => "XON/XOFF".into(),
-        }
-    }
 
     /// The stored spelling, also the external CLI's.
     pub fn as_str(self) -> &'static str {

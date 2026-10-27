@@ -1,11 +1,11 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Mutex;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use zeroize::Zeroizing;
 
 use super::{SecretRef, SecretSource, SecretStore};
-use crate::i18n::t;
 
 /// 进程内的秘密存储，给测试用：行为和真钥匙串一致，但什么都不落地。
 #[derive(Default)]
@@ -58,6 +58,19 @@ impl SecretStore for InMemorySecretStore {
     }
 }
 
+/// 没有系统钥匙串时写秘密的失败。
+#[derive(Debug)]
+pub struct SecretsUnavailable;
+
+/// For logs; the app words it for the user.
+impl fmt::Display for SecretsUnavailable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("the system keychain is not available")
+    }
+}
+
+impl std::error::Error for SecretsUnavailable {}
+
 /// 用在没有系统钥匙串的机器上：读永远是空，写明确报错，界面据此把密码字段
 /// 禁用掉。也是 `HostStore` 的默认值，所以单元测试不会碰到任何秘密存储。
 pub struct NoSecretStore;
@@ -74,7 +87,7 @@ impl SecretStore for NoSecretStore {
     }
 
     fn set(&self, _: &SecretRef, _: &str) -> Result<()> {
-        bail!(t!("secrets.unavailable"))
+        Err(SecretsUnavailable.into())
     }
 
     fn delete(&self, _: &SecretRef) -> Result<()> {

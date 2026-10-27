@@ -3,12 +3,10 @@
 //! them and they are stored in the same database; the `credential` module
 //! that lists and edits them depends on this one, never the reverse.
 
-use std::fmt;
 use std::path::Path;
 
 use gpui_kit::SharedString;
 
-use crate::i18n::t;
 use crate::secrets::SecretRef;
 
 use super::private_key::is_kept_in;
@@ -42,16 +40,8 @@ impl CredentialKind {
         CredentialKind::Agent,
     ];
 
-    pub fn label(self) -> SharedString {
-        match self {
-            CredentialKind::Password => t!("host.credential_kind.password"),
-            CredentialKind::Key => t!("host.credential_kind.key"),
-            CredentialKind::Agent => "SSH Agent".into(),
-        }
-    }
-
-    /// The stored spelling. Kept separate from `label` so translating the UI
-    /// cannot rewrite what is already in the database.
+    /// The stored spelling. Kept apart from the label the app shows, so
+    /// translating the UI cannot rewrite what is already in the database.
     pub fn as_str(self) -> &'static str {
         match self {
             CredentialKind::Password => "password",
@@ -81,23 +71,12 @@ impl CredentialKind {
     }
 }
 
-/// Why a draft cannot be saved. `Display` is the text the form shows.
+/// Why a draft cannot be saved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CredentialDraftError {
     Name,
     KeyPath,
 }
-
-impl fmt::Display for CredentialDraftError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&match self {
-            CredentialDraftError::Name => t!("host.credential_draft.name"),
-            CredentialDraftError::KeyPath => t!("host.credential_draft.key_path"),
-        })
-    }
-}
-
-impl std::error::Error for CredentialDraftError {}
 
 /// The user name a login falls back to when none is given, as in the host
 /// form.
@@ -221,48 +200,6 @@ impl Credential {
             _ => false,
         }
     }
-
-    /// What the credential logs in as and with: `root · 密码`, or
-    /// `deploy · id_ed25519` for a key file. A key ShellRS keeps in
-    /// `key_dir` has a random file name nobody knows it by, so it is just
-    /// `deploy · 密钥`.
-    pub fn summary(&self, key_dir: Option<&Path>) -> String {
-        let with = match (self.kind, self.key_path.as_deref()) {
-            (CredentialKind::Key, Some(path)) if !self.keeps_key_in(key_dir) => {
-                file_name(path).to_string()
-            }
-            (kind, _) => kind.label().to_string(),
-        };
-        format!("{} · {with}", self.user)
-    }
-}
-
-/// The last component of a key file's path, which is how people know their
-/// keys apart.
-fn file_name(path: &str) -> &str {
-    Path::new(path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(path)
-}
-
-/// Whether a credential matches what was typed into the credential list's
-/// search box: its name, user, kind or key file.
-pub fn matches_credential_query(credential: &Credential, query: &str) -> bool {
-    let query = query.trim().to_lowercase();
-    if query.is_empty() {
-        return true;
-    }
-    let kind = credential.kind.label();
-    [
-        Some(credential.name.as_ref()),
-        Some(credential.user.as_ref()),
-        Some(kind.as_ref()),
-        credential.key_path.as_deref(),
-    ]
-    .into_iter()
-    .flatten()
-    .any(|text| text.to_lowercase().contains(&query))
 }
 
 #[cfg(test)]
@@ -312,35 +249,6 @@ mod tests {
     }
 
     #[test]
-    fn the_summary_names_the_user_and_what_it_logs_in_with() {
-        let password = Credential::new(
-            CredentialId(1),
-            CredentialDraft::new("运维", CredentialKind::Password, "root"),
-        );
-        assert_eq!(password.summary(None), "root · 密码");
-        let key = Credential::new(
-            CredentialId(2),
-            CredentialDraft::new("部署", CredentialKind::Key, "deploy")
-                .with_key_path("/Users/me/.ssh/id_ed25519"),
-        );
-        assert_eq!(key.summary(None), "deploy · id_ed25519");
-        assert_eq!(
-            key.summary(Some(Path::new("/Users/me/.ssh"))),
-            "deploy · 密钥",
-            "a key ShellRS keeps is not known by its file name"
-        );
-        assert_eq!(
-            key.summary(Some(Path::new("/Users/me/Library/shellrs/keys"))),
-            "deploy · id_ed25519"
-        );
-        let agent = Credential::new(
-            CredentialId(3),
-            CredentialDraft::new("agent", CredentialKind::Agent, "me"),
-        );
-        assert_eq!(agent.summary(None), "me · SSH Agent");
-    }
-
-    #[test]
     fn each_credential_has_its_own_keychain_entry() {
         let draft = CredentialDraft::new("运维", CredentialKind::Password, "root");
         let one = Credential::new(CredentialId(1), draft.clone());
@@ -350,20 +258,5 @@ mod tests {
             one.password_secret().account(),
             format!("credential:{}", one.keychain_id)
         );
-    }
-
-    #[test]
-    fn the_search_looks_at_the_name_the_user_the_kind_and_the_key_file() {
-        let credential = Credential::new(
-            CredentialId(1),
-            CredentialDraft::new("生产部署", CredentialKind::Key, "deploy")
-                .with_key_path("/Users/me/.ssh/id_prod"),
-        );
-        assert!(matches_credential_query(&credential, ""));
-        assert!(matches_credential_query(&credential, "生产"));
-        assert!(matches_credential_query(&credential, "DEPLOY"));
-        assert!(matches_credential_query(&credential, "密钥"));
-        assert!(matches_credential_query(&credential, "id_prod"));
-        assert!(!matches_credential_query(&credential, "root"));
     }
 }

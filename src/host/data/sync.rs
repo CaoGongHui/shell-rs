@@ -23,13 +23,13 @@ use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use gpui_kit::{Context, SharedString};
+use gpui_kit::SharedString;
 use shellrs_sync::{
     self as sync, Kind, LocalRecord, LocalSnapshot, RecordData, RecordKey, SyncState,
 };
 use zeroize::Zeroizing;
 
-use super::{BookmarkMeta, HostStore};
+use super::{BookmarkMeta, Failure, HostData, SecretError};
 use crate::host::private_key::{read_small, write_key_file};
 use crate::host::{
     AuthKind, BookmarkSide, Credential, CredentialDraft, CredentialId, CredentialKind,
@@ -37,7 +37,6 @@ use crate::host::{
     HostDraft, HostGroup, HostId, Protocol, ProxyKind, ProxySettings, PublicId, Route, Snippet,
     SnippetCategory, SnippetCategoryId, SnippetDraft, SnippetId, SnippetScope, TelnetSettings,
 };
-use crate::i18n::t;
 use crate::secrets::{SecretRef, SecretStore};
 
 /// What one round of sync takes from the store, on the UI thread.
@@ -205,8 +204,8 @@ pub enum ApplyError {
     /// The user changed something since the round read the records: run
     /// it again.
     Stale,
-    /// The database refused them; nothing was applied.
-    NotSaved(SharedString),
+    /// The database refused them, in its words; nothing was applied.
+    NotSaved(String),
 }
 
 /// The secrets a round brings, to write where they go on a worker thread,
@@ -248,7 +247,8 @@ pub struct SecretsWritten {
     pub key_paths: Vec<(PublicId, SharedString)>,
     /// The secrets written, by their sync key: no longer pending.
     pub done: Vec<RecordKey>,
-    pub failures: Vec<SharedString>,
+    /// What could not be kept; the next round brings it again.
+    pub failures: Vec<Failure>,
 }
 
 impl SecretWork {
@@ -276,9 +276,7 @@ impl SecretWork {
     pub fn run(self, secrets: &dyn SecretStore, key_dir: Option<&Path>) -> SecretsWritten {
         let mut written = SecretsWritten::default();
         let mut failures = Vec::new();
-        let mut fail = |error: &dyn fmt::Display| {
-            failures.push(t!("host.store.sync.secret_not_saved", error = error));
-        };
+        let mut fail = |error: SecretError| failures.push(Failure::SyncedSecret(error));
         for (key, secret, value) in self.keychain {
             let result = match value {
                 Some(value) => secrets.set(&secret, &value),
@@ -286,12 +284,12 @@ impl SecretWork {
             };
             match result {
                 Ok(()) => written.done.push(key),
-                Err(error) => fail(&error),
+                Err(error) => fail(SecretError::of(&error)),
             }
         }
         for key in self.keys {
             let Some(dir) = key_dir else {
-                fail(&t!("host.store.no_key_dir"));
+                fail(SecretError::NoKeyDir);
                 continue;
             };
             let id = key.credential.to_string();
@@ -305,20 +303,20 @@ impl SecretWork {
                             Ok(()) => written
                                 .done
                                 .push(RecordKey::new(Kind::SecretPassphrase, id)),
-                            Err(error) => fail(&error),
+                            Err(error) => fail(SecretError::of(&error)),
                         }
                     }
                     written
                         .key_paths
                         .push((key.credential, path.display().to_string().into()));
                 }
-                Err(error) => fail(&error),
+                Err(error) => fail(SecretError::KeyFile(error.to_string())),
             }
         }
         for (key, path) in self.forget {
             let removed = match std::fs::remove_file(&path) {
                 Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                    fail(&error);
+                    fail(SecretError::KeyFile(error.to_string()));
                     false
                 }
                 _ => true,
@@ -326,7 +324,7 @@ impl SecretWork {
             match secrets.delete(&SecretRef::passphrase(&path)) {
                 Ok(()) if removed => written.done.push(key),
                 Ok(()) => {}
-                Err(error) => fail(&error),
+                Err(error) => fail(SecretError::of(&error)),
             }
         }
         written.failures = failures;
@@ -379,7 +377,7 @@ struct Ids {
     snippets: HashMap<String, SnippetId>,
 }
 
-impl HostStore {
+impl HostData {
     /// The records that sync and where their secrets are, for a round.
     pub fn sync_export(&self) -> SyncExport {
         let group_id = |id: GroupId| self.group(id).map(|group| group.sync_id.to_string());
@@ -692,13 +690,13 @@ impl HostStore {
     }
 
     /// Keep `state`, as a push returned it. Kept in memory even when the
-    /// database refuses it: the round's result says so.
-    pub fn save_sync_state(&mut self, state: &[u8]) -> Result<(), SharedString> {
+    /// database refuses it, in its words: the round's result says so.
+    pub fn save_sync_state(&mut self, state: &[u8]) -> Result<(), String> {
         self.sync_state = Some(state.to_vec());
         match &self.database {
             Some(database) => database
                 .set_sync_state(state)
-                .map_err(|error| t!("host.store.sync.state_not_saved", error = error)),
+                .map_err(|error| error.to_string()),
             None => Ok(()),
         }
     }
@@ -723,7 +721,6 @@ impl HostStore {
         changes: &[sync::Change],
         state: &[u8],
         export: &SyncExport,
-        cx: &mut Context<Self>,
     ) -> Result<SecretWork, ApplyError> {
         if export.revision != self.sync_revision {
             return Err(ApplyError::Stale);
@@ -794,21 +791,18 @@ impl HostStore {
             });
             if let Err(error) = result {
                 self.restore(saved);
-                return Err(ApplyError::NotSaved(t!(
-                    "host.store.sync.not_saved",
-                    error = error
-                )));
+                return Err(ApplyError::NotSaved(error.to_string()));
             }
         }
         self.sync_state = Some(state.to_vec());
-        cx.notify();
+        self.changed();
         Ok(work)
     }
 
     /// Take what writing a round's secrets came to: the credentials whose
     /// private key it wrote point at its file (this device's own path, no
     /// edit), and what it wrote is no longer pending.
-    pub fn adopt_synced_secrets(&mut self, written: &SecretsWritten, cx: &mut Context<Self>) {
+    pub fn adopt_synced_secrets(&mut self, written: &SecretsWritten) {
         for key in &written.done {
             self.set_pending(key, false);
         }
@@ -822,14 +816,14 @@ impl HostStore {
             };
             credential.key_path = Some(path.clone());
             let credential = credential.clone();
-            self.persist(super::Change::SaveCredential, cx, |db| {
+            self.persist(super::Change::SaveCredential, |db| {
                 db.update_credential(&credential)
             });
         }
         for failure in &written.failures {
-            self.report_failure(failure.clone(), cx);
+            self.report(failure.clone());
         }
-        cx.notify();
+        self.changed();
     }
 
     fn saved(&self) -> Saved {
@@ -1090,7 +1084,7 @@ impl HostStore {
                 let is_new = match self.hosts.iter_mut().find(|h| h.id == host_id) {
                     Some(old) => {
                         fresh.os = old.os;
-                        fresh.sidebar_tool = old.sidebar_tool;
+                        fresh.sidebar_tool = old.sidebar_tool.take();
                         fresh.edited_ms = old.edited_ms;
                         *old = fresh;
                         false
@@ -1508,7 +1502,6 @@ fn app_credential_kind(kind: sync::CredentialKind) -> CredentialKind {
 mod tests {
     use std::sync::Arc;
 
-    use gpui_kit::{AppContext as _, Entity, TestAppContext};
     use shellrs_sync::{
         Capabilities, DeviceId, DeviceInfo, FixedEnv, KdfParams, Keyring, MemoryStore, Pushed,
         RoundOptions, SyncState, create_vault, pull, push,
@@ -1520,7 +1513,7 @@ mod tests {
 
     /// One device: its store, keychain, key folder and sync state.
     struct Device {
-        store: Entity<HostStore>,
+        store: HostData,
         secrets: Arc<InMemorySecretStore>,
         data: tempfile::TempDir,
         keys_dir: PathBuf,
@@ -1532,18 +1525,18 @@ mod tests {
     }
 
     impl Device {
-        fn new(name: char, cx: &mut TestAppContext) -> Self {
+        fn new(name: char) -> Self {
             let data = tempfile::tempdir().unwrap();
             let keys_dir = data.path().join("keys");
             let secrets = Arc::new(InMemorySecretStore::default());
             let database = HostDatabase::open(&data.path().join("shellrs.db")).unwrap();
-            let store = HostStore::load(database)
+            let store = HostData::load(database)
                 .unwrap()
                 .with_secrets(secrets.clone() as SharedSecretStore)
                 .with_key_dir(&keys_dir);
             let id = DeviceId::parse(&name.to_string().repeat(16)).unwrap();
             Self {
-                store: cx.new(|_| store),
+                store,
                 secrets,
                 data,
                 keys_dir,
@@ -1554,9 +1547,9 @@ mod tests {
         }
 
         /// A round, as the sync service runs it.
-        fn sync(&mut self, vault: &MemoryStore, keys: &Keyring, cx: &mut TestAppContext) -> usize {
+        fn sync(&mut self, vault: &MemoryStore, keys: &Keyring) -> usize {
             self.env.advance(1000);
-            let export = self.store.read_with(cx, |store, _| store.sync_export());
+            let export = self.store.sync_export();
             let local = export.local(&*self.secrets, &self.state);
             let pulled = pull(
                 vault,
@@ -1571,9 +1564,7 @@ mod tests {
             let state = pulled.state.to_bytes();
             let work = self
                 .store
-                .update(cx, |store, cx| {
-                    store.apply_sync(&pulled.changes, &state, &export, cx)
-                })
+                .apply_sync(&pulled.changes, &state, &export)
                 .unwrap();
             let written = if self.refuse_writes {
                 work.run(&Locked, Some(&self.keys_dir))
@@ -1585,8 +1576,7 @@ mod tests {
                 "{:?}",
                 written.failures
             );
-            self.store
-                .update(cx, |store, cx| store.adopt_synced_secrets(&written, cx));
+            self.store.adopt_synced_secrets(&written);
             self.state = pulled.state;
             let info = DeviceInfo {
                 name: "test".into(),
@@ -1603,8 +1593,8 @@ mod tests {
 
         /// What the device holds that syncs, as records, secrets included,
         /// and with the edit times left out.
-        fn held(&self, cx: &mut TestAppContext) -> Vec<(String, String)> {
-            let export = self.store.read_with(cx, |store, _| store.sync_export());
+        fn held(&self) -> Vec<(String, String)> {
+            let export = self.store.sync_export();
             let read = read_secrets(&export.secrets, &[], &nothing_seen(), &*self.secrets);
             let mut held: Vec<(String, String)> = export
                 .records
@@ -1628,6 +1618,15 @@ mod tests {
         }
     }
 
+    /// Run the keychain writes the changes queued, as the app does on a
+    /// background thread.
+    fn run_secret_jobs(store: &mut HostData) {
+        for job in store.take_secret_jobs() {
+            let outcome = job.run();
+            store.secret_done(outcome);
+        }
+    }
+
     fn vault() -> (MemoryStore, Keyring) {
         let store = MemoryStore::new();
         let fast = KdfParams {
@@ -1641,56 +1640,54 @@ mod tests {
 
     /// A device's worth of everything that syncs, and a serial host that
     /// does not.
-    fn fill(device: &Device, cx: &mut TestAppContext) {
-        device.store.update(cx, |store, cx| {
-            let ops = store.insert_group(GroupDraft::new("ops", None), cx);
-            let db = store.insert_group(GroupDraft::new("db", Some(ops)), cx);
-            let deploy = store.insert_credential(
-                CredentialDraft::new("deploy", CredentialKind::Password, "deploy"),
-                cx,
-            );
+    fn fill(device: &mut Device) {
+        let store = &mut device.store;
+        {
+            let ops = store.insert_group(GroupDraft::new("ops", None));
+            let db = store.insert_group(GroupDraft::new("db", Some(ops)));
+            let deploy = store.insert_credential(CredentialDraft::new(
+                "deploy",
+                CredentialKind::Password,
+                "deploy",
+            ));
             let path = store.save_private_key(None, "-----KEY-----\n").unwrap();
             let key = store.insert_credential(
                 CredentialDraft::new("key", CredentialKind::Key, "admin").with_key_path(path),
-                cx,
             );
-            let bastion = store.insert(
-                HostDraft::new(
-                    "bastion",
-                    "bastion.example",
-                    22,
-                    "root",
-                    AuthKind::Password,
-                    Some(ops),
-                ),
-                cx,
-            );
+            let bastion = store.insert(HostDraft::new(
+                "bastion",
+                "bastion.example",
+                22,
+                "root",
+                AuthKind::Password,
+                Some(ops),
+            ));
             let web = store.insert(
                 HostDraft::new("web", "10.0.0.1", 22, "", AuthKind::Password, Some(db))
                     .with_credential(key)
                     .with_route(Route::Jump(vec![Some(bastion)]))
                     .with_notes("behind the bastion"),
-                cx,
             );
             let mut switch = HostDraft::telnet("switch", "10.0.0.9", 23, None);
             switch.credential = Some(deploy);
             if let Protocol::Telnet(telnet) = &mut switch.protocol {
                 telnet.user_prompt = "login:".into();
             }
-            store.insert(switch, cx);
+            store.insert(switch);
             store.insert(
                 HostDraft::new("proxied", "10.0.0.2", 22, "me", AuthKind::Password, None)
                     .with_route(Route::Proxy(
                         ProxySettings::new(ProxyKind::Socks5, "proxy", 1080).with_user("p"),
                     )),
-                cx,
             );
-            store.insert(
-                HostDraft::serial("console", "/dev/ttyUSB0", SerialSettings::default(), None),
-                cx,
-            );
-            store.add_bookmark(web, BookmarkSide::Remote, "/var/log", cx);
-            store.add_bookmark(web, BookmarkSide::Local, "/Users/me", cx);
+            store.insert(HostDraft::serial(
+                "console",
+                "/dev/ttyUSB0",
+                SerialSettings::default(),
+                None,
+            ));
+            store.add_bookmark(web, BookmarkSide::Remote, "/var/log");
+            store.add_bookmark(web, BookmarkSide::Local, "/Users/me");
             store.insert_forward(
                 ForwardDraft::new(
                     ForwardKind::Local,
@@ -1700,12 +1697,11 @@ mod tests {
                 )
                 .with_name("db")
                 .with_auto_start(true),
-                cx,
             );
-            let docker = store.insert_snippet_category("Docker", cx);
+            let docker = store.insert_snippet_category("Docker");
             let mut ps = SnippetDraft::new("ps", "docker ps", Some(docker));
             ps.scope = SnippetScope::Group(ops);
-            store.insert_snippet(ps, cx);
+            store.insert_snippet(ps);
             for (secret, value) in [
                 (
                     SecretRef::password("root", "bastion.example", 22),
@@ -1730,23 +1726,24 @@ mod tests {
                     "pass-key",
                 ),
             ] {
-                store.save_secret(secret, Some(value.into()), cx);
+                store.save_secret(secret, Some(value.into()));
             }
-        });
-        cx.run_until_parked();
+        }
+        run_secret_jobs(store);
     }
 
-    #[gpui_kit::test]
-    fn two_devices_end_up_holding_the_same(cx: &mut TestAppContext) {
+    #[test]
+    fn two_devices_end_up_holding_the_same() {
         let (vault, keys) = vault();
-        let mut a = Device::new('a', cx);
-        let mut b = Device::new('b', cx);
-        fill(&a, cx);
-        a.sync(&vault, &keys, cx);
-        b.sync(&vault, &keys, cx);
-        assert_eq!(b.held(cx), a.held(cx));
+        let mut a = Device::new('a');
+        let mut b = Device::new('b');
+        fill(&mut a);
+        a.sync(&vault, &keys);
+        b.sync(&vault, &keys);
+        assert_eq!(b.held(), a.held());
 
-        b.store.read_with(cx, |store, _| {
+        {
+            let store = &b.store;
             // The serial host stayed on its computer; this device's own of
             // the rest came as new.
             assert!(store.hosts().iter().all(|host| !host.is_serial()));
@@ -1764,54 +1761,45 @@ mod tests {
             let path = key.key_path.as_deref().unwrap();
             assert!(path.starts_with(&b.keys_dir.display().to_string()));
             assert_eq!(std::fs::read_to_string(path).unwrap(), "-----KEY-----\n");
-        });
+        }
 
         // An edit on one, and a deletion, reach the other.
-        b.store.update(cx, |store, cx| {
+        {
+            let store = &mut b.store;
             let web = store.hosts().iter().find(|h| h.name == "web").unwrap().id;
             let mut renamed = store.host(web).unwrap().draft();
             renamed.name = "web-01".into();
-            store.update(web, renamed, cx);
+            store.update(web, renamed);
             let rule = store.forwards()[0].id;
-            store.remove_forward(rule, cx);
-        });
-        b.sync(&vault, &keys, cx);
-        a.sync(&vault, &keys, cx);
-        assert_eq!(b.held(cx), a.held(cx));
-        a.store.read_with(cx, |store, _| {
-            assert!(store.hosts().iter().any(|h| h.name == "web-01"));
-            assert!(store.forwards().is_empty());
-        });
+            store.remove_forward(rule);
+        }
+        b.sync(&vault, &keys);
+        a.sync(&vault, &keys);
+        assert_eq!(b.held(), a.held());
+        assert!(a.store.hosts().iter().any(|h| h.name == "web-01"));
+        assert!(a.store.forwards().is_empty());
 
         // Then a round changes nothing on either: what was applied is what
         // goes out again, exactly.
-        assert_eq!(a.sync(&vault, &keys, cx), 0);
-        assert_eq!(b.sync(&vault, &keys, cx), 0);
+        assert_eq!(a.sync(&vault, &keys), 0);
+        assert_eq!(b.sync(&vault, &keys), 0);
     }
 
-    #[gpui_kit::test]
-    fn a_round_read_before_an_edit_is_not_applied(cx: &mut TestAppContext) {
-        let device = Device::new('a', cx);
-        let export = device.store.read_with(cx, |store, _| store.sync_export());
-        device.store.update(cx, |store, cx| {
-            store.insert_group(GroupDraft::new("new", None), cx);
-        });
-        let result = device
-            .store
-            .update(cx, |store, cx| store.apply_sync(&[], b"state", &export, cx));
+    #[test]
+    fn a_round_read_before_an_edit_is_not_applied() {
+        let mut device = Device::new('a');
+        let export = device.store.sync_export();
+        device.store.insert_group(GroupDraft::new("new", None));
+        let result = device.store.apply_sync(&[], b"state", &export);
         assert_eq!(result.unwrap_err(), ApplyError::Stale);
-        assert_eq!(
-            device.store.read_with(cx, |store, _| store.sync_state()),
-            None
-        );
+        assert_eq!(device.store.sync_state(), None);
     }
 
-    #[gpui_kit::test]
-    fn what_the_database_refuses_is_applied_nowhere(cx: &mut TestAppContext) {
+    #[test]
+    fn what_the_database_refuses_is_applied_nowhere() {
         let data = tempfile::tempdir().unwrap();
         let path = data.path().join("shellrs.db");
-        let store = HostStore::load(HostDatabase::open(&path).unwrap()).unwrap();
-        let store = cx.new(|_| store);
+        let mut store = HostData::load(HostDatabase::open(&path).unwrap()).unwrap();
         // A database that refuses every new host.
         rusqlite::Connection::open(&path)
             .unwrap()
@@ -1844,16 +1832,12 @@ mod tests {
                 notes: String::new(),
             }),
         };
-        let export = store.read_with(cx, |store, _| store.sync_export());
-        let result = store.update(cx, |store, cx| {
-            store.apply_sync(&[group, host], b"state", &export, cx)
-        });
+        let export = store.sync_export();
+        let result = store.apply_sync(&[group, host], b"state", &export);
         assert!(matches!(result, Err(ApplyError::NotSaved(_))));
-        store.read_with(cx, |store, _| {
-            assert!(store.groups().is_empty() && store.hosts().is_empty());
-            assert_eq!(store.sync_state(), None);
-        });
-        let reopened = HostStore::load(HostDatabase::open(&path).unwrap()).unwrap();
+        assert!(store.groups().is_empty() && store.hosts().is_empty());
+        assert_eq!(store.sync_state(), None);
+        let reopened = HostData::load(HostDatabase::open(&path).unwrap()).unwrap();
         assert!(reopened.groups().is_empty());
     }
 
@@ -1894,22 +1878,22 @@ mod tests {
     /// After the first round the keychain is read for what the user changed
     /// since, a deletion too, and for a password never saved, which it does
     /// not ask about: the round has the rest.
-    #[gpui_kit::test]
-    fn a_round_reads_the_keychain_for_what_changed_only(cx: &mut TestAppContext) {
+    #[test]
+    fn a_round_reads_the_keychain_for_what_changed_only() {
         let (vault, keys) = vault();
-        let mut device = Device::new('a', cx);
-        fill(&device, cx);
-        device.sync(&vault, &keys, cx);
-        let read = |device: &Device, cx: &mut TestAppContext| {
+        let mut device = Device::new('a');
+        fill(&mut device);
+        device.sync(&vault, &keys);
+        let read = |device: &Device| {
             let counting = Counting {
                 keychain: device.secrets.clone(),
                 reads: Default::default(),
             };
-            let export = device.store.read_with(cx, |store, _| store.sync_export());
+            let export = device.store.sync_export();
             let local = export.local(&counting, &device.state);
             (counting.reads(), local)
         };
-        let (reads, local) = read(&device, cx);
+        let (reads, local) = read(&device);
         // The web host's password, never saved.
         assert_eq!(reads, 1);
         assert_eq!(local.unchanged.len(), 5);
@@ -1924,12 +1908,12 @@ mod tests {
 
         let bastion = SecretRef::password("root", "bastion.example", 22);
         let proxy = SecretRef::proxy("p", "proxy", 1080);
-        device.store.update(cx, |store, cx| {
-            store.save_secret(bastion.clone(), Some("pw-new".into()), cx);
-            store.save_secret(proxy.clone(), None, cx);
-        });
-        cx.run_until_parked();
-        let (reads, local) = read(&device, cx);
+        device
+            .store
+            .save_secret(bastion.clone(), Some("pw-new".into()));
+        device.store.save_secret(proxy.clone(), None);
+        run_secret_jobs(&mut device.store);
+        let (reads, local) = read(&device);
         assert_eq!(reads, 3);
         assert_eq!(local.unchanged.len(), 3);
         assert!(local.records.iter().any(|record| matches!(
@@ -1939,8 +1923,8 @@ mod tests {
 
         // The edits sync, and the round after reads nothing it has: the
         // deleted password is looked for like one never saved.
-        device.sync(&vault, &keys, cx);
-        let (reads, local) = read(&device, cx);
+        device.sync(&vault, &keys);
+        let (reads, local) = read(&device);
         assert_eq!(reads, 2);
         assert_eq!(local.unchanged.len(), 4);
     }
@@ -1966,65 +1950,54 @@ mod tests {
     /// Secrets a round brought that the keychain refused stay pending, a
     /// restart too, so no round takes them for deleted; they are written
     /// once it takes them.
-    #[gpui_kit::test]
-    fn a_secret_the_keychain_refused_is_written_later(cx: &mut TestAppContext) {
+    #[test]
+    fn a_secret_the_keychain_refused_is_written_later() {
         let (vault, keys) = vault();
-        let mut a = Device::new('a', cx);
-        let mut b = Device::new('b', cx);
-        fill(&a, cx);
-        a.sync(&vault, &keys, cx);
+        let mut a = Device::new('a');
+        let mut b = Device::new('b');
+        fill(&mut a);
+        a.sync(&vault, &keys);
         b.refuse_writes = true;
-        b.sync(&vault, &keys, cx);
-        let pending = |b: &Device, cx: &mut TestAppContext| {
-            b.store
-                .read_with(cx, |store, _| store.sync_export().pending.len())
-        };
+        b.sync(&vault, &keys);
+        let pending = |b: &Device| b.store.sync_export().pending.len();
         // Every password and the passphrase; the key file went in.
-        assert_eq!(pending(&b, cx), 5);
+        assert_eq!(pending(&b), 5);
         let reopened =
-            HostStore::load(HostDatabase::open(&b.data.path().join("shellrs.db")).unwrap())
-                .unwrap();
+            HostData::load(HostDatabase::open(&b.data.path().join("shellrs.db")).unwrap()).unwrap();
         assert_eq!(reopened.sync_export().pending.len(), 5);
-        assert_eq!(b.sync(&vault, &keys, cx), 5);
-        assert_eq!(pending(&b, cx), 5);
+        assert_eq!(b.sync(&vault, &keys), 5);
+        assert_eq!(pending(&b), 5);
 
         b.refuse_writes = false;
-        b.sync(&vault, &keys, cx);
-        assert_eq!(pending(&b, cx), 0);
-        a.sync(&vault, &keys, cx);
-        assert_eq!(b.held(cx), a.held(cx));
-        assert_eq!(a.sync(&vault, &keys, cx), 0);
-        assert_eq!(b.sync(&vault, &keys, cx), 0);
+        b.sync(&vault, &keys);
+        assert_eq!(pending(&b), 0);
+        a.sync(&vault, &keys);
+        assert_eq!(b.held(), a.held());
+        assert_eq!(a.sync(&vault, &keys), 0);
+        assert_eq!(b.sync(&vault, &keys), 0);
     }
 
     /// The user's own edit of a pending secret is theirs: no longer the
     /// round's to write.
-    #[gpui_kit::test]
-    fn an_edit_of_a_pending_secret_is_the_users(cx: &mut TestAppContext) {
+    #[test]
+    fn an_edit_of_a_pending_secret_is_the_users() {
         let (vault, keys) = vault();
-        let mut a = Device::new('a', cx);
-        let mut b = Device::new('b', cx);
-        fill(&a, cx);
-        a.sync(&vault, &keys, cx);
+        let mut a = Device::new('a');
+        let mut b = Device::new('b');
+        fill(&mut a);
+        a.sync(&vault, &keys);
         b.refuse_writes = true;
-        b.sync(&vault, &keys, cx);
+        b.sync(&vault, &keys);
         b.refuse_writes = false;
-        b.store.update(cx, |store, cx| {
-            store.save_secret(
-                SecretRef::password("root", "bastion.example", 22),
-                Some("pw-mine".into()),
-                cx,
-            );
-        });
-        cx.run_until_parked();
-        assert_eq!(
-            b.store
-                .read_with(cx, |store, _| store.sync_export().pending.len()),
-            4
+        b.store.save_secret(
+            SecretRef::password("root", "bastion.example", 22),
+            Some("pw-mine".into()),
         );
-        b.sync(&vault, &keys, cx);
-        a.sync(&vault, &keys, cx);
-        assert_eq!(b.held(cx), a.held(cx));
+        run_secret_jobs(&mut b.store);
+        assert_eq!(b.store.sync_export().pending.len(), 4);
+        b.sync(&vault, &keys);
+        a.sync(&vault, &keys);
+        assert_eq!(b.held(), a.held());
         let mine = a
             .secrets
             .get(&SecretRef::password("root", "bastion.example", 22))
@@ -2032,11 +2005,11 @@ mod tests {
         assert_eq!(mine.as_deref().map(String::as_str), Some("pw-mine"));
     }
 
-    #[gpui_kit::test]
-    fn a_locked_keychain_gives_no_secrets_rather_than_none(cx: &mut TestAppContext) {
-        let device = Device::new('a', cx);
-        fill(&device, cx);
-        let export = device.store.read_with(cx, |store, _| store.sync_export());
+    #[test]
+    fn a_locked_keychain_gives_no_secrets_rather_than_none() {
+        let mut device = Device::new('a');
+        fill(&mut device);
+        let export = device.store.sync_export();
         assert!(!export.secrets.is_empty());
         let read = read_secrets(&export.secrets, &[], &nothing_seen(), &Locked);
         assert!(!read.secrets_read);

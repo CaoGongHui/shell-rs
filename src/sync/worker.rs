@@ -1,4 +1,4 @@
-//! The blocking half of each sync job, run on the background executor: the
+//! The blocking body of each sync job, to run off the UI thread: the
 //! storage, the keychain and the sync core, which may all take a while.
 
 use std::path::Path;
@@ -13,14 +13,13 @@ use shellrs_sync::{
 };
 use zeroize::Zeroizing;
 
-use super::{JobError, SyncServices};
+use super::{JobError, SyncLocation, SyncServices};
 use crate::host::{SecretWork, SecretsWritten, SyncExport};
 use crate::secrets::{SecretRef, SecretStore};
-use crate::settings::SyncLocation;
 
 /// The storage at `location`. A WebDAV server's or a bucket's opens with
 /// `login` (the password, the secret key), or the one the keychain keeps.
-pub(super) fn open(
+pub fn open(
     services: &SyncServices,
     location: &SyncLocation,
     login: Option<&str>,
@@ -33,7 +32,7 @@ pub(super) fn open(
         (_, None) => {
             kept = secrets
                 .get(&SecretRef::SyncLogin)
-                .map_err(|error| JobError::Keychain(error.to_string().into()))?
+                .map_err(JobError::keychain)?
                 .ok_or(JobError::NoLogin)?;
             Some(kept.as_str())
         }
@@ -43,17 +42,17 @@ pub(super) fn open(
 
 /// Keep the login of a WebDAV server or a bucket in the keychain, or with
 /// `None` forget the one kept.
-pub(super) fn keep_login(secrets: &dyn SecretStore, login: Option<&str>) -> Result<(), JobError> {
+pub fn keep_login(secrets: &dyn SecretStore, login: Option<&str>) -> Result<(), JobError> {
     match login {
         Some(login) => secrets.set(&SecretRef::SyncLogin, login),
         None => secrets.delete(&SecretRef::SyncLogin),
     }
-    .map_err(|error| JobError::Keychain(error.to_string().into()))
+    .map_err(JobError::keychain)
 }
 
 /// 测试连接: list, write, read back and delete `name` beside the sync's
 /// folder, which is all sync asks of a store.
-pub(super) fn probe(store: &dyn SyncStore, name: &str) -> Result<(), JobError> {
+pub fn probe(store: &dyn SyncStore, name: &str) -> Result<(), JobError> {
     let path = format!("shellrs-sync/{name}");
     let wrote = b"ShellRS".to_vec();
     store.list("shellrs-sync".into()).map_err(SyncError::from)?;
@@ -74,10 +73,10 @@ pub(super) fn probe(store: &dyn SyncStore, name: &str) -> Result<(), JobError> {
 }
 
 /// The vault's keys as this computer keeps them: in the keychain only.
-pub(super) fn load_keyring(secrets: &dyn SecretStore) -> Result<Keyring, JobError> {
+pub fn load_keyring(secrets: &dyn SecretStore) -> Result<Keyring, JobError> {
     let text = secrets
         .get(&SecretRef::SyncKeyring)
-        .map_err(|error| JobError::Keychain(error.to_string().into()))?
+        .map_err(JobError::keychain)?
         .ok_or(JobError::NoKeyring)?;
     let bytes = Zeroizing::new(
         STANDARD
@@ -87,26 +86,26 @@ pub(super) fn load_keyring(secrets: &dyn SecretStore) -> Result<Keyring, JobErro
     Keyring::from_bytes(&bytes).map_err(|_| JobError::NoKeyring)
 }
 
-pub(super) fn save_keyring(secrets: &dyn SecretStore, keyring: &Keyring) -> Result<(), JobError> {
+pub fn save_keyring(secrets: &dyn SecretStore, keyring: &Keyring) -> Result<(), JobError> {
     let text = Zeroizing::new(STANDARD.encode(&*keyring.to_bytes()));
     secrets
         .set(&SecretRef::SyncKeyring, &text)
-        .map_err(|error| JobError::Keychain(error.to_string().into()))
+        .map_err(JobError::keychain)
 }
 
-pub(super) fn forget_keyring(secrets: &dyn SecretStore) -> Result<(), JobError> {
+pub fn forget_keyring(secrets: &dyn SecretStore) -> Result<(), JobError> {
     secrets
         .delete(&SecretRef::SyncKeyring)
-        .map_err(|error| JobError::Keychain(error.to_string().into()))
+        .map_err(JobError::keychain)
 }
 
 /// Whether sync is set up in `store` already.
-pub(super) fn inspect(store: &dyn SyncStore) -> Result<bool, JobError> {
+pub fn inspect(store: &dyn SyncStore) -> Result<bool, JobError> {
     Ok(matches!(vault_status(store)?, VaultStatus::Present { .. }))
 }
 
 /// Set sync up in `store` and keep its keys.
-pub(super) fn create(
+pub fn create(
     store: &dyn SyncStore,
     secrets: &dyn SecretStore,
     password: &str,
@@ -117,7 +116,7 @@ pub(super) fn create(
 }
 
 /// Open the vault in `store` with its password and keep its keys.
-pub(super) fn join(
+pub fn join(
     store: &dyn SyncStore,
     secrets: &dyn SecretStore,
     password: &str,
@@ -128,7 +127,7 @@ pub(super) fn join(
 
 /// A new sync password, and a new data key after it: a device that kept the
 /// old keys (a removed one) can't read anything newer.
-pub(super) fn new_password(
+pub fn new_password(
     store: &dyn SyncStore,
     secrets: &dyn SecretStore,
     password: &str,
@@ -144,7 +143,7 @@ pub(super) fn new_password(
 }
 
 /// Delete a device's file: it leaves the vault until it writes it again.
-pub(super) fn remove_device(store: &dyn SyncStore, device: &DeviceId) -> Result<(), JobError> {
+pub fn remove_device(store: &dyn SyncStore, device: &DeviceId) -> Result<(), JobError> {
     match store.delete(layout::device_file(device)) {
         Ok(()) | Err(shellrs_sync::StoreError::NotFound) => Ok(()),
         Err(error) => Err(shellrs_sync::SyncError::from(error).into()),
@@ -153,7 +152,7 @@ pub(super) fn remove_device(store: &dyn SyncStore, device: &DeviceId) -> Result<
 
 /// The first half of a round: the records read, the others' files merged.
 /// `state` is the stored one, `None` before the first round.
-pub(super) fn pull_round(
+pub fn pull_round(
     store: &dyn SyncStore,
     secrets: &dyn SecretStore,
     export: &SyncExport,
@@ -190,7 +189,7 @@ pub(super) fn pull_round(
 
 /// The second half: the round's secrets written where they go, then this
 /// device's file uploaded from the state stored with the changes.
-pub(super) fn push_round(
+pub fn push_round(
     store: &dyn SyncStore,
     secrets: &dyn SecretStore,
     key_dir: Option<&Path>,

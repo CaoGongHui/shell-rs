@@ -1,14 +1,14 @@
-//! The command snippets' part of `HostStore`: the snippets and their
+//! The command snippets' part of `HostData`: the snippets and their
 //! categories, written through like everything else.
 
-use gpui_kit::{Context, SharedString};
+use gpui_kit::SharedString;
 
-use super::{Change, HostStore, edited_after};
+use super::{Change, HostData, edited_after};
 use crate::host::{
     PublicId, Snippet, SnippetCategory, SnippetCategoryId, SnippetDraft, SnippetId, SnippetScope,
 };
 
-impl HostStore {
+impl HostData {
     /// Every snippet, in the order they were made.
     pub fn snippets(&self) -> &[Snippet] {
         &self.snippets
@@ -37,12 +37,12 @@ impl HostStore {
             .count()
     }
 
-    pub fn insert_snippet(&mut self, draft: SnippetDraft, cx: &mut Context<Self>) -> SnippetId {
+    pub fn insert_snippet(&mut self, draft: SnippetDraft) -> SnippetId {
         let id = self.insert_snippet_unnotified(draft);
         if let Some(snippet) = self.snippet(id) {
-            self.persist(Change::NewSnippet, cx, |db| db.insert_snippet(snippet));
+            self.persist(Change::NewSnippet, |db| db.insert_snippet(snippet));
         }
-        cx.notify();
+        self.changed();
         id
     }
 
@@ -62,19 +62,14 @@ impl HostStore {
         id
     }
 
-    pub fn update_snippet(
-        &mut self,
-        id: SnippetId,
-        draft: SnippetDraft,
-        cx: &mut Context<Self>,
-    ) -> bool {
+    pub fn update_snippet(&mut self, id: SnippetId, draft: SnippetDraft) -> bool {
         if !self.update_snippet_unnotified(id, draft) {
             return false;
         }
         if let Some(snippet) = self.snippet(id) {
-            self.persist(Change::SaveSnippet, cx, |db| db.update_snippet(snippet));
+            self.persist(Change::SaveSnippet, |db| db.update_snippet(snippet));
         }
-        cx.notify();
+        self.changed();
         true
     }
 
@@ -92,12 +87,12 @@ impl HostStore {
         true
     }
 
-    pub fn remove_snippet(&mut self, id: SnippetId, cx: &mut Context<Self>) -> bool {
+    pub fn remove_snippet(&mut self, id: SnippetId) -> bool {
         if !self.remove_snippet_unnotified(id) {
             return false;
         }
-        self.persist(Change::DeleteSnippet, cx, |db| db.remove_snippet(id));
-        cx.notify();
+        self.persist(Change::DeleteSnippet, |db| db.remove_snippet(id));
+        self.changed();
         true
     }
 
@@ -111,18 +106,14 @@ impl HostStore {
         true
     }
 
-    pub fn insert_snippet_category(
-        &mut self,
-        name: impl Into<SharedString>,
-        cx: &mut Context<Self>,
-    ) -> SnippetCategoryId {
+    pub fn insert_snippet_category(&mut self, name: impl Into<SharedString>) -> SnippetCategoryId {
         let id = self.insert_snippet_category_unnotified(name);
         if let Some(category) = self.snippet_category(id) {
-            self.persist(Change::NewSnippetCategory, cx, |db| {
+            self.persist(Change::NewSnippetCategory, |db| {
                 db.insert_snippet_category(category)
             });
         }
-        cx.notify();
+        self.changed();
         id
     }
 
@@ -148,17 +139,16 @@ impl HostStore {
         &mut self,
         id: SnippetCategoryId,
         name: impl Into<SharedString>,
-        cx: &mut Context<Self>,
     ) -> bool {
         if !self.rename_snippet_category_unnotified(id, name) {
             return false;
         }
         if let Some(category) = self.snippet_category(id) {
-            self.persist(Change::RenameSnippetCategory, cx, |db| {
+            self.persist(Change::RenameSnippetCategory, |db| {
                 db.update_snippet_category(category)
             });
         }
-        cx.notify();
+        self.changed();
         true
     }
 
@@ -181,19 +171,15 @@ impl HostStore {
     }
 
     /// Delete a category with the snippets in it.
-    pub fn remove_snippet_category(
-        &mut self,
-        id: SnippetCategoryId,
-        cx: &mut Context<Self>,
-    ) -> bool {
+    pub fn remove_snippet_category(&mut self, id: SnippetCategoryId) -> bool {
         if !self.remove_snippet_category_unnotified(id) {
             return false;
         }
         // The database takes the snippets through `ON DELETE CASCADE`.
-        self.persist(Change::DeleteSnippetCategory, cx, |db| {
+        self.persist(Change::DeleteSnippetCategory, |db| {
             db.remove_snippet_category(id)
         });
-        cx.notify();
+        self.changed();
         true
     }
 
@@ -238,7 +224,7 @@ mod tests {
         SnippetDraft::new(name, format!("echo {name}"), category)
     }
 
-    fn names(store: &HostStore) -> Vec<String> {
+    fn names(store: &HostData) -> Vec<String> {
         store
             .snippets()
             .iter()
@@ -248,7 +234,7 @@ mod tests {
 
     #[test]
     fn a_category_takes_its_snippets_with_it() {
-        let mut store = HostStore::empty();
+        let mut store = HostData::empty();
         let docker = store.insert_snippet_category_unnotified("Docker");
         let logs = store.insert_snippet_category_unnotified("日志");
         store.insert_snippet_unnotified(draft("ps", Some(docker)));
@@ -266,7 +252,7 @@ mod tests {
 
     #[test]
     fn a_snippet_is_edited_in_place_and_removed() {
-        let mut store = HostStore::empty();
+        let mut store = HostData::empty();
         let ps = store.insert_snippet_unnotified(draft("ps", None));
         let df = store.insert_snippet_unnotified(draft("df", None));
         assert!(store.update_snippet_unnotified(ps, SnippetDraft::new("容器", "docker ps", None)));
@@ -279,7 +265,7 @@ mod tests {
 
     #[test]
     fn a_snippet_kept_to_a_group_or_a_host_goes_with_it() {
-        let mut store = HostStore::empty();
+        let mut store = HostData::empty();
         let production = store.insert_group_unnotified(GroupDraft::new("生产", None));
         let web = store.insert_group_unnotified(GroupDraft::new("web", Some(production)));
         let host = store.insert_unnotified(HostDraft::new(
@@ -327,7 +313,7 @@ mod tests {
             ))
             .unwrap();
 
-        let mut store = HostStore::load(database).unwrap();
+        let mut store = HostData::load(database).unwrap();
         assert_eq!(names(&store), ["ps"]);
         assert_eq!(
             store.insert_snippet_category_unnotified("日志"),

@@ -7,7 +7,6 @@ use std::fmt;
 use gpui_kit::SharedString;
 
 use super::{HostId, PublicId};
-use crate::i18n::t;
 
 /// Stable identity of a forwarding rule. Never reused within a process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -34,16 +33,8 @@ impl ForwardKind {
         ForwardKind::Dynamic,
     ];
 
-    pub fn label(self) -> SharedString {
-        match self {
-            ForwardKind::Local => t!("host.forward_kind.local"),
-            ForwardKind::Remote => t!("host.forward_kind.remote"),
-            ForwardKind::Dynamic => t!("host.forward_kind.dynamic"),
-        }
-    }
-
-    /// The stored spelling. Kept separate from `label` so translating the UI
-    /// cannot rewrite what is already in the database.
+    /// The stored spelling. Kept apart from the label the app shows, so
+    /// translating the UI cannot rewrite what is already in the database.
     pub fn as_str(self) -> &'static str {
         match self {
             ForwardKind::Local => "local",
@@ -122,7 +113,7 @@ fn bare_host(host: &str) -> &str {
 /// The address a new rule listens on unless the user changes it.
 pub const DEFAULT_BIND_HOST: &str = "127.0.0.1";
 
-/// Why a draft cannot be saved. `Display` is the text the form shows.
+/// Why a draft cannot be saved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ForwardDraftError {
     BindHost,
@@ -130,19 +121,6 @@ pub enum ForwardDraftError {
     TargetHost,
     TargetPort,
 }
-
-impl fmt::Display for ForwardDraftError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&match self {
-            ForwardDraftError::BindHost => t!("host.forward_draft.bind_host"),
-            ForwardDraftError::BindPort => t!("host.forward_draft.bind_port"),
-            ForwardDraftError::TargetHost => t!("host.forward_draft.target_host"),
-            ForwardDraftError::TargetPort => t!("host.forward_draft.target_port"),
-        })
-    }
-}
-
-impl std::error::Error for ForwardDraftError {}
 
 /// The values the forward form commits.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -304,23 +282,6 @@ impl ForwardRule {
     }
 }
 
-/// Whether a rule matches what was typed into the forward list's search box:
-/// its name, its addresses, or the name of the host it goes through.
-pub fn matches_forward_query(rule: &ForwardRule, host_name: &str, query: &str) -> bool {
-    let query = query.trim().to_lowercase();
-    if query.is_empty() {
-        return true;
-    }
-    [
-        rule.name.to_string(),
-        rule.summary(),
-        rule.kind.label().to_string(),
-        host_name.to_string(),
-    ]
-    .iter()
-    .any(|text| text.to_lowercase().contains(&query))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,16 +388,5 @@ mod tests {
         let mut other_target = local();
         other_target.target = Some(ForwardEndpoint::new("db.internal", 5432));
         assert!(rule.needs_restart(&other_target));
-    }
-
-    #[test]
-    fn the_search_looks_at_the_name_the_addresses_and_the_host() {
-        let rule = ForwardRule::new(ForwardId(1), local().with_name("数据库"));
-        assert!(matches_forward_query(&rule, "web-01", ""));
-        assert!(matches_forward_query(&rule, "web-01", "数据"));
-        assert!(matches_forward_query(&rule, "web-01", "3306"));
-        assert!(matches_forward_query(&rule, "web-01", "WEB"));
-        assert!(matches_forward_query(&rule, "web-01", "本地"));
-        assert!(!matches_forward_query(&rule, "web-01", "redis"));
     }
 }

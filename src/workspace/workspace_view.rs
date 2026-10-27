@@ -72,7 +72,7 @@ use crate::ssh::{
     authentication_fields, authentication_instructions, authentication_title,
     unknown_host_description,
 };
-use crate::sync::{SyncEvent, SyncService, SyncServices};
+use crate::sync::{SyncEvent, SyncService};
 use crate::terminal::{
     DEFAULT_FONT_SIZE, HostTerminalTransports, LocalPtyTransportProvider, LocalTerminalId,
     LocalTerminalPanel, LocalTerminalPanelEvent, RemoteTerminalId, SavedName, SearchDirection,
@@ -317,8 +317,9 @@ impl Workspace {
             updater.set_services(UpdateServices::system(bundle), cx);
             updater.start(cx);
         });
-        this.sync
-            .update(cx, |sync, cx| sync.set_services(SyncServices::system(), cx));
+        this.sync.update(cx, |sync, cx| {
+            sync.set_services(crate::sync::system_services(), cx)
+        });
         if let Some(services) = AnalyticsServices::system() {
             let enabled = this.settings.read(cx).settings().analytics.enabled;
             this.set_analytics(Analytics::start(services, enabled), window, cx);

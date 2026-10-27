@@ -1,12 +1,11 @@
-//! Why a sync job stopped, and how to say so.
+//! Why a sync job stopped, as a value: the app puts it into words when
+//! shown, so it reads in the language of the moment.
 
-use gpui_kit::SharedString;
-use shellrs_sync::{StoreError, SyncError};
+use shellrs_sync::SyncError;
 
-use crate::i18n::{t, tn};
+use crate::host::SecretError;
 
-/// Why a sync job stopped. Kept as a value and put into words when shown,
-/// so it reads in the language of the moment.
+/// Why a sync job stopped.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum JobError {
     Sync(SyncError),
@@ -15,10 +14,13 @@ pub enum JobError {
     /// The keychain has no sync keys, or keys it cannot read: deleted, or
     /// never saved.
     NoKeyring,
-    /// The keychain refused, in its own words.
-    Keychain(SharedString),
-    /// The database refused a round's changes, in its own words.
-    NotSaved(SharedString),
+    /// The keychain refused.
+    Keychain(SecretError),
+    /// The database refused a round's changes, in its own words: nothing
+    /// was applied.
+    NotSaved(String),
+    /// The database refused the sync state a round left, in its own words.
+    StateNotSaved(String),
     /// The keychain has no password for the WebDAV server.
     NoLogin,
     /// A round or another job runs: one at a time.
@@ -35,46 +37,8 @@ impl From<SyncError> for JobError {
 }
 
 impl JobError {
-    pub fn describe(&self) -> SharedString {
-        match self {
-            Self::Sync(error) => describe_sync(error),
-            Self::Unavailable => t!("sync.error.unavailable"),
-            Self::NoKeyring => t!("sync.error.no_keyring"),
-            Self::Keychain(message) | Self::NotSaved(message) => message.clone(),
-            Self::NoLogin => t!("sync.error.no_login"),
-            Self::InProgress => t!("sync.error.in_progress"),
-            Self::Busy => t!("sync.error.busy"),
-        }
-    }
-}
-
-fn describe_sync(error: &SyncError) -> SharedString {
-    match error {
-        SyncError::Store(error) => describe_store(error),
-        SyncError::VaultMissing => t!("sync.error.vault_missing"),
-        SyncError::VaultExists => t!("sync.error.vault_exists"),
-        SyncError::VaultTooNew(_) => t!("sync.error.vault_too_new"),
-        SyncError::BadVault(reason) => t!("sync.error.bad_vault", reason = reason),
-        SyncError::WrongPassword => t!("sync.error.wrong_password"),
-        SyncError::NeedsPassword => t!("sync.error.needs_password"),
-        SyncError::VaultReplaced => t!("sync.error.vault_replaced"),
-        SyncError::StateUnreadable(reason) => t!("sync.error.state_unreadable", reason = reason),
-        SyncError::MassDelete { count, of } => {
-            tn!("sync.error.mass_delete", *count as usize, of = of)
-        }
-        SyncError::ReadOnly { .. } => t!("sync.error.read_only"),
-        SyncError::Random => t!("sync.error.random"),
-    }
-}
-
-fn describe_store(error: &StoreError) -> SharedString {
-    match error {
-        StoreError::NotFound => t!("sync.error.store.not_found"),
-        StoreError::PreconditionFailed => t!("sync.error.store.changed"),
-        StoreError::TooLarge => t!("sync.error.store.too_large"),
-        StoreError::Timeout => t!("sync.error.store.timeout"),
-        StoreError::Unauthorized => t!("sync.error.store.unauthorized"),
-        StoreError::Unavailable(reason) => t!("sync.error.store.unavailable", reason = reason),
-        StoreError::Io(reason) => t!("sync.error.store.io", reason = reason),
+    /// The keychain's refusal.
+    pub fn keychain(error: anyhow::Error) -> Self {
+        Self::Keychain(SecretError::of(&error))
     }
 }

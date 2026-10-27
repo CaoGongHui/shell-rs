@@ -8,17 +8,23 @@
 //! folder in the settings. The keys stay in the keychain, the state in the
 //! database, and the secrets go where the store keeps them.
 
+mod describe;
 mod error;
+mod location;
 mod remote_dialog;
+mod round;
 mod service;
+mod setup;
 mod sync_dialog;
-mod worker;
+pub mod worker;
 
 pub use error::JobError;
+pub use location::SyncLocation;
 pub use remote_dialog::{RemoteDialog, RemoteKind, open_remote_dialog};
-pub use service::{
-    Attention, EDIT_PAUSE, OpenStore, SyncEvent, SyncPhase, SyncService, SyncServices, SyncSnapshot,
+pub use round::{Attention, OpenStore, RoundEnd, RoundHost, SyncServices, run_round};
+pub use service::{EDIT_PAUSE, SyncEvent, SyncPhase, SyncService, SyncSnapshot, system_services};
+pub use setup::{
+    LoginError, MIN_PASSWORD, PasswordError, S3Form, WebDavForm, check_new_password,
+    check_password, random_password,
 };
-pub use sync_dialog::{
-    JoinReason, MIN_PASSWORD, PasswordDialog, open_password_dialog, open_turn_off_dialog,
-};
+pub use sync_dialog::{JoinReason, PasswordDialog, open_password_dialog, open_turn_off_dialog};

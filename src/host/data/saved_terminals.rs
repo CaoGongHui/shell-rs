@@ -1,19 +1,18 @@
-//! The saved local terminals' part of `HostStore`: their groups, the
+//! The saved local terminals' part of `HostData`: their groups, the
 //! folders they were last in, and which of them were open, written through
 //! like everything else.
 
 use std::path::PathBuf;
 
-use gpui_kit::{Context, SharedString};
+use gpui_kit::SharedString;
 
-use super::{Change, HostStore, reordered};
+use super::{Change, HostData, reordered};
 use crate::host::{
     SavedTerminal, SavedTerminalId, SavedTerminalTab, TerminalDrop, TerminalGroup, TerminalGroupId,
     TerminalNode, next_terminal_name,
 };
-use crate::i18n::t;
 
-impl HostStore {
+impl HostData {
     /// Every group of saved terminals, in the order they were made; their
     /// `sort_order` says the order they show in.
     pub fn terminal_groups(&self) -> &[TerminalGroup] {
@@ -48,18 +47,14 @@ impl HostStore {
         terminals
     }
 
-    pub fn insert_terminal_group(
-        &mut self,
-        name: SharedString,
-        cx: &mut Context<Self>,
-    ) -> TerminalGroupId {
+    pub fn insert_terminal_group(&mut self, name: SharedString) -> TerminalGroupId {
         let id = self.insert_terminal_group_unnotified(name);
         if let Some(group) = self.terminal_group(id) {
-            self.persist(Change::NewTerminalGroup, cx, |db| {
+            self.persist(Change::NewTerminalGroup, |db| {
                 db.insert_terminal_group(group)
             });
         }
-        cx.notify();
+        self.changed();
         id
     }
 
@@ -81,32 +76,22 @@ impl HostStore {
         id
     }
 
-    pub fn rename_terminal_group(
-        &mut self,
-        id: TerminalGroupId,
-        name: SharedString,
-        cx: &mut Context<Self>,
-    ) -> bool {
+    pub fn rename_terminal_group(&mut self, id: TerminalGroupId, name: SharedString) -> bool {
         let Some(group) = self.terminal_groups.iter_mut().find(|group| group.id == id) else {
             return false;
         };
         group.name = name;
         let group = group.clone();
-        self.persist(Change::SaveTerminalGroup, cx, |db| {
+        self.persist(Change::SaveTerminalGroup, |db| {
             db.update_terminal_group(&group)
         });
-        cx.notify();
+        self.changed();
         true
     }
 
     /// Show a group's terminals below it, or hide them. Returns whether it
     /// changed.
-    pub fn set_terminal_group_expanded(
-        &mut self,
-        id: TerminalGroupId,
-        expanded: bool,
-        cx: &mut Context<Self>,
-    ) -> bool {
+    pub fn set_terminal_group_expanded(&mut self, id: TerminalGroupId, expanded: bool) -> bool {
         let Some(group) = self.terminal_groups.iter_mut().find(|group| group.id == id) else {
             return false;
         };
@@ -115,31 +100,25 @@ impl HostStore {
         }
         group.expanded = expanded;
         let group = group.clone();
-        self.persist(Change::GroupExpanded, cx, |db| {
-            db.update_terminal_group(&group)
-        });
-        cx.notify();
+        self.persist(Change::GroupExpanded, |db| db.update_terminal_group(&group));
+        self.changed();
         true
     }
 
     /// Delete a group with the terminals in it. Returns those terminals.
-    pub fn remove_terminal_group(
-        &mut self,
-        id: TerminalGroupId,
-        cx: &mut Context<Self>,
-    ) -> Vec<SavedTerminalId> {
+    pub fn remove_terminal_group(&mut self, id: TerminalGroupId) -> Vec<SavedTerminalId> {
         if self.terminal_group(id).is_none() {
             return Vec::new();
         }
         let removed = self.remove_terminal_group_unnotified(id);
         // The database takes the terminals and their tabs by its cascades.
-        self.persist(Change::DeleteTerminalGroup, cx, |db| {
+        self.persist(Change::DeleteTerminalGroup, |db| {
             db.remove_terminal_group(id)
         });
         for terminal in &removed {
             self.keep_output(*terminal, None);
         }
-        cx.notify();
+        self.changed();
         removed
     }
 
@@ -160,21 +139,21 @@ impl HostStore {
     }
 
     /// Keep a new terminal in `group`, or at the top, named after the group
-    /// (`shellrs 2`, or `终端 2` at the top) and starting in `directory`.
-    /// `None` when the group is gone.
+    /// (`shellrs 2`, or `<ungrouped> 2` at the top: the app's `终端 2`) and
+    /// starting in `directory`. `None` when the group is gone.
     pub fn insert_saved_terminal(
         &mut self,
         group: Option<TerminalGroupId>,
         directory: Option<String>,
-        cx: &mut Context<Self>,
+        ungrouped: &str,
     ) -> Option<SavedTerminalId> {
-        let id = self.insert_saved_terminal_unnotified(group, directory)?;
+        let id = self.insert_saved_terminal_unnotified(group, directory, ungrouped)?;
         if let Some(terminal) = self.saved_terminal(id) {
-            self.persist(Change::NewSavedTerminal, cx, |db| {
+            self.persist(Change::NewSavedTerminal, |db| {
                 db.insert_saved_terminal(terminal)
             });
         }
-        cx.notify();
+        self.changed();
         Some(id)
     }
 
@@ -182,10 +161,11 @@ impl HostStore {
         &mut self,
         group: Option<TerminalGroupId>,
         directory: Option<String>,
+        ungrouped: &str,
     ) -> Option<SavedTerminalId> {
         let prefix = match group {
             Some(group) => self.terminal_group(group)?.name.clone(),
-            None => t!("host.saved_terminal.name"),
+            None => ungrouped.into(),
         };
         let taken: Vec<&str> = self
             .terminals_in(group)
@@ -212,22 +192,23 @@ impl HostStore {
     }
 
     /// Name a terminal by hand, or with `None` give it a name of its group's
-    /// again (`shellrs 3`), which gives way to the titles of its tab.
+    /// again (`shellrs 3`, `<ungrouped> 3` at the top), which gives way to
+    /// the titles of its tab.
     pub fn rename_saved_terminal(
         &mut self,
         id: SavedTerminalId,
         name: Option<SharedString>,
-        cx: &mut Context<Self>,
+        ungrouped: &str,
     ) -> bool {
-        if !self.rename_saved_terminal_unnotified(id, name) {
+        if !self.rename_saved_terminal_unnotified(id, name, ungrouped) {
             return false;
         }
         if let Some(terminal) = self.saved_terminal(id) {
-            self.persist(Change::SaveSavedTerminal, cx, |db| {
+            self.persist(Change::SaveSavedTerminal, |db| {
                 db.update_saved_terminal(terminal)
             });
         }
-        cx.notify();
+        self.changed();
         true
     }
 
@@ -235,6 +216,7 @@ impl HostStore {
         &mut self,
         id: SavedTerminalId,
         name: Option<SharedString>,
+        ungrouped: &str,
     ) -> bool {
         let Some(group) = self.saved_terminal(id).map(|terminal| terminal.group) else {
             return false;
@@ -244,7 +226,7 @@ impl HostStore {
             None => {
                 let prefix = match group.and_then(|group| self.terminal_group(group)) {
                     Some(group) => group.name.clone(),
-                    None => t!("host.saved_terminal.name"),
+                    None => ungrouped.into(),
                 };
                 let taken: Vec<&str> = self
                     .terminals_in(group)
@@ -268,12 +250,7 @@ impl HostStore {
     }
 
     /// Remember the folder a terminal's shell is in now.
-    pub fn set_saved_terminal_directory(
-        &mut self,
-        id: SavedTerminalId,
-        directory: String,
-        cx: &mut Context<Self>,
-    ) -> bool {
+    pub fn set_saved_terminal_directory(&mut self, id: SavedTerminalId, directory: String) -> bool {
         let Some(terminal) = self
             .saved_terminals
             .iter_mut()
@@ -286,21 +263,16 @@ impl HostStore {
         }
         terminal.directory = Some(directory);
         let terminal = terminal.clone();
-        self.persist(Change::SaveSavedTerminal, cx, |db| {
+        self.persist(Change::SaveSavedTerminal, |db| {
             db.update_saved_terminal(&terminal)
         });
-        cx.notify();
+        self.changed();
         true
     }
 
     /// Remember the title its shell or a program gave a terminal's tab
     /// last.
-    pub fn set_saved_terminal_title(
-        &mut self,
-        id: SavedTerminalId,
-        title: SharedString,
-        cx: &mut Context<Self>,
-    ) -> bool {
+    pub fn set_saved_terminal_title(&mut self, id: SavedTerminalId, title: SharedString) -> bool {
         let Some(terminal) = self
             .saved_terminals
             .iter_mut()
@@ -313,23 +285,23 @@ impl HostStore {
         }
         terminal.title = Some(title);
         let terminal = terminal.clone();
-        self.persist(Change::SaveSavedTerminal, cx, |db| {
+        self.persist(Change::SaveSavedTerminal, |db| {
             db.update_saved_terminal(&terminal)
         });
-        cx.notify();
+        self.changed();
         true
     }
 
-    pub fn remove_saved_terminal(&mut self, id: SavedTerminalId, cx: &mut Context<Self>) -> bool {
+    pub fn remove_saved_terminal(&mut self, id: SavedTerminalId) -> bool {
         if !self.remove_saved_terminal_unnotified(id) {
             return false;
         }
         // The database takes its tab through `ON DELETE CASCADE`.
-        self.persist(Change::DeleteSavedTerminal, cx, |db| {
+        self.persist(Change::DeleteSavedTerminal, |db| {
             db.remove_saved_terminal(id)
         });
         self.keep_output(id, None);
-        cx.notify();
+        self.changed();
         true
     }
 
@@ -345,19 +317,14 @@ impl HostStore {
 
     /// Move a dragged row: a group among the groups, a terminal among the
     /// terminals of a group, its own or another, or of the top.
-    pub fn move_terminal_node(
-        &mut self,
-        source: TerminalNode,
-        drop: TerminalDrop,
-        cx: &mut Context<Self>,
-    ) -> bool {
+    pub fn move_terminal_node(&mut self, source: TerminalNode, drop: TerminalDrop) -> bool {
         if !self.move_terminal_node_unnotified(source, drop) {
             return false;
         }
-        self.persist(Change::MoveTerminalNode, cx, |db| {
+        self.persist(Change::MoveTerminalNode, |db| {
             db.save_terminal_order(&self.terminal_groups, &self.saved_terminals)
         });
-        cx.notify();
+        self.changed();
         true
     }
 
@@ -512,10 +479,10 @@ impl HostStore {
     /// Remember the saved terminals open now. Unlike the other changes this
     /// does not notify: nothing shows the list, and the workspace says it
     /// at every tab switch, which would rebuild every observer's view.
-    pub fn set_saved_terminal_tabs(&mut self, tabs: Vec<SavedTerminalTab>, cx: &mut Context<Self>) {
+    pub fn set_saved_terminal_tabs(&mut self, tabs: Vec<SavedTerminalTab>) {
         if self.set_saved_terminal_tabs_unnotified(tabs) {
             let tabs = &self.saved_terminal_tabs;
-            self.persist(Change::SavedTerminalTabs, cx, |db| {
+            self.persist(Change::SavedTerminalTabs, |db| {
                 db.replace_saved_terminal_tabs(tabs)
             });
         }
@@ -553,7 +520,7 @@ mod tests {
         SavedTerminalTab { terminal, front }
     }
 
-    fn names(store: &HostStore) -> Vec<String> {
+    fn names(store: &HostData) -> Vec<String> {
         store
             .saved_terminals()
             .iter()
@@ -563,50 +530,54 @@ mod tests {
 
     #[test]
     fn new_terminals_are_named_after_their_group() {
-        let mut store = HostStore::empty();
+        let mut store = HostData::empty();
         let shellrs = store.insert_terminal_group_unnotified("shellrs".into());
         let blog = store.insert_terminal_group_unnotified("blog".into());
         let a = store
-            .insert_saved_terminal_unnotified(Some(shellrs), None)
+            .insert_saved_terminal_unnotified(Some(shellrs), None, "Terminal")
             .unwrap();
-        store.insert_saved_terminal_unnotified(Some(shellrs), Some("/code/shellrs".into()));
-        store.insert_saved_terminal_unnotified(Some(blog), None);
+        store.insert_saved_terminal_unnotified(
+            Some(shellrs),
+            Some("/code/shellrs".into()),
+            "Terminal",
+        );
+        store.insert_saved_terminal_unnotified(Some(blog), None, "Terminal");
         assert_eq!(names(&store), ["shellrs 1", "shellrs 2", "blog 1"]);
         // A number given back is taken again.
         store.remove_saved_terminal_unnotified(a);
-        store.insert_saved_terminal_unnotified(Some(shellrs), None);
+        store.insert_saved_terminal_unnotified(Some(shellrs), None, "Terminal");
         assert_eq!(names(&store), ["shellrs 2", "blog 1", "shellrs 1"]);
         // A group no longer there gets none.
         assert_eq!(
-            store.insert_saved_terminal_unnotified(Some(TerminalGroupId(9)), None),
+            store.insert_saved_terminal_unnotified(Some(TerminalGroupId(9)), None, "Terminal"),
             None
         );
     }
 
     #[test]
     fn a_name_given_by_hand_is_kept_and_none_numbers_it_again() {
-        let mut store = HostStore::empty();
+        let mut store = HostData::empty();
         let shellrs = store.insert_terminal_group_unnotified("shellrs".into());
         let a = store
-            .insert_saved_terminal_unnotified(Some(shellrs), None)
+            .insert_saved_terminal_unnotified(Some(shellrs), None, "Terminal")
             .unwrap();
         let b = store
-            .insert_saved_terminal_unnotified(Some(shellrs), None)
+            .insert_saved_terminal_unnotified(Some(shellrs), None, "Terminal")
             .unwrap();
         assert!(!store.saved_terminal(a).unwrap().renamed);
-        assert!(store.rename_saved_terminal_unnotified(a, Some("claude".into())));
+        assert!(store.rename_saved_terminal_unnotified(a, Some("claude".into()), "Terminal"));
         let renamed = store.saved_terminal(a).unwrap();
         assert_eq!((renamed.name.as_ref(), renamed.renamed), ("claude", true));
         // Numbered again past the others, its own old number free.
-        assert!(store.rename_saved_terminal_unnotified(a, None));
+        assert!(store.rename_saved_terminal_unnotified(a, None, "Terminal"));
         let again = store.saved_terminal(a).unwrap();
         assert_eq!((again.name.as_ref(), again.renamed), ("shellrs 1", false));
-        assert!(store.rename_saved_terminal_unnotified(b, None));
+        assert!(store.rename_saved_terminal_unnotified(b, None, "Terminal"));
         assert_eq!(store.saved_terminal(b).unwrap().name, "shellrs 2");
-        assert!(!store.rename_saved_terminal_unnotified(SavedTerminalId(9), None));
+        assert!(!store.rename_saved_terminal_unnotified(SavedTerminalId(9), None, "Terminal"));
     }
 
-    fn order(store: &HostStore, group: TerminalGroupId) -> Vec<SavedTerminalId> {
+    fn order(store: &HostData, group: TerminalGroupId) -> Vec<SavedTerminalId> {
         store
             .terminals_in(Some(group))
             .into_iter()
@@ -616,21 +587,21 @@ mod tests {
 
     #[test]
     fn rows_move_among_their_kind() {
-        let mut store = HostStore::empty();
+        let mut store = HostData::empty();
         let work = store.insert_terminal_group_unnotified("work".into());
         let blog = store.insert_terminal_group_unnotified("blog".into());
         let site = store.insert_terminal_group_unnotified("site".into());
         let a = store
-            .insert_saved_terminal_unnotified(Some(work), None)
+            .insert_saved_terminal_unnotified(Some(work), None, "Terminal")
             .unwrap();
         let b = store
-            .insert_saved_terminal_unnotified(Some(work), None)
+            .insert_saved_terminal_unnotified(Some(work), None, "Terminal")
             .unwrap();
         let c = store
-            .insert_saved_terminal_unnotified(Some(work), None)
+            .insert_saved_terminal_unnotified(Some(work), None, "Terminal")
             .unwrap();
         let d = store
-            .insert_saved_terminal_unnotified(Some(blog), None)
+            .insert_saved_terminal_unnotified(Some(blog), None, "Terminal")
             .unwrap();
 
         // A group before another.
@@ -682,21 +653,21 @@ mod tests {
         ));
         // A new terminal goes last in its group.
         let e = store
-            .insert_saved_terminal_unnotified(Some(blog), None)
+            .insert_saved_terminal_unnotified(Some(blog), None, "Terminal")
             .unwrap();
         assert_eq!(order(&store, blog), [c, d, e]);
     }
 
     #[test]
     fn a_group_takes_its_terminals_and_their_tabs_with_it() {
-        let mut store = HostStore::empty();
+        let mut store = HostData::empty();
         let shellrs = store.insert_terminal_group_unnotified("shellrs".into());
         let blog = store.insert_terminal_group_unnotified("blog".into());
         let a = store
-            .insert_saved_terminal_unnotified(Some(shellrs), None)
+            .insert_saved_terminal_unnotified(Some(shellrs), None, "Terminal")
             .unwrap();
         let b = store
-            .insert_saved_terminal_unnotified(Some(blog), None)
+            .insert_saved_terminal_unnotified(Some(blog), None, "Terminal")
             .unwrap();
         store.set_saved_terminal_tabs_unnotified(vec![tab(a, true), tab(b, false)]);
 
@@ -707,13 +678,13 @@ mod tests {
 
     #[test]
     fn saved_tabs_keep_known_terminals_once_and_one_in_front() {
-        let mut store = HostStore::empty();
+        let mut store = HostData::empty();
         let group = store.insert_terminal_group_unnotified("shellrs".into());
         let a = store
-            .insert_saved_terminal_unnotified(Some(group), None)
+            .insert_saved_terminal_unnotified(Some(group), None, "Terminal")
             .unwrap();
         let b = store
-            .insert_saved_terminal_unnotified(Some(group), None)
+            .insert_saved_terminal_unnotified(Some(group), None, "Terminal")
             .unwrap();
         assert!(store.set_saved_terminal_tabs_unnotified(vec![
             tab(a, true),
@@ -732,13 +703,13 @@ mod tests {
     fn kept_output_is_a_file_each_and_goes_with_its_terminal() {
         let dir = tempfile::tempdir().unwrap();
         let outputs = dir.path().join("terminal-output");
-        let mut store = HostStore::empty();
+        let mut store = HostData::empty();
         let group = store.insert_terminal_group_unnotified("work".into());
         let a = store
-            .insert_saved_terminal_unnotified(Some(group), None)
+            .insert_saved_terminal_unnotified(Some(group), None, "Terminal")
             .unwrap();
         let b = store
-            .insert_saved_terminal_unnotified(Some(group), None)
+            .insert_saved_terminal_unnotified(Some(group), None, "Terminal")
             .unwrap();
         // Nowhere to keep it: nothing kept.
         store.keep_output(a, Some(b"ls".to_vec()));
@@ -790,7 +761,7 @@ mod tests {
             .replace_saved_terminal_tabs(&[tab(terminal.id, true)])
             .unwrap();
 
-        let mut store = HostStore::load(database).unwrap();
+        let mut store = HostData::load(database).unwrap();
         assert_eq!(store.terminal_groups(), [group]);
         assert_eq!(store.saved_terminals(), [terminal]);
         assert_eq!(store.saved_terminal_tabs(), [tab(SavedTerminalId(9), true)]);
@@ -800,7 +771,7 @@ mod tests {
         );
         assert!(store.terminal_group(TerminalGroupId(5)).unwrap().expanded);
         assert_eq!(
-            store.insert_saved_terminal_unnotified(Some(TerminalGroupId(4)), None),
+            store.insert_saved_terminal_unnotified(Some(TerminalGroupId(4)), None, "Terminal"),
             Some(SavedTerminalId(10))
         );
     }

@@ -1,8 +1,6 @@
-use gpui_kit::{Rgba, SharedString, rgb};
+use gpui_kit::SharedString;
 use rand::{Rng as _, distr::Alphanumeric};
 
-use crate::app::ToolKind;
-use crate::i18n::t;
 use crate::secrets::SecretRef;
 
 use super::{CredentialId, Protocol, ProtocolKind, SerialSettings, TelnetSettings};
@@ -244,26 +242,26 @@ macro_rules! host_os {
                 match self { $(Self::$variant => concat!("icons/os/", $icon, ".svg"),)* }
             }
 
-            /// The brand's published colour, for the badge behind the mark.
+            /// The brand's published colour as `0xRRGGBB`, for the badge
+            /// behind the mark.
             ///
             /// `None` means the mark is monochrome and should follow the
             /// theme instead. That is how Apple's is meant to be drawn, and
             /// the honest answer where a project publishes no single colour.
-            pub fn brand_color(self) -> Option<Rgba> {
-                let hex: Option<u32> = match self { $(Self::$variant => $brand,)* };
-                hex.map(rgb)
+            pub fn brand_color(self) -> Option<u32> {
+                match self { $(Self::$variant => $brand,)* }
             }
 
             /// What to draw the mark itself in, on top of [`Self::brand_color`].
             ///
             /// White, the way nearly every brand draws its own mark, except on
             /// the light ones where the brand uses a dark mark instead.
-            pub fn brand_foreground(self) -> Option<Rgba> {
+            pub fn brand_foreground(self) -> Option<u32> {
                 self.brand_color().map(|color| {
                     if is_light(color) {
-                        rgb(BRAND_DARK_MARK)
+                        BRAND_DARK_MARK
                     } else {
-                        rgb(BRAND_LIGHT_MARK)
+                        BRAND_LIGHT_MARK
                     }
                 })
             }
@@ -324,40 +322,8 @@ const BRAND_LIGHT_MARK: u32 = 0xFF_FFFF;
 /// it. The threshold sits well above the point where white text would fail,
 /// because a logo silhouette is not body text and nearly every brand draws its
 /// own mark in white; only the yellows go the other way.
-fn is_light(color: Rgba) -> bool {
-    fn linear(channel: f32) -> f32 {
-        if channel <= 0.03928 {
-            channel / 12.92
-        } else {
-            ((channel + 0.055) / 1.055).powf(2.4)
-        }
-    }
-    let luminance = 0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b);
-    luminance > 0.5
-}
-
-/// Where a tab's connection stands: a terminal's or an SFTP tab's own,
-/// never a host's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum ConnectionState {
-    #[default]
-    Disconnected,
-    Connecting,
-    Connected,
-}
-
-impl ConnectionState {
-    pub fn label(self) -> SharedString {
-        match self {
-            ConnectionState::Disconnected => t!("host.state.disconnected"),
-            ConnectionState::Connecting => t!("host.state.connecting"),
-            ConnectionState::Connected => t!("host.state.connected"),
-        }
-    }
-
-    pub fn is_connected(self) -> bool {
-        matches!(self, ConnectionState::Connected)
-    }
+fn is_light(color: u32) -> bool {
+    super::mark::luminance(color) > 0.5
 }
 
 /// A saved host: an SSH or Telnet server, or a serial port of this computer. `group`
@@ -400,8 +366,10 @@ pub struct Host {
     pub os: Option<HostOs>,
     /// The right sidebar's tool as the host's terminals last had it, `None`
     /// while hidden: the next terminal of the host in front brings it back.
-    /// Written by the sidebar, never by the host form.
-    pub sidebar_tool: Option<ToolKind>,
+    /// Written by the sidebar, never by the host form. The tool's key
+    /// (`ToolKind::key` in the app), kept as it is even when this version
+    /// has no such tool.
+    pub sidebar_tool: Option<SharedString>,
     /// When the user last changed what syncs of it, in milliseconds since
     /// the epoch; 0 for a host sync brought. `os` and the like are not
     /// edits.
@@ -707,8 +675,7 @@ pub const SSH_PORT: u16 = 22;
 /// The port of a Telnet host that names none.
 pub const TELNET_PORT: u16 = 23;
 
-/// Why a host draft cannot be saved. `Display` is the text the host form
-/// shows.
+/// Why a host draft cannot be saved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HostDraftError {
     Address,
@@ -720,29 +687,6 @@ pub enum HostDraftError {
     ProxyAddress,
     ProxyPort,
 }
-
-impl HostDraftError {
-    pub fn message(self) -> SharedString {
-        match self {
-            HostDraftError::Address => t!("host.draft.address"),
-            HostDraftError::Port => t!("host.draft.port"),
-            HostDraftError::Device => t!("host.draft.device"),
-            HostDraftError::Baud => t!("host.draft.baud"),
-            HostDraftError::NoJumpHosts => t!("host.draft.no_jump_hosts"),
-            HostDraftError::DeletedJumpHost => t!("host.draft.deleted_jump_host"),
-            HostDraftError::ProxyAddress => t!("host.draft.proxy_address"),
-            HostDraftError::ProxyPort => t!("host.draft.proxy_port"),
-        }
-    }
-}
-
-impl std::fmt::Display for HostDraftError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.message())
-    }
-}
-
-impl std::error::Error for HostDraftError {}
 
 #[cfg(test)]
 mod tests {
@@ -899,12 +843,12 @@ mod tests {
     #[test]
     fn the_light_brands_get_a_dark_mark_and_the_rest_get_white() {
         // Tux is black on yellow, and OpenBSD's Puffy likewise.
-        assert_eq!(HostOs::Linux.brand_foreground(), Some(rgb(0x00_0000)));
-        assert_eq!(HostOs::OpenBsd.brand_foreground(), Some(rgb(0x00_0000)));
+        assert_eq!(HostOs::Linux.brand_foreground(), Some(0x00_0000));
+        assert_eq!(HostOs::OpenBsd.brand_foreground(), Some(0x00_0000));
         // Everything else follows the usual white-on-brand treatment.
-        assert_eq!(HostOs::Ubuntu.brand_foreground(), Some(rgb(0xFF_FFFF)));
-        assert_eq!(HostOs::Debian.brand_foreground(), Some(rgb(0xFF_FFFF)));
-        assert_eq!(HostOs::Windows.brand_foreground(), Some(rgb(0xFF_FFFF)));
+        assert_eq!(HostOs::Ubuntu.brand_foreground(), Some(0xFF_FFFF));
+        assert_eq!(HostOs::Debian.brand_foreground(), Some(0xFF_FFFF));
+        assert_eq!(HostOs::Windows.brand_foreground(), Some(0xFF_FFFF));
     }
 
     #[test]

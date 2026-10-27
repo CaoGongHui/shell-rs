@@ -20,7 +20,7 @@ use crate::cli::{
     find_host, find_saved_host, host_details, host_info, host_secrets, plan_credential, plan_host,
     with_saved_credential_secrets, with_saved_passwords,
 };
-use crate::host::{CredentialId, CredentialKind, HostId, HostStore};
+use crate::host::{CredentialId, CredentialKind, ErrorMessage as _, HostId, HostStore};
 use crate::i18n::t;
 use crate::secrets::{SecretRef, SharedSecretStore};
 use crate::terminal::{RunFailure, RunHandle, TerminalLifecycle, TerminalPanel};
@@ -354,7 +354,7 @@ fn save_credential(
             .map_err(|error| {
                 CliError::new(
                     ErrorCode::SaveFailed,
-                    t!("cli.change.key_not_saved", error = error),
+                    t!("cli.change.key_not_saved", error = error.message()),
                 )
             })?;
         draft = draft.with_key_path(path);
@@ -368,7 +368,7 @@ fn save_credential(
         let kept = store.keep_key_file(existing, &path).map_err(|error| {
             CliError::new(
                 ErrorCode::SaveFailed,
-                t!("cli.change.key_not_copied", error = error),
+                t!("cli.change.key_not_copied", error = error.message()),
             )
         })?;
         if let Some(kept) = kept {

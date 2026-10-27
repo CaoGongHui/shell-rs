@@ -8,7 +8,6 @@ use std::cmp::Ordering;
 use gpui_kit::SharedString;
 
 use super::{GroupId, HostId, PublicId};
-use crate::i18n::t;
 
 /// Stable identity of a snippet. Never reused within a process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -27,6 +26,13 @@ pub enum SnippetScope {
     All,
     Group(GroupId),
     Host(HostId),
+}
+
+/// Why a snippet draft cannot be saved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SnippetDraftError {
+    Name,
+    Command,
 }
 
 /// What the snippet form edits.
@@ -70,14 +76,14 @@ impl SnippetDraft {
         name: &str,
         command: &str,
         category: Option<SnippetCategoryId>,
-    ) -> Result<Self, SharedString> {
+    ) -> Result<Self, SnippetDraftError> {
         let name = name.trim();
         if name.is_empty() {
-            return Err(t!("host.snippet_draft.name"));
+            return Err(SnippetDraftError::Name);
         }
         let command = command.trim_end().trim_start_matches(['\n', '\r']);
         if command.trim().is_empty() {
-            return Err(t!("host.snippet_draft.command"));
+            return Err(SnippetDraftError::Command);
         }
         Ok(Self::new(name.to_owned(), command.to_owned(), category))
     }
@@ -173,11 +179,11 @@ mod tests {
     fn a_snippet_needs_a_name_and_a_command() {
         assert_eq!(
             SnippetDraft::validated("  ", "ls", None),
-            Err("请输入名称".into())
+            Err(SnippetDraftError::Name)
         );
         assert_eq!(
             SnippetDraft::validated("列表", " \n \n", None),
-            Err("请输入命令".into())
+            Err(SnippetDraftError::Command)
         );
         let draft = SnippetDraft::validated(
             " 清理日志 ",

@@ -16,7 +16,6 @@ use russh::keys::{Algorithm, PrivateKey, PublicKey};
 use zeroize::Zeroizing;
 
 use super::PublicId;
-use crate::i18n::t;
 
 /// The kinds of key the credential form generates.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -110,7 +109,7 @@ pub struct PastedKey {
     public_key: Option<PublicKey>,
 }
 
-/// Why pasted text is not a private key. `Display` is what the form says.
+/// Why pasted text is not a private key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PastedKeyError {
     Empty,
@@ -118,18 +117,6 @@ pub enum PastedKeyError {
     PublicKey,
     Unreadable,
 }
-
-impl fmt::Display for PastedKeyError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&match self {
-            PastedKeyError::Empty => t!("host.pasted_key.empty"),
-            PastedKeyError::PublicKey => t!("host.pasted_key.public_key"),
-            PastedKeyError::Unreadable => t!("host.pasted_key.unreadable"),
-        })
-    }
-}
-
-impl std::error::Error for PastedKeyError {}
 
 impl PastedKey {
     pub fn parse(text: &str) -> Result<Self, PastedKeyError> {

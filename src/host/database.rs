@@ -13,9 +13,6 @@ use std::{
 use gpui_kit::SharedString;
 use rusqlite::{Connection, params};
 
-use crate::app::ToolKind;
-use crate::i18n::t;
-
 use super::{
     AuthKind, BookmarkSide, Credential, CredentialDraft, CredentialId, CredentialKind, DataBits,
     FlowControl, ForwardDraft, ForwardEndpoint, ForwardId, ForwardKind, ForwardRule, GroupDraft,
@@ -69,7 +66,7 @@ const SCHEMA_VERSION: i64 = 20;
 ///     next open (see `fill_missing_public_ids`); the ones there are unique.
 ///   - `os` and `last_connected_at` are written by connections, and
 ///     `sidebar_tool` (the right sidebar's tool as the host's terminals
-///     last had it, `ToolKind::key`; `NULL` while hidden) by the sidebar;
+///     last had it, the app's `ToolKind::key`; `NULL` while hidden) by the sidebar;
 ///     none of them by the host form.
 ///   - `protocol` is `ssh`, `telnet` or `serial`. A serial host's device is
 ///     its `address` and its line is in the five `serial_*` columns, set
@@ -625,19 +622,68 @@ pub struct HostDatabase {
     connection: Connection,
 }
 
+/// Why the database did not open. The first two leave the file as it is.
+#[derive(Debug)]
+pub enum OpenError {
+    /// A newer ShellRS wrote it, at schema `version`; this one knows up to
+    /// `supported`.
+    Newer {
+        version: i64,
+        supported: i64,
+    },
+    /// An early development build wrote it, before the oldest version the
+    /// migrations reach back to.
+    TooOld {
+        version: i64,
+    },
+    Sqlite(rusqlite::Error),
+}
+
+impl From<rusqlite::Error> for OpenError {
+    fn from(error: rusqlite::Error) -> Self {
+        OpenError::Sqlite(error)
+    }
+}
+
+/// For logs; the app words it for the user.
+impl std::fmt::Display for OpenError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OpenError::Newer { version, supported } => write!(
+                f,
+                "the database is from a newer ShellRS (schema {version}, this one knows up to {supported})"
+            ),
+            OpenError::TooOld { version } => write!(
+                f,
+                "the database is from an early development build (schema {version})"
+            ),
+            OpenError::Sqlite(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for OpenError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            OpenError::Sqlite(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
 impl HostDatabase {
     /// Open the database at `path`, creating it if it is not there yet.
-    pub fn open(path: &Path) -> rusqlite::Result<Self> {
+    pub fn open(path: &Path) -> Result<Self, OpenError> {
         Self::prepare(Connection::open(path)?)
     }
 
     /// An anonymous database that lives only as long as this value.
     #[cfg(test)]
-    pub fn in_memory() -> rusqlite::Result<Self> {
+    pub fn in_memory() -> Result<Self, OpenError> {
         Self::prepare(Connection::open_in_memory()?)
     }
 
-    fn prepare(mut connection: Connection) -> rusqlite::Result<Self> {
+    fn prepare(mut connection: Connection) -> Result<Self, OpenError> {
         // Cascading deletes are how removing a group removes its subtree, and
         // SQLite only honours the foreign keys when asked, per connection.
         connection.pragma_update(None, "foreign_keys", true)?;
@@ -784,7 +830,7 @@ impl HostDatabase {
                     _ => Route::Direct,
                 };
                 host.os = os.as_deref().and_then(HostOs::from_stored);
-                host.sidebar_tool = sidebar_tool.as_deref().and_then(ToolKind::from_key);
+                host.sidebar_tool = sidebar_tool.map(SharedString::from);
                 host.edited_ms = from_sql(row.get(26)?);
                 match protocol.as_str() {
                     "serial" => host.protocol = Protocol::Serial(serial.settings()),
@@ -1220,7 +1266,7 @@ impl HostDatabase {
                 row.serial.flow,
                 row.telnet_user_prompt,
                 row.telnet_password_prompt,
-                host.sidebar_tool.map(ToolKind::key),
+                host.sidebar_tool.as_deref(),
                 to_sql(host.edited_ms),
             ],
         )?;
@@ -1704,14 +1750,10 @@ impl HostDatabase {
 
     /// Record the right sidebar's tool as the host's terminals have it now,
     /// `None` for hidden.
-    pub fn set_host_sidebar_tool(
-        &self,
-        id: HostId,
-        tool: Option<ToolKind>,
-    ) -> rusqlite::Result<()> {
+    pub fn set_host_sidebar_tool(&self, id: HostId, tool: Option<&str>) -> rusqlite::Result<()> {
         self.connection.execute(
             "UPDATE hosts SET sidebar_tool = ?2 WHERE id = ?1",
-            params![to_sql(id.0), tool.map(ToolKind::key)],
+            params![to_sql(id.0), tool],
         )?;
         Ok(())
     }
@@ -1866,28 +1908,23 @@ fn write_jumps(connection: &Connection, host: &Host) -> rusqlite::Result<()> {
 /// what the newer version saved. That happens after going back to an older
 /// version by hand, the one way an update can be undone. A file older than
 /// any step reaches back to is refused the same way.
-fn migrate(connection: &Connection) -> rusqlite::Result<()> {
+fn migrate(connection: &Connection) -> Result<(), OpenError> {
     let mut version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if version == 0 {
-        return connection.execute_batch(&format!(
+        connection.execute_batch(&format!(
             "BEGIN;\n{SCHEMA}\nPRAGMA user_version = {SCHEMA_VERSION};\nCOMMIT;"
-        ));
+        ))?;
+        return Ok(());
     }
     if version > SCHEMA_VERSION {
-        return Err(refusal(
-            t!(
-                "host.database.newer",
-                version = version,
-                supported = SCHEMA_VERSION
-            )
-            .to_string(),
-        ));
+        return Err(OpenError::Newer {
+            version,
+            supported: SCHEMA_VERSION,
+        });
     }
     let oldest = STEPS.first().map_or(SCHEMA_VERSION, |(from, _)| *from);
     if version < oldest {
-        return Err(refusal(
-            t!("host.database.too_old", version = version).to_string(),
-        ));
+        return Err(OpenError::TooOld { version });
     }
     if version < SCHEMA_VERSION {
         back_up(connection, version);
@@ -1911,14 +1948,6 @@ fn scope_columns(scope: SnippetScope) -> (Option<i64>, Option<i64>) {
         SnippetScope::Group(group) => (Some(to_sql(group.0)), None),
         SnippetScope::Host(host) => (None, Some(to_sql(host.0))),
     }
-}
-
-/// An error that refuses a file without touching it.
-fn refusal(message: String) -> rusqlite::Error {
-    rusqlite::Error::SqliteFailure(
-        rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
-        Some(message),
-    )
 }
 
 /// Copy the database to `<file>.v<version>.bak` before migrating it, so the
@@ -2048,7 +2077,10 @@ mod tests {
         let Err(error) = HostDatabase::open(&path) else {
             panic!("a newer database opened");
         };
-        assert!(error.to_string().contains("更新版本的 ShellRS"), "{error}");
+        assert!(
+            matches!(error, OpenError::Newer { version, supported: SCHEMA_VERSION } if version == newer),
+            "{error}"
+        );
         let version: i64 = Connection::open(&path)
             .unwrap()
             .pragma_query_value(None, "user_version", |row| row.get(0))
@@ -2630,7 +2662,7 @@ INSERT INTO snippets (id, category_id, name, command, scope_host_id)
         assert_eq!(schema_of(&db.connection), schema_of(&fresh.connection));
         let data = db.load().unwrap();
         assert_eq!(data.hosts.len(), 1);
-        assert_eq!(data.hosts[0].sidebar_tool, Some(ToolKind::Files));
+        assert_eq!(data.hosts[0].sidebar_tool.as_deref(), Some("files"));
         assert!(data.saved_terminals.is_empty());
         assert!(data.saved_terminal_tabs.is_empty());
     }
@@ -2902,35 +2934,27 @@ INSERT INTO snippets (id, category_id, name, command) VALUES (1, 1, 'ps', 'docke
             HostId(1),
             HostDraft::new("web", "10.0.0.1", 22, "root", AuthKind::Password, None),
         );
-        host.sidebar_tool = Some(ToolKind::Files);
+        host.sidebar_tool = Some("files".into());
         db.insert_host(&host).unwrap();
-        assert_eq!(
-            db.load().unwrap().hosts[0].sidebar_tool,
-            Some(ToolKind::Files)
-        );
+        let tool = || db.load().unwrap().hosts[0].sidebar_tool.clone();
+        assert_eq!(tool().as_deref(), Some("files"));
 
         // Saving the form leaves it alone; the sidebar changes it.
         host.name = "web-01".into();
         host.sidebar_tool = None;
         db.update_host(&host).unwrap();
-        assert_eq!(
-            db.load().unwrap().hosts[0].sidebar_tool,
-            Some(ToolKind::Files)
-        );
-        db.set_host_sidebar_tool(HostId(1), Some(ToolKind::Monitor))
+        assert_eq!(tool().as_deref(), Some("files"));
+        db.set_host_sidebar_tool(HostId(1), Some("monitor"))
             .unwrap();
-        assert_eq!(
-            db.load().unwrap().hosts[0].sidebar_tool,
-            Some(ToolKind::Monitor)
-        );
+        assert_eq!(tool().as_deref(), Some("monitor"));
         db.set_host_sidebar_tool(HostId(1), None).unwrap();
-        assert_eq!(db.load().unwrap().hosts[0].sidebar_tool, None);
+        assert_eq!(tool(), None);
 
-        // A tool this version does not know is no tool.
+        // A tool a newer version has is kept for it; the app shows none.
         db.connection
             .execute("UPDATE hosts SET sidebar_tool = 'radar' WHERE id = 1", [])
             .unwrap();
-        assert_eq!(db.load().unwrap().hosts[0].sidebar_tool, None);
+        assert_eq!(tool().as_deref(), Some("radar"));
     }
 
     #[test]
@@ -3152,7 +3176,10 @@ INSERT INTO snippets (id, category_id, name, command) VALUES (1, 1, 'ps', 'docke
         let Err(error) = HostDatabase::open(&path) else {
             panic!("a version 12 database opened");
         };
-        assert!(error.to_string().contains("早期开发版本"), "{error}");
+        assert!(
+            matches!(error, OpenError::TooOld { version: 12 }),
+            "{error}"
+        );
         let version: i64 = Connection::open(&path)
             .unwrap()
             .pragma_query_value(None, "user_version", |row| row.get(0))

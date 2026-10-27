@@ -3,8 +3,6 @@
 
 use gpui_kit::SharedString;
 
-use crate::i18n::t;
-
 use super::SerialSettings;
 
 /// How a host is reached. Chosen when the host is created and never changed
@@ -79,14 +77,6 @@ impl ProtocolKind {
         ProtocolKind::Telnet,
         ProtocolKind::Serial,
     ];
-
-    pub fn label(self) -> SharedString {
-        match self {
-            ProtocolKind::Ssh => t!("host.protocol.ssh"),
-            ProtocolKind::Telnet => t!("host.protocol.telnet"),
-            ProtocolKind::Serial => t!("host.protocol.serial"),
-        }
-    }
 
     pub fn as_str(self) -> &'static str {
         match self {

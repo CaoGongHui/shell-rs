@@ -1167,9 +1167,13 @@ fn each_host_keeps_its_own_tool_sidebar(cx: &mut TestAppContext) {
 
     let kept = cx.update(|cx| {
         let store = workspace.read(cx).store().read(cx);
-        [WEB_01, STAGING_API].map(|id| store.host(HostId(id)).and_then(|host| host.sidebar_tool))
+        [WEB_01, STAGING_API].map(|id| {
+            store
+                .host(HostId(id))
+                .and_then(|host| host.sidebar_tool.clone())
+        })
     });
-    assert_eq!(kept, [None, Some(ToolKind::Snippets)]);
+    assert_eq!(kept, [None, Some(ToolKind::Snippets.key().into())]);
 }
 
 /// The tool a host kept from the last launch: its terminal opens with it,
@@ -1179,7 +1183,7 @@ fn a_host_brings_back_the_tool_it_kept_from_the_last_launch(cx: &mut TestAppCont
     use shellrs::app::ToolKind;
 
     let mut store = HostStore::seed();
-    store.set_host_sidebar_tool_unnotified(HostId(WEB_01), Some(ToolKind::Snippets));
+    store.set_host_sidebar_tool_unnotified(HostId(WEB_01), Some(ToolKind::Snippets.key().into()));
     let (handle, _) = open_workspace_with_store(cx, store);
     in_frame(cx, handle, |window, cx| {
         window.click(("terminal-tab", INITIAL_WEB_TERMINAL), cx)
