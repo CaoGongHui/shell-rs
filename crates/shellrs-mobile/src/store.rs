@@ -19,9 +19,9 @@ use zeroize::Zeroizing;
 
 use crate::events::Events;
 use crate::hosts::{
-    Credential, CredentialDraft, CredentialKind, CredentialProblem, Group, GroupDraft, Host,
-    HostDraft, HostProblem, KeyAlgorithm, KeyChange, KeyProblem, NewKey, SecretChange, TreeDrop,
-    TreeNode,
+    Credential, CredentialDraft, CredentialKind, CredentialProblem, Dependents, Group, GroupDraft,
+    Host, HostDraft, HostProblem, KeyAlgorithm, KeyChange, KeyProblem, NewKey, SecretChange,
+    TreeDrop, TreeNode,
 };
 use crate::secrets::SecretRef;
 use crate::task::{self, CallError};
@@ -340,6 +340,35 @@ impl HostStore {
             .hosts_using(CredentialId(credential))
             .map(|host| host.id.0)
             .collect()
+    }
+
+    /// What deleting `node` takes with it, to say so before; nothing for
+    /// one not there.
+    pub fn dependents(&self, node: TreeNode) -> Dependents {
+        let data = self.shared.lock();
+        let (doomed, hosts, subgroups) = match node {
+            TreeNode::Host { id } => match saved_host(&data, id) {
+                Some(host) => (vec![host.id], 0, 0),
+                None => return Dependents::default(),
+            },
+            TreeNode::Group { id } => {
+                let id = GroupId(id);
+                if data.group(id).is_none() {
+                    return Dependents::default();
+                }
+                let doomed = data.hosts_under(id);
+                let hosts = doomed.len();
+                (doomed, hosts, data.descendant_groups(id).len())
+            }
+        };
+        let forwards = doomed.iter().map(|id| data.forwards_of(*id).count()).sum();
+        let count = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+        Dependents {
+            hosts: count(hosts),
+            subgroups: count(subgroups),
+            forwards: count(forwards),
+            jump_users: count(data.jump_users(&doomed)),
+        }
     }
 
     /// Save a new host, and its password and its proxy's as they say.

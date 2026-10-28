@@ -31,9 +31,9 @@ pub use connection::{Connection, ConnectionEvent, ExecOutput};
 pub use core::{Core, CoreConfig, CoreError};
 pub use failure::*;
 pub use hosts::{
-    Credential, CredentialDraft, CredentialKind, CredentialProblem, Group, GroupDraft, Host,
-    HostAuth, HostDraft, HostOs, HostProblem, HostProtocol, HostProxy, HostRoute, KeyAlgorithm,
-    KeyChange, KeyProblem, NewKey, PrivateKeyInfo, SecretChange, TreeDrop, TreeNode,
+    Credential, CredentialDraft, CredentialKind, CredentialProblem, Dependents, Group, GroupDraft,
+    Host, HostAuth, HostDraft, HostOs, HostProblem, HostProtocol, HostProxy, HostRoute,
+    KeyAlgorithm, KeyChange, KeyProblem, NewKey, PrivateKeyInfo, SecretChange, TreeDrop, TreeNode,
     check_private_key,
 };
 pub use login::{JumpHost, Login, LoginMethod, Proxy, ProxyKind, Route};

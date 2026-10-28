@@ -189,6 +189,23 @@ pub enum TreeDrop {
     Top,
 }
 
+/// What goes with a host or a group deleted, for the question before, as
+/// the desktop asks it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, uniffi::Record)]
+pub struct Dependents {
+    /// The hosts in a group, however deep, serial ones the app does not
+    /// list among them; 0 for a host.
+    pub hosts: u32,
+    /// The groups in a group, however deep.
+    pub subgroups: u32,
+    /// The desktop's port forwards via the hosts deleted, which go with
+    /// them.
+    pub forwards: u32,
+    /// The hosts left that jump through one deleted: they connect again
+    /// once their route names another.
+    pub jump_users: u32,
+}
+
 /// What saving does to a saved password or passphrase. It carries one, so
 /// it never prints.
 #[derive(uniffi::Enum)]

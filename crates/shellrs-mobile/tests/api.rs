@@ -6,13 +6,14 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use shellrs_hosts as hosts;
 use shellrs_mobile::{
     ConnectError, Connection, ConnectionEvent, Core, CoreConfig, CoreError, CredentialDraft,
-    CredentialKind, EntryKind, FailureLink, GroupDraft, HostAuth, HostDraft, HostProblem,
-    HostProtocol, HostRoute, HostStore, IoKind, KeyAlgorithm, KeyChange, KeyProblem, Keychain,
-    KeychainError, Login, LoginMethod, PromptKind, PromptReply, Route, SavedSecret, SecretChange,
-    SecretProblem, SecretRef, SftpEvent, SshError, StoreError, StoreEvent, StoreFailure,
-    TerminalEvent, TerminalOptions, TransferPhase, TreeDrop, TreeNode, account_for,
+    CredentialKind, Dependents, EntryKind, FailureLink, GroupDraft, HostAuth, HostDraft,
+    HostProblem, HostProtocol, HostRoute, HostStore, IoKind, KeyAlgorithm, KeyChange, KeyProblem,
+    Keychain, KeychainError, Login, LoginMethod, PromptKind, PromptReply, Route, SavedSecret,
+    SecretChange, SecretProblem, SecretRef, SftpEvent, SshError, StoreError, StoreEvent,
+    StoreFailure, TerminalEvent, TerminalOptions, TransferPhase, TreeDrop, TreeNode, account_for,
     check_private_key,
 };
 use shellrs_ssh::testing::{TEST_PASSWORD, TEST_USER, TestServer, closed_port, has_sftp_server};
@@ -943,4 +944,74 @@ async fn a_password_the_keychain_did_not_take_is_said_and_the_host_kept() {
             problem: SecretProblem::Unavailable
         })
     ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deleting_says_what_goes_with_a_host_or_a_group() {
+    let data = tempfile::tempdir().unwrap();
+    // What only the desktop makes: a port forward, and a serial host the
+    // app never lists.
+    {
+        let database = hosts::HostDatabase::open(&data.path().join("shellrs.db")).unwrap();
+        let mut saved = hosts::HostData::load(database).unwrap();
+        let group = saved.insert_group(hosts::GroupDraft::new("生产", None));
+        let inner = saved.insert_group(hosts::GroupDraft::new("数据库", Some(group)));
+        let web = saved.insert(hosts::HostDraft::new(
+            "web",
+            "10.0.0.1",
+            22,
+            "root",
+            hosts::AuthKind::Password,
+            Some(group),
+        ));
+        saved.insert(hosts::HostDraft::serial(
+            "console",
+            "/dev/ttyUSB0",
+            hosts::SerialSettings::default(),
+            Some(inner),
+        ));
+        let endpoint = |port| hosts::ForwardEndpoint::new("127.0.0.1", port);
+        saved
+            .insert_forward(hosts::ForwardDraft::new(
+                hosts::ForwardKind::Local,
+                web,
+                endpoint(8080),
+                Some(endpoint(80)),
+            ))
+            .unwrap();
+    }
+    let keychain = Arc::new(TestKeychain::default());
+    let core = core_with(data.path(), &keychain);
+    let store = core.store();
+    let web = store.hosts()[0].id;
+    let group = store.groups()[0].id;
+    // A host outside the group that jumps through the one in it.
+    let jumping = HostDraft {
+        route: HostRoute::Jump {
+            hosts: vec![Some(web)],
+        },
+        ..host("app", "10.0.0.2")
+    };
+    soon(store.add_host(jumping, SecretChange::Keep, SecretChange::Keep))
+        .await
+        .unwrap();
+
+    let both = Dependents {
+        forwards: 1,
+        jump_users: 1,
+        ..Dependents::default()
+    };
+    assert_eq!(store.dependents(TreeNode::Host { id: web }), both);
+    assert_eq!(
+        store.dependents(TreeNode::Group { id: group }),
+        Dependents {
+            hosts: 2,
+            subgroups: 1,
+            ..both
+        }
+    );
+    assert_eq!(
+        store.dependents(TreeNode::Host { id: 999 }),
+        Dependents::default()
+    );
 }
