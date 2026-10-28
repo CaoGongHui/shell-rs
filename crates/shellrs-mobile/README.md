@@ -38,9 +38,9 @@ in its own language.
   certificates checked by Android's own `TrustManager`, the one OkHttp
   uses: native code reaches it only through the JVM. Call
   `Tls.setUp(applicationContext)` once before the core syncs, and add the
-  verifier's Kotlin part, `rustls:rustls-platform-verifier`, at the version
-  `Cargo.lock` has for `rustls-platform-verifier-android`, with its Proguard
-  rule, as
+  verifier's Kotlin part, `org.rustls:rustls-platform-verifier`, at the
+  version `Cargo.lock` has for `rustls-platform-verifier-android`, with its
+  Proguard rule, as
   [its README](https://github.com/rustls/rustls-platform-verifier#android)
   says. Without them, every sync to an `https` address fails; `http`
   addresses and folders need neither.
