@@ -29,11 +29,11 @@ use crate::cli::{AgentKind, BinaryStatus, CliIntegration, IntegrationStatus, Ski
 use crate::explorer::{FileIcon, FileIconKind};
 use crate::i18n::t;
 use crate::sftp::{DEFAULT_PARALLEL_TRANSFERS, PARALLEL_TRANSFERS_RANGE};
-use crate::shared::{ClosableTabTitle, close_tab_items};
+use crate::shared::{ClosableTabTitle, Segment, SegmentedControl, close_tab_items};
 use crate::sync::SyncService;
 use crate::terminal::{
-    FONT_SIZE_RANGE, LINE_HEIGHT_RANGE, TerminalColors, TerminalFont, TerminalFontPreview,
-    TerminalHighlights, is_font_installed, monospace_font_families,
+    FONT_SIZE_RANGE, LINE_HEIGHT_RANGE, TerminalColors, TerminalCursorStyle, TerminalFont,
+    TerminalFontPreview, TerminalHighlights, is_font_installed, monospace_font_families,
 };
 use crate::update::{Phase, Tone, UpdateSnapshot, UpdateStep, Updater, build_info, platform};
 
@@ -479,9 +479,10 @@ fn local_terminal_group(panel: &SettingsPanel) -> SettingGroup {
         ])
 }
 
-/// 终端 → 终端交互: what the mouse does besides selecting.
+/// 终端 → 终端交互: mouse behavior and the default cursor.
 fn interaction_group(store: &Entity<SettingsStore>) -> SettingGroup {
     let (reader, writer) = (store.clone(), store.clone());
+    let (cursor_reader, cursor_writer) = (store.clone(), store.clone());
     SettingGroup::new()
         .title(t!("settings.interaction.title"))
         .items([
@@ -516,7 +517,102 @@ fn interaction_group(store: &Entity<SettingsStore>) -> SettingGroup {
                 ),
             )
             .description(t!("settings.interaction.right_click_description")),
+            SettingItem::new(
+                t!("settings.interaction.cursor_style"),
+                cursor_style_field(store),
+            )
+            .description(t!("settings.interaction.cursor_style_description")),
+            SettingItem::new(
+                t!("settings.interaction.cursor_blinking"),
+                SettingField::switch(
+                    move |cx| {
+                        cursor_reader
+                            .read(cx)
+                            .settings()
+                            .terminal_interaction
+                            .cursor_blinking
+                    },
+                    move |on, cx| {
+                        cursor_writer.update(cx, |store, cx| {
+                            store.update(
+                                |settings| settings.terminal_interaction.cursor_blinking = on,
+                                cx,
+                            )
+                        });
+                    },
+                )
+                .default_value(true),
+            ),
         ])
+}
+
+fn cursor_style_field(store: &Entity<SettingsStore>) -> SettingField<SharedString> {
+    let (reader, dirty, reset) = (store.clone(), store.clone(), store.clone());
+    SettingField::render(move |options, _, cx| {
+        let chosen = reader.read(cx).settings().terminal_interaction.cursor_style;
+        let writer = reader.clone();
+        div().child(
+            SegmentedControl::new("terminal-cursor-style")
+                .compact()
+                .with_size(options.size())
+                .selected_index(
+                    TerminalCursorStyle::ALL
+                        .iter()
+                        .position(|style| *style == chosen),
+                )
+                .segments(TerminalCursorStyle::ALL.iter().map(|&style| {
+                    let color = if style == chosen {
+                        cx.theme().foreground
+                    } else {
+                        cx.theme().muted_foreground
+                    };
+                    let shape = match style {
+                        TerminalCursorStyle::Block => div().w_2().h_3(),
+                        TerminalCursorStyle::Underline => div().w_2().h_0p5(),
+                        TerminalCursorStyle::Beam => div().w_0p5().h_3(),
+                    };
+                    Segment::new(style.label())
+                        .disabled(options.is_disabled())
+                        .prefix(
+                            div()
+                                .w_3()
+                                .h_4()
+                                .flex_none()
+                                .flex()
+                                .items_end()
+                                .justify_center()
+                                .pb_0p5()
+                                .child(shape.bg(color)),
+                        )
+                }))
+                .on_change(move |ix, _, cx| {
+                    if let Some(&style) = TerminalCursorStyle::ALL.get(*ix) {
+                        writer.update(cx, |store, cx| {
+                            store.update(
+                                |settings| settings.terminal_interaction.cursor_style = style,
+                                cx,
+                            )
+                        });
+                    }
+                }),
+        )
+    })
+    .on_reset(
+        move |cx| {
+            dirty.read(cx).settings().terminal_interaction.cursor_style
+                != TerminalCursorStyle::default()
+        },
+        move |_, cx| {
+            reset.update(cx, |store, cx| {
+                store.update(
+                    |settings| {
+                        settings.terminal_interaction.cursor_style = TerminalCursorStyle::default()
+                    },
+                    cx,
+                )
+            });
+        },
+    )
 }
 
 /// 终端 → 通知: when the window is not in front, the system's notification;

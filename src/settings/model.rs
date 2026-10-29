@@ -12,7 +12,7 @@ use crate::i18n::t;
 use crate::sftp::{DEFAULT_PARALLEL_TRANSFERS, PARALLEL_TRANSFERS_RANGE};
 use crate::terminal::{
     DEFAULT_FONT_SIZE, DEFAULT_LINE_HEIGHT, FONT_SIZE_RANGE, HighlightRule, LINE_HEIGHT_RANGE,
-    RightClick, TerminalInteraction, TerminalTheme, default_rules,
+    RightClick, TerminalCursorStyle, TerminalInteraction, TerminalTheme, default_rules,
 };
 use crate::update::Channel;
 
@@ -456,6 +456,26 @@ impl Choice for FileIconStyle {
     }
 }
 
+impl Choice for TerminalCursorStyle {
+    const ALL: &'static [Self] = &[Self::Block, Self::Underline, Self::Beam];
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::Block => "block",
+            Self::Underline => "underline",
+            Self::Beam => "beam",
+        }
+    }
+
+    fn label(self) -> SharedString {
+        match self {
+            Self::Block => t!("settings.cursor_style.block"),
+            Self::Underline => t!("settings.cursor_style.underline"),
+            Self::Beam => t!("settings.cursor_style.beam"),
+        }
+    }
+}
+
 impl Choice for RightClick {
     const ALL: &'static [Self] = &[Self::Nothing, Self::Paste, Self::Menu];
 
@@ -687,6 +707,7 @@ mod tests {
         check::<InterfaceLanguage>();
         check::<Appearance>();
         check::<RightClick>();
+        check::<TerminalCursorStyle>();
         check::<FileIconStyle>();
         assert_eq!(Appearance::from_key("sepia"), None);
     }
@@ -1006,6 +1027,20 @@ mod tests {
             serde_json::from_str(r#"{"terminal_interaction":{"right_click":"paste"}}"#).unwrap();
         assert!(!settings.terminal_interaction.copy_on_select);
         assert_eq!(settings.terminal_interaction.right_click, RightClick::Paste);
+        assert_eq!(
+            settings.terminal_interaction.cursor_style,
+            TerminalCursorStyle::Block
+        );
+        assert!(settings.terminal_interaction.cursor_blinking);
+        let settings: AppSettings = serde_json::from_str(
+            r#"{"terminal_interaction":{"cursor_style":"underline","cursor_blinking":false}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            settings.terminal_interaction.cursor_style,
+            TerminalCursorStyle::Underline
+        );
+        assert!(!settings.terminal_interaction.cursor_blinking);
     }
 
     #[test]

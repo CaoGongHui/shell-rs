@@ -76,7 +76,7 @@ pub fn apply(settings: AppSettings, window: &mut Window, cx: &mut App) {
         window.refresh();
     }
 
-    // Read when the mouse acts, so nothing is redrawn.
+    // Terminals observe cursor changes; mouse behavior is read on input.
     if cx.try_global::<TerminalInteraction>() != Some(&settings.terminal_interaction) {
         cx.set_global(settings.terminal_interaction);
     }

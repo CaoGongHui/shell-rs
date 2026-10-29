@@ -166,6 +166,8 @@ mod tests {
         let written = store.update_unnotified(|settings| {
             settings.appearance = Appearance::Dark;
             settings.language = InterfaceLanguage::English;
+            settings.terminal_interaction.cursor_style = crate::terminal::TerminalCursorStyle::Beam;
+            settings.terminal_interaction.cursor_blinking = false;
             settings
                 .sidebar_tools
                 .set(crate::app::ToolKind::Kubernetes, true);
@@ -176,6 +178,11 @@ mod tests {
         assert!(problem.is_none());
         assert_eq!(reloaded.settings().appearance, Appearance::Dark);
         assert_eq!(reloaded.settings().language, InterfaceLanguage::English);
+        assert_eq!(
+            reloaded.settings().terminal_interaction.cursor_style,
+            crate::terminal::TerminalCursorStyle::Beam
+        );
+        assert!(!reloaded.settings().terminal_interaction.cursor_blinking);
         assert!(
             reloaded
                 .settings()

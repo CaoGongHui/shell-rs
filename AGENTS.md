@@ -1,5 +1,7 @@
 # 仓库贡献指南
 
+Git 提交信息一律使用英文。
+
 ## 项目是什么
 
 ShellRS（crate 与二进制都叫 `shellrs`）是一个类似 Xshell / WinSCP 的 SSH 主机管理工具，基于 `gpui-kit` 0.6.1（GPUI + gpui-base + gpui-component）。界面文案有简体中文和英文两种（中文是源语言，文案在 `locales/`，经 `crate::i18n::t!`），标识符用英文。
