@@ -88,9 +88,9 @@ use super::{
     compose_pane::ComposePane,
     dock_skin::WorkspaceDockSkin,
     recent_hosts::RecentHosts,
-    sidebar::Sidebar,
+    sidebar::{SIDEBAR_WIDTH, Sidebar},
     status_bar::WorkspaceStatus,
-    title_bar::render_title_bar,
+    title_bar::{render_sidebar_toggle, render_title_bar},
     tool_sidebar::{ToolSidebar, render_tool_switch},
     tools::{TOOL_SIDEBAR_WIDTH, set_right_dock_open},
     window_state::{WindowState, window_placement},
@@ -411,16 +411,24 @@ impl Workspace {
         // Before the first frame, so a dark theme never starts out light.
         crate::settings::apply(settings.read(cx).settings(), window, cx);
 
+        let mut sidebar_width = dock_area.read(cx).dock_size(DockPlacement::Left);
         let mut subscriptions = vec![
             // What the saved terminals show, for the next launch to draw: the
             // workspace goes with its window, as ShellRS quits (and on
             // Windows and Linux as the window closes, before it quits).
             cx.on_release(|this, cx| this.keep_on_close(cx)),
-            // The right sidebar is never dragged narrower than it opens, nor
+            // Neither sidebar is dragged narrower than it opens, nor
             // 撰写窗格 lower than a line or two.
-            cx.observe_in(&dock_area, window, |this, _, window, cx| {
+            cx.observe_in(&dock_area, window, move |this, area, window, cx| {
+                this.hold_sidebar_width(window, cx);
                 this.hold_tool_sidebar_width(window, cx);
                 this.hold_compose_height(window, cx);
+                // The title-bar toggle follows the left dock's current width.
+                let width = area.read(cx).dock_size(DockPlacement::Left);
+                if sidebar_width != width {
+                    sidebar_width = width;
+                    cx.notify();
+                }
             }),
             cx.observe_in(&store, window, |this, _, window, cx| {
                 this.sync_cli_server(cx);
@@ -613,7 +621,7 @@ impl Workspace {
                 cx,
             );
             // Dock geometry is an API boundary that takes `Pixels`.
-            area.set_dock_size(DockPlacement::Left, px(280.), window, cx);
+            area.set_dock_size(DockPlacement::Left, SIDEBAR_WIDTH, window, cx);
             area.set_dock_collapsible(DockPlacement::Left, true, window, cx);
             area.set_dock(
                 DockPlacement::Right,
@@ -3099,6 +3107,14 @@ impl Render for Workspace {
                 self.updater.read(cx).snapshot().badge(),
                 &self.focus_handle,
                 cx,
+            ))
+            .child(render_sidebar_toggle(
+                sidebar.is_some(),
+                self.dock_area
+                    .read(cx)
+                    .dock_size(DockPlacement::Left)
+                    .unwrap_or_default(),
+                &self.focus_handle,
             ))
             .child(
                 h_flex()

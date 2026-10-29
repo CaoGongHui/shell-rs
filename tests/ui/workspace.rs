@@ -248,7 +248,34 @@ async fn quick_connect_finds_saved_hosts_and_connects_one(cx: &mut TestAppContex
     let row = |id: HostId| ("quick-connect-host", id.0);
 
     in_frame(cx, handle, |window, cx| {
-        window.click("recent-quick-connect", cx)
+        let controls = [
+            "toggle-hosts",
+            "title-quick-connect",
+            "temporary-connection",
+            "new-local-terminal",
+        ]
+        .map(|id| window.find(id).bounds());
+        for pair in controls.windows(2) {
+            assert!(pair[0].right() <= pair[1].left());
+            assert_eq!(pair[0].size, pair[1].size);
+        }
+        assert!(
+            (controls[0].left()
+                - window.find("workspace-sidebar").bounds().right()
+                - window.rem_size() * 0.5)
+                .abs()
+                <= px(1.)
+        );
+        assert_eq!(
+            window.find("title-quick-connect").label(),
+            Some("快速连接…")
+        );
+        assert_eq!(
+            window.find("temporary-connection").label(),
+            Some("临时连接…")
+        );
+        assert_eq!(window.find("new-local-terminal").label(), Some("本地终端"));
+        window.click("title-quick-connect", cx)
     });
     in_frame(cx, handle, |window, cx| {
         // Every saved host, by name while none has been connected to.
@@ -1481,4 +1508,83 @@ fn the_tool_sidebar_drags_wider_but_never_narrower_than_it_opens(cx: &mut TestAp
         (narrowed.size.width - opened.size.width).abs() < px(1.),
         "{opened:?} → {narrowed:?}"
     );
+}
+
+/// The title-bar toggle sits just past the actual dock edge, including
+/// after a pointer resize, interface zoom and a hide/show round trip.
+#[gpui_kit::test]
+fn the_sidebar_toggle_tracks_the_host_panel_edge(cx: &mut TestAppContext) {
+    use gpui_kit::component::dock::DockPlacement;
+
+    let (handle, workspace) = open_workspace(cx);
+    let aligned = |cx: &mut TestAppContext| {
+        in_frame(cx, handle, |window, cx| {
+            let button = window.find("toggle-hosts");
+            let panel = window.find("workspace-sidebar").bounds();
+            let gap = window.rem_size() * 0.5;
+            assert!(
+                (button.bounds().left() - panel.right() - gap).abs() <= px(1.),
+                "button {:?}, panel {:?}, gap {:?}",
+                button.bounds(),
+                panel,
+                gap
+            );
+            assert!(button.bounds().left() >= window.find("show-credentials").bounds().right());
+            assert_eq!(button.label(), Some("隐藏侧栏"));
+            let area = workspace.read(cx).dock_area().read(cx);
+            assert!(area.is_dock_open(DockPlacement::Left));
+            (button.bounds(), panel)
+        })
+    };
+    let (opened, panel) = aligned(cx);
+    in_frame(cx, handle, |window, cx| {
+        let from = point(panel.right() - px(2.), panel.center().y);
+        window.drag(from, point(from.x + px(100.), from.y), cx);
+    });
+    let (resized, resized_panel) = aligned(cx);
+    assert!(resized_panel.size.width > panel.size.width + px(80.));
+    assert!(
+        (resized.left() - opened.left() - (resized_panel.right() - panel.right())).abs() <= px(1.)
+    );
+
+    in_frame(cx, handle, |window, cx| window.click("toggle-hosts", cx));
+    in_frame(cx, handle, |window, cx| {
+        let button = window.find("toggle-hosts");
+        assert_eq!(button.label(), Some("显示侧栏"));
+        assert_eq!(button.bounds().left(), resized.left());
+        assert!(
+            !workspace
+                .read(cx)
+                .dock_area()
+                .read(cx)
+                .is_dock_open(DockPlacement::Left)
+        );
+        window.click("toggle-hosts", cx);
+    });
+    aligned(cx);
+    for font_size in [12., 20., 16.] {
+        cx.update(|cx| {
+            workspace
+                .read(cx)
+                .settings()
+                .clone()
+                .update(cx, |store, cx| {
+                    store.update(|settings| settings.interface.font_size = font_size, cx);
+                });
+        });
+        cx.run_until_parked();
+        aligned(cx);
+    }
+    cx.simulate_window_resize(handle.into(), size(px(1000.), px(700.)));
+    aligned(cx);
+    // The panel can be made wider, then dragged back only as far as the
+    // width it opened at. The title-bar toggle follows the clamped edge.
+    in_frame(cx, handle, |window, cx| {
+        let wide = window.find("workspace-sidebar").bounds();
+        let from = point(wide.right() - px(2.), wide.center().y);
+        window.drag(from, point(panel.right() - px(100.), from.y), cx);
+    });
+    let (narrowed_button, narrowed_panel) = aligned(cx);
+    assert_eq!(narrowed_panel.size.width, panel.size.width);
+    assert_eq!(narrowed_button.left(), opened.left());
 }
