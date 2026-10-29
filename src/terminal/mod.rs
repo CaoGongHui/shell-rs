@@ -59,6 +59,7 @@ pub use run::{
     TerminalRun,
 };
 pub use search::{SearchDirection, SearchMark, SearchPosition};
+pub(crate) use terminal_panel::TerminalCopy;
 pub use terminal_panel::{TerminalPanel, TerminalPanelEvent};
 pub(crate) use terminal_view::terminal_key_bindings;
 pub use terminal_view::{

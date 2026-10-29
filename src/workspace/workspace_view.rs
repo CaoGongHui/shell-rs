@@ -28,15 +28,16 @@ use crate::app::{
     CenterTab, ClearTerminal, CloseActiveTab, CloseEditor, CloseExplorer, CloseLocalTerminal,
     CloseSettings, CloseTabs, CloseTerminal, CollapseAllGroups, ConnectGroup, ConnectHost,
     CopyAgentSkill, CopyHostAddress, CopyHostId, CopyTerminal, DeleteGroup, DeleteHost,
-    DisconnectTerminal, DismissTerminalFind, DuplicateHost, EditHost, ExpandAllGroups,
-    ExplorerAction, ExplorerCommand, ExplorerShortcut, FindInTerminal, FindNextInTerminal,
-    FindPreviousInTerminal, FocusSearch, InstallAgentSkill, InstallCliCommand, MaximizeWindow,
-    MoveHostNode, NewChildGroup, NewGroup, NewHost, NewHostInGroup, NewLocalTerminal,
-    NewTemporaryConnection, OpenExplorer, OpenSettings, PasteTerminal, QuickConnect,
-    ReconnectTerminal, RefreshCliIntegration, RemoveAgentSkill, RemoveCliCommand, RenameExplorer,
-    RenameGroup, RenameTerminal, RestartLocalTerminal, RestoreWindow, SelectAllTerminal, SendBreak,
-    SetFileSizeFormat, ShowOrHideApp, ToggleHiddenFiles, ToggleHostPanel, ToggleTheme, ToolKind,
-    ZoomIn, ZoomOut, ZoomReset, ZoomTerminalIn, ZoomTerminalOut, ZoomTerminalReset,
+    DisconnectTerminal, DismissTerminalFind, DuplicateHost, DuplicateTerminal, EditHost,
+    ExpandAllGroups, ExplorerAction, ExplorerCommand, ExplorerShortcut, FindInTerminal,
+    FindNextInTerminal, FindPreviousInTerminal, FocusSearch, InstallAgentSkill, InstallCliCommand,
+    MaximizeWindow, MoveHostNode, NewChildGroup, NewGroup, NewHost, NewHostInGroup,
+    NewLocalTerminal, NewTemporaryConnection, OpenExplorer, OpenSettings, PasteTerminal,
+    QuickConnect, ReconnectTerminal, RefreshCliIntegration, RemoveAgentSkill, RemoveCliCommand,
+    RenameExplorer, RenameGroup, RenameTerminal, RestartLocalTerminal, RestoreWindow,
+    SelectAllTerminal, SendBreak, SetFileSizeFormat, ShowOrHideApp, ToggleHiddenFiles,
+    ToggleHostPanel, ToggleTheme, ToolKind, ZoomIn, ZoomOut, ZoomReset, ZoomTerminalIn,
+    ZoomTerminalOut, ZoomTerminalReset,
 };
 use crate::cli::{CliIntegration, CliServer, IntegrationPaths, SshCliBackend};
 use crate::connection::{
@@ -78,7 +79,7 @@ use crate::terminal::{
     LocalTerminalPanel, LocalTerminalPanelEvent, RemoteTerminalId, SavedName, SearchDirection,
     SharedLocalTerminalTransportProvider, SharedRemoteTerminalTransportProvider,
     SharedSerialTerminalTransportProvider, SharedTelnetTerminalTransportProvider,
-    SharedTerminalTransportFactory, TerminalPanel, TerminalPanelEvent, TerminalView,
+    SharedTerminalTransportFactory, TerminalCopy, TerminalPanel, TerminalPanelEvent, TerminalView,
 };
 use crate::update::{UpdateServices, Updater, UpdaterEvent};
 
@@ -539,8 +540,15 @@ impl Workspace {
         for id in connected {
             let terminal_id = RemoteTerminalId(next_remote_terminal_id);
             next_remote_terminal_id += 1;
-            let (panel, subscription) =
-                new_terminal_panel(&store, host_terminals.clone(), terminal_id, id, window, cx);
+            let (panel, subscription) = new_terminal_panel(
+                &store,
+                host_terminals.clone(),
+                terminal_id,
+                id,
+                None,
+                window,
+                cx,
+            );
             center = center.panel_view(panel_handle(panel.clone()), cx);
             subscriptions.push(subscription);
             let focus = panel.read(cx).focus_handle(cx);
@@ -1260,6 +1268,30 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.open_remote_terminal(host_id, None, window, cx);
+    }
+
+    fn on_duplicate_terminal(
+        &mut self,
+        action: &DuplicateTerminal,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(source) = self.terminals.get(&action.0) else {
+            return;
+        };
+        let source = source.read(cx);
+        let (host_id, copy) = (source.host_id(), source.copy_for_new_tab(cx));
+        self.open_remote_terminal(host_id, Some(copy), window, cx);
+    }
+
+    fn open_remote_terminal(
+        &mut self,
+        host_id: HostId,
+        copy: Option<TerminalCopy>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.store.read(cx).host(host_id).is_none() {
             return;
         }
@@ -1270,6 +1302,7 @@ impl Workspace {
             self.host_terminals.clone(),
             terminal_id,
             host_id,
+            copy,
             window,
             cx,
         );
@@ -2536,11 +2569,16 @@ fn new_terminal_panel(
     transports: HostTerminalTransports,
     terminal_id: RemoteTerminalId,
     host_id: HostId,
+    copy: Option<TerminalCopy>,
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) -> (Entity<TerminalPanel>, Subscription) {
-    let panel = cx
-        .new(|cx| TerminalPanel::new(terminal_id, host_id, store.clone(), transports, window, cx));
+    let panel = cx.new(|cx| match copy {
+        Some(copy) => {
+            TerminalPanel::from_copy(terminal_id, copy, store.clone(), transports, window, cx)
+        }
+        None => TerminalPanel::new(terminal_id, host_id, store.clone(), transports, window, cx),
+    });
     let subscription = cx.subscribe_in(
         &panel,
         window,
@@ -2916,6 +2954,7 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_rename_group))
             .on_action(cx.listener(Self::on_delete_group))
             .on_action(cx.listener(Self::on_connect_host))
+            .on_action(cx.listener(Self::on_duplicate_terminal))
             .on_action(cx.listener(Self::on_connect_group))
             .on_action(cx.listener(Self::on_reconnect_terminal))
             .on_action(cx.listener(Self::on_disconnect_terminal))

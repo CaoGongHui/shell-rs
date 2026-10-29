@@ -284,6 +284,8 @@ id_actions! {
     DisconnectTerminal(RemoteTerminalId);
     /// Open the dialog that gives one remote terminal tab its own title.
     RenameTerminal(RemoteTerminalId);
+    /// Copy an open terminal's connection, tab title and working directory.
+    DuplicateTerminal(RemoteTerminalId);
     /// Hold a serial host's line in the break condition for a moment.
     SendBreak(RemoteTerminalId);
 
