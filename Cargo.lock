@@ -7946,6 +7946,7 @@ version = "0.1.17-beta.1"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
+ "argon2",
  "async-channel",
  "async-io",
  "base64 0.22.1",
@@ -7984,6 +7985,7 @@ dependencies = [
  "shellrs-hosts",
  "shellrs-ssh",
  "shellrs-sync",
+ "subtle",
  "sys-locale",
  "tempfile",
  "tokio",

@@ -747,6 +747,7 @@ impl Render for FindFiles {
             .size_full()
             .bg(theme.background)
             .text_color(theme.foreground)
+            .child(crate::app_lock::activity_tracker(cx))
             .child(
                 TitleBar::new().child(
                     div()
@@ -1374,9 +1375,8 @@ impl ExplorerPanel {
             .map(|find| find.window.into())
     }
 
-    /// The tab is closing, or the main window: its window goes too, or on
-    /// Windows and Linux ShellRS would go on running with only that one.
-    pub(super) fn close_find(&mut self, cx: &mut App) {
+    /// Close the separate search window, when the tab closes or the app locks.
+    pub fn close_find(&mut self, cx: &mut App) {
         if let Some(find) = self.find.take() {
             let _ = find
                 .window

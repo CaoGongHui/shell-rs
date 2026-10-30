@@ -58,6 +58,8 @@ gpui-kit = { version = "0.6.1", features = [
 ] }
 alacritty_terminal = "0.26"
 anyhow = "1"
+argon2 = { version = "0.6", default-features = false, features = ["alloc", "zeroize"] }
+subtle = "2"
 async-channel = "2"
 # A terminal's parser thread waits for output only until a synchronized
 # update has to be drawn.

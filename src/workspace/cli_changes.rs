@@ -65,8 +65,12 @@ impl Workspace {
                     }
                     if let Some(links) = links {
                         crate::app::bring_forward(window, cx);
-                        for link in links {
-                            this.open_link(link, window, cx);
+                        if crate::app_lock::is_locked(cx) {
+                            this.locked_links.extend(links);
+                        } else {
+                            for link in links {
+                                this.open_link(link, window, cx);
+                            }
                         }
                     }
                     change.map(|(change, reply)| (this.apply_cli_change(change, window, cx), reply))

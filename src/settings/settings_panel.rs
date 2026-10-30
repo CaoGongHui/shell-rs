@@ -86,6 +86,7 @@ pub struct SettingsPanel {
     tab_group: Option<WeakEntity<TabGroup>>,
     _subscriptions: [Subscription; 6],
     _font_scan: Task<()>,
+    _lock_subscription: Option<Subscription>,
 }
 
 impl SettingsPanel {
@@ -120,7 +121,10 @@ impl SettingsPanel {
                 cx.notify();
             });
         });
+        let lock_subscription = crate::app_lock::AppLock::global(cx)
+            .map(|lock| cx.observe(&lock, |_, _, cx| cx.notify()));
         Self {
+            _lock_subscription: lock_subscription,
             store,
             integration,
             updater,
@@ -877,7 +881,7 @@ fn sync_groups(panel: &SettingsPanel, cx: &App) -> Vec<SettingGroup> {
 }
 
 /// 应用 → 窗口: what the next launch restores of the main window.
-fn application_groups(panel: &SettingsPanel, _: &App) -> Vec<SettingGroup> {
+fn application_groups(panel: &SettingsPanel, cx: &App) -> Vec<SettingGroup> {
     let store = &panel.store;
     let switch = |read: fn(&WindowSettings) -> bool, write: fn(&mut WindowSettings, bool)| {
         let (reader, writer) = (store.clone(), store.clone());
@@ -912,7 +916,129 @@ fn application_groups(panel: &SettingsPanel, _: &App) -> Vec<SettingGroup> {
                 )
                 .description(t!("settings.window.remember_position_description")),
             ]),
+        app_lock_group(&panel.store, cx),
     ]
+}
+
+fn app_lock_group(store: &Entity<SettingsStore>, cx: &App) -> SettingGroup {
+    use crate::app::{ChangeAppLockPassword, DisableAppLock, EnableAppLock, LockApp};
+    let lock = crate::app_lock::AppLock::global(cx);
+    let enabled = lock.as_ref().is_some_and(|lock| lock.read(cx).is_enabled());
+    let available = lock.is_some();
+    let busy = lock.as_ref().is_some_and(|lock| lock.read(cx).is_busy());
+    let mut items = vec![
+        SettingItem::render(move |_, _, cx| {
+            h_flex()
+                .w_full()
+                .flex_wrap()
+                .gap_3()
+                .justify_between()
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .min_w_0()
+                        .child(div().text_sm().child(if enabled {
+                            t!("app_lock.enabled")
+                        } else {
+                            t!("app_lock.disabled")
+                        }))
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(t!("app_lock.description")),
+                        ),
+                )
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .when(enabled, |row| {
+                            row.child(
+                                Button::new("app-lock-now")
+                                    .label(t!("app_lock.lock_now"))
+                                    .disabled(busy)
+                                    .on_click(|_, window, cx| {
+                                        window.dispatch_action(Box::new(LockApp), cx)
+                                    }),
+                            )
+                            .child(
+                                Button::new("app-lock-change")
+                                    .label(t!("app_lock.change"))
+                                    .disabled(busy)
+                                    .on_click(|_, window, cx| {
+                                        window.dispatch_action(Box::new(ChangeAppLockPassword), cx)
+                                    }),
+                            )
+                            .child(
+                                Button::new("app-lock-disable")
+                                    .label(t!("app_lock.disable"))
+                                    .disabled(busy)
+                                    .on_click(|_, window, cx| {
+                                        window.dispatch_action(Box::new(DisableAppLock), cx)
+                                    }),
+                            )
+                        })
+                        .when(!enabled, |row| {
+                            row.child(
+                                Button::new("app-lock-enable")
+                                    .label(t!("app_lock.enable"))
+                                    .disabled(!available || busy)
+                                    .on_click(|_, window, cx| {
+                                        window.dispatch_action(Box::new(EnableAppLock), cx)
+                                    }),
+                            )
+                        }),
+                )
+        })
+        .keywords(keywords(t!("app_lock.keywords"))),
+    ];
+    if enabled {
+        let (reader, writer) = (store.clone(), store.clone());
+        items.push(
+            SettingItem::new(
+                t!("app_lock.idle_title"),
+                SettingField::number_input(
+                    NumberFieldOptions {
+                        min: 0.,
+                        max: u32::MAX as f64,
+                        step: 1.,
+                    },
+                    move |cx| reader.read(cx).settings().app_lock_idle_minutes as f64,
+                    move |minutes: f64, cx| {
+                        writer.update(cx, |store, cx| {
+                            store.update(
+                                |settings| settings.app_lock_idle_minutes = minutes.round() as u32,
+                                cx,
+                            )
+                        })
+                    },
+                )
+                .default_value(0.),
+            )
+            .description(t!("app_lock.idle_description"))
+            .disabled(busy)
+            .keywords(keywords(t!("app_lock.keywords"))),
+        );
+        let (reader, writer) = (store.clone(), store.clone());
+        items.push(
+            SettingItem::new(
+                t!("app_lock.allow_cli"),
+                SettingField::switch(
+                    move |cx| reader.read(cx).settings().app_lock_allow_cli,
+                    move |allowed, cx| {
+                        writer.update(cx, |store, cx| {
+                            store.update(|settings| settings.app_lock_allow_cli = allowed, cx)
+                        })
+                    },
+                )
+                .default_value(false),
+            )
+            .description(t!("app_lock.allow_cli_description"))
+            .disabled(busy)
+            .keywords(keywords(t!("app_lock.keywords"))),
+        );
+    }
+    SettingGroup::new().title(t!("app_lock.title")).items(items)
 }
 
 /// 外部 CLI: whether the `shellrs` command may use the saved hosts, the

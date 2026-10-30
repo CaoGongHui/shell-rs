@@ -198,6 +198,7 @@ pub struct Workspace {
     /// Answers the `shellrs` command. Production only: UI tests never
     /// listen on the real socket.
     pub(super) cli_server: Option<CliServer>,
+    pub(super) locked_links: Vec<crate::cli::OpenLink>,
     /// Looks for, downloads and installs newer versions. Without services
     /// in UI tests, so it never reaches the network unless a test hands it
     /// fakes.
@@ -260,6 +261,17 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        Self::new_with_cli_server(store, settings, None, window, cx)
+    }
+
+    /// Take over the activation listener reserved by the startup password gate.
+    pub fn new_with_cli_server(
+        store: Entity<HostStore>,
+        settings: Entity<SettingsStore>,
+        server: Option<CliServer>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let connector = crate::ssh::SshConnector::new(
             crate::app::data_dir().join("known_hosts"),
             crate::secrets::KeychainSource::shared(store.read(cx).secrets()),
@@ -296,10 +308,15 @@ impl Workspace {
             integration.update_outdated(cx);
         });
         let secrets = this.store.read(cx).secrets();
-        match CliServer::start(
-            crate::app::cli_socket_path(),
-            Arc::new(SshCliBackend::new(connector, sftp, secrets)),
-        ) {
+        let backend = Arc::new(SshCliBackend::new(connector, sftp, secrets));
+        let server = match server {
+            Some(server) => {
+                server.set_backend(backend);
+                Ok(server)
+            }
+            None => CliServer::start(crate::app::cli_socket_path(), backend),
+        };
+        match server {
             Ok(server) => {
                 this.cli_server = Some(server);
                 this.serve_cli(window, cx);
@@ -334,7 +351,12 @@ impl Workspace {
     /// the hosts as they are now.
     fn sync_cli_server(&self, cx: &App) {
         if let Some(server) = &self.cli_server {
-            server.set_enabled(self.settings.read(cx).settings().external_cli.enabled);
+            server.set_enabled(
+                self.settings
+                    .read(cx)
+                    .settings()
+                    .is_external_cli_allowed(crate::app_lock::is_locked(cx)),
+            );
             server.set_hosts(self.store.read(cx));
         }
     }
@@ -637,6 +659,18 @@ impl Workspace {
         // Settled before the first `LayoutChanged` arrives, so the handler
         // does not take the initial state for a tab having just closed.
         skin.set_center_empty(center_empty, cx);
+        if let Some(lock) = crate::app_lock::AppLock::global(cx) {
+            lock.update(cx, |lock, cx| lock.record_activity(cx));
+            Self::watch_idle_lock(lock.clone(), window, cx);
+            subscriptions.push(cx.observe_in(&lock, window, |this, _, window, cx| {
+                this.sync_cli_server(cx);
+                if !crate::app_lock::is_locked(cx) {
+                    for link in std::mem::take(&mut this.locked_links) {
+                        this.open_link(link, window, cx);
+                    }
+                }
+            }));
+        }
         // Rules marked to start with the application. What they need to ask
         // arrives as events, once the workspace is there to show it.
         forwards.update(cx, |forwards, cx| forwards.start_automatic(cx));
@@ -661,6 +695,7 @@ impl Workspace {
             settings,
             cli_integration: cx.new(|_| CliIntegration::new(None)),
             cli_server: None,
+            locked_links: Vec::new(),
             updater,
             sync,
             analytics: None,
@@ -942,7 +977,10 @@ impl Workspace {
                         if this.prompt_queue.is_empty() {
                             return true;
                         }
-                        if this.active_prompt.is_some() || window.has_active_dialog(cx) {
+                        if crate::app_lock::is_locked(cx)
+                            || this.active_prompt.is_some()
+                            || window.has_active_dialog(cx)
+                        {
                             return false;
                         }
                         this.open_next_prompt(window, cx);
@@ -2976,6 +3014,10 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::on_editor_action))
             .on_action(cx.listener(Self::on_editor_shortcut))
             .on_action(cx.listener(Self::on_close_local_terminal))
+            .on_action(cx.listener(Self::on_enable_app_lock))
+            .on_action(cx.listener(Self::on_change_app_lock_password))
+            .on_action(cx.listener(Self::on_disable_app_lock))
+            .on_action(cx.listener(Self::on_lock_app))
             .on_action(cx.listener(Self::on_open_settings))
             .on_action(cx.listener(Self::on_install_cli_command))
             .on_action(cx.listener(Self::on_remove_cli_command))

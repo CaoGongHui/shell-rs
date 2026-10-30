@@ -67,6 +67,10 @@ pub struct AppSettings {
     pub terminal_highlight: TerminalHighlightSettings,
     /// 应用 → 窗口.
     pub window: WindowSettings,
+    /// 应用 → 应用锁: zero disables locking after inactivity.
+    pub app_lock_idle_minutes: u32,
+    /// Keep the external CLI available behind the password gate, if enabled.
+    pub app_lock_allow_cli: bool,
     /// 键盘快捷键: what the user changed of them.
     pub shortcuts: ShortcutOverrides,
 }
@@ -497,6 +501,11 @@ impl Choice for RightClick {
 }
 
 impl AppSettings {
+    /// The global CLI switch always applies, including behind the password gate.
+    pub fn is_external_cli_allowed(&self, locked: bool) -> bool {
+        self.external_cli.enabled && (!locked || self.app_lock_allow_cli)
+    }
+
     /// The settings with every number in the range the app accepts. Applied
     /// to what the file holds and to every change, so neither a hand-edited
     /// file nor a typed value can give the terminal a size of zero.
@@ -695,6 +704,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn app_lock_cli_access_requires_the_global_switch_and_explicit_permission() {
+        for enabled in [false, true] {
+            for allowed in [false, true] {
+                let mut settings = AppSettings::default();
+                settings.external_cli.enabled = enabled;
+                settings.app_lock_allow_cli = allowed;
+                assert_eq!(settings.is_external_cli_allowed(false), enabled);
+                assert_eq!(settings.is_external_cli_allowed(true), enabled && allowed);
+            }
+        }
+    }
+
+    #[test]
     fn the_file_spells_each_value_as_its_key() {
         fn check<T: Choice + Serialize + for<'de> Deserialize<'de> + std::fmt::Debug>() {
             for &choice in T::ALL {
@@ -716,6 +738,8 @@ mod tests {
     fn a_file_missing_a_setting_keeps_its_default() {
         let settings: AppSettings = serde_json::from_str(r#"{"appearance":"dark"}"#).unwrap();
         assert_eq!(settings.appearance, Appearance::Dark);
+        assert_eq!(settings.app_lock_idle_minutes, 0);
+        assert!(!settings.app_lock_allow_cli);
         assert_eq!(settings.language, InterfaceLanguage::default());
         let settings: AppSettings = serde_json::from_str(r#"{"later":1}"#).unwrap();
         assert_eq!(settings, AppSettings::default());

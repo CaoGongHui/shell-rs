@@ -165,6 +165,14 @@ gpui_kit::actions!(
         PreviousTab,
         /// Open the settings tab, or bring it forward if it is already open.
         OpenSettings,
+        /// Set the application password.
+        EnableAppLock,
+        /// Change the application password after verifying the current one.
+        ChangeAppLockPassword,
+        /// Disable the application password after verifying it.
+        DisableAppLock,
+        /// Hide the workspace until the application password is entered.
+        LockApp,
         /// Close the settings tab.
         CloseSettings,
         /// Increase the application base font (interface zoom).
