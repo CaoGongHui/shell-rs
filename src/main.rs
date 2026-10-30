@@ -70,9 +70,10 @@ fn main() {
                     // Drawn by the processor (a virtual machine without 3D),
                     // ShellRS draws fewer frames.
                     shellrs::app::note_renderer(window, cx);
-                    let lock = cx.new(|_| {
-                        shellrs::app_lock::AppLock::load(
-                            shellrs::app::data_dir().join("app-lock.json"),
+                    let lock = cx.new(|cx| {
+                        shellrs::app_lock::AppLock::new(
+                            std::sync::Arc::new(shellrs::app_lock::KeychainLockStore),
+                            cx,
                         )
                     });
                     shellrs::app_lock::AppLock::install(lock.clone(), cx);

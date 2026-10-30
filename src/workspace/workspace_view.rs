@@ -351,11 +351,15 @@ impl Workspace {
     /// the hosts as they are now.
     fn sync_cli_server(&self, cx: &App) {
         if let Some(server) = &self.cli_server {
+            let ready =
+                crate::app_lock::AppLock::global(cx).is_none_or(|lock| lock.read(cx).is_ready());
             server.set_enabled(
-                self.settings
-                    .read(cx)
-                    .settings()
-                    .is_external_cli_allowed(crate::app_lock::is_locked(cx)),
+                ready
+                    && self
+                        .settings
+                        .read(cx)
+                        .settings()
+                        .is_external_cli_allowed(crate::app_lock::is_locked(cx)),
             );
             server.set_hosts(self.store.read(cx));
         }

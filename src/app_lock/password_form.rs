@@ -258,13 +258,19 @@ pub fn open_password_dialog(
 pub struct UnlockScreen {
     service: Entity<AppLock>,
     form: Entity<PasswordForm>,
+    _subscription: Subscription,
 }
 
 impl UnlockScreen {
     pub fn new(service: Entity<AppLock>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let form =
             cx.new(|cx| PasswordForm::new(service.clone(), PasswordOperation::Unlock, window, cx));
-        Self { service, form }
+        let subscription = cx.observe(&service, |_, _, cx| cx.notify());
+        Self {
+            service,
+            form,
+            _subscription: subscription,
+        }
     }
 
     pub fn focus(&self, window: &mut Window, cx: &mut App) {
@@ -274,6 +280,7 @@ impl UnlockScreen {
 
 impl Render for UnlockScreen {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let loading = self.service.read(cx).is_loading();
         let error = self
             .service
             .read(cx)
@@ -313,18 +320,36 @@ impl Render for UnlockScreen {
                                     .text_color(cx.theme().muted_foreground)
                                     .child(t!("app_lock.unlock_description")),
                             )
-                            .map(|view| match error {
-                                Some(error) => view.child(
+                            .map(|view| match (loading, error) {
+                                (true, _) => view.child(
                                     div()
-                                        .id("app-lock-load-error")
+                                        .id("app-lock-loading")
                                         .test_support()
-                                        .role(Role::Alert)
-                                        .aria_label(error.clone())
+                                        .role(Role::Status)
                                         .text_sm()
-                                        .text_color(cx.theme().danger)
-                                        .child(error),
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(t!("app_lock.loading")),
                                 ),
-                                None => view.child(self.form.clone()),
+                                (false, Some(error)) => view
+                                    .child(
+                                        div()
+                                            .id("app-lock-load-error")
+                                            .test_support()
+                                            .role(Role::Alert)
+                                            .aria_label(error.clone())
+                                            .text_sm()
+                                            .text_color(cx.theme().danger)
+                                            .child(error),
+                                    )
+                                    .child(
+                                        Button::new("app-lock-retry")
+                                            .label(t!("app_lock.retry"))
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                this.service
+                                                    .update(cx, |service, cx| service.reload(cx))
+                                            })),
+                                    ),
+                                (false, None) => view.child(self.form.clone()),
                             }),
                     ),
             )

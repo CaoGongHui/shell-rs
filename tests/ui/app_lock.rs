@@ -1,24 +1,24 @@
-//! Exercise the real startup shell, settings and password gate, using only
-//! temporary files and injected workspace transports.
+//! Exercise the real startup shell, settings and password gate with isolated
+//! keychain records and injected workspace transports.
 use crate::support::*;
 use gpui_kit::AnyView;
-use shellrs::app_lock::AppLock;
+use shellrs::app_lock::{AppLock, InMemoryLockStore, LockRecordStore};
 use shellrs::workspace::AppShell;
 use std::cell::Cell;
 use std::rc::Rc;
 
 fn open_locked_workspace(
     cx: &mut TestAppContext,
-    path: std::path::PathBuf,
+    records: Arc<dyn LockRecordStore>,
 ) -> (WindowHandle<Root>, Entity<AppLock>, Rc<Cell<usize>>) {
     let (handle, lock, created, _) =
-        open_locked_workspace_with_settings(cx, path, settings_store());
+        open_locked_workspace_with_settings(cx, records, settings_store());
     (handle, lock, created)
 }
 
 fn open_locked_workspace_with_settings(
     cx: &mut TestAppContext,
-    path: std::path::PathBuf,
+    records: Arc<dyn LockRecordStore>,
     settings: SettingsStore,
 ) -> (
     WindowHandle<Root>,
@@ -31,7 +31,7 @@ fn open_locked_workspace_with_settings(
     }
     cx.update(|cx| cx.set_reduce_motion(true));
     let lock = cx.update(|cx| {
-        let lock = cx.new(|_| AppLock::load(path));
+        let lock = cx.new(|cx| AppLock::new(records, cx));
         AppLock::install(lock.clone(), cx);
         lock
     });
@@ -77,6 +77,7 @@ fn open_locked_workspace_with_settings(
         });
         Root::new(shell, window, cx)
     });
+    cx.run_until_parked();
     (handle, lock, created, settings)
 }
 
@@ -103,9 +104,8 @@ fn wait_for_password(cx: &mut TestAppContext, lock: &Entity<AppLock>) {
 
 #[gpui_kit::test]
 fn app_lock_settings_and_startup_gate(cx: &mut TestAppContext) {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("app-lock.json");
-    let (handle, lock, created) = open_locked_workspace(cx, path.clone());
+    let records = Arc::new(InMemoryLockStore::default());
+    let (handle, lock, created) = open_locked_workspace(cx, records.clone());
     assert_eq!(created.get(), 1);
     app_settings(cx, handle);
     in_frame(cx, handle, |window, cx| window.click("app-lock-enable", cx));
@@ -127,7 +127,7 @@ fn app_lock_settings_and_startup_gate(cx: &mut TestAppContext) {
         window.click("app-lock-commit", cx);
     });
     wait_for_password(cx, &lock);
-    assert!(path.exists());
+    assert!(records.read().unwrap().is_some());
     // Closing a dialog loses focus; clicking the settings field restores it.
     in_frame(cx, handle, |window, cx| window.click("app-lock-now", cx));
     in_frame(cx, handle, |window, cx| {
@@ -166,7 +166,7 @@ fn app_lock_settings_and_startup_gate(cx: &mut TestAppContext) {
     wait_for_password(cx, &lock);
 
     // A fresh launch has no workspace until the password is accepted.
-    let (reopened, fresh_lock, fresh_created) = open_locked_workspace(cx, path);
+    let (reopened, fresh_lock, fresh_created) = open_locked_workspace(cx, records.clone());
     cx.update(|_| shellrs::i18n::set_locale("en"));
     assert_eq!(fresh_created.get(), 0);
     in_frame(cx, reopened, |window, cx| {
@@ -201,11 +201,10 @@ fn app_lock_settings_and_startup_gate(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn a_broken_lock_file_never_opens_the_workspace(cx: &mut TestAppContext) {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("app-lock.json");
-    std::fs::write(&path, b"broken").unwrap();
-    let (handle, _, created) = open_locked_workspace(cx, path);
+fn a_broken_keychain_record_never_opens_the_workspace(cx: &mut TestAppContext) {
+    let records = Arc::new(InMemoryLockStore::default());
+    records.write("broken").unwrap();
+    let (handle, _, created) = open_locked_workspace(cx, records);
     in_frame(cx, handle, |window, cx| {
         assert!(window.find("app-lock-load-error").visible());
         assert!(window.try_find("app-lock-unlock").is_none());
@@ -221,8 +220,7 @@ fn app_lock_idle_timeout_tracks_input_and_restarts_after_unlock(cx: &mut TestApp
     use gpui_kit::ScrollDelta;
     use std::time::Duration;
 
-    let dir = tempfile::tempdir().unwrap();
-    let (handle, lock, _) = open_locked_workspace(cx, dir.path().join("app-lock.json"));
+    let (handle, lock, _) = open_locked_workspace(cx, Arc::new(InMemoryLockStore::default()));
     app_settings(cx, handle);
     in_frame(cx, handle, |window, _| {
         assert!(
@@ -313,12 +311,11 @@ fn app_lock_idle_timeout_tracks_input_and_restarts_after_unlock(cx: &mut TestApp
 
 #[gpui_kit::test]
 fn app_lock_allows_background_cli_only_when_explicitly_enabled(cx: &mut TestAppContext) {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("app-lock.json");
+    let records = Arc::new(InMemoryLockStore::default());
     let mut configured = settings_store();
     configured.update_unnotified(|settings| settings.external_cli.enabled = true);
     let (handle, lock, _, settings) =
-        open_locked_workspace_with_settings(cx, path.clone(), configured);
+        open_locked_workspace_with_settings(cx, records.clone(), configured);
     app_settings(cx, handle);
     in_frame(cx, handle, |window, cx| window.click("app-lock-enable", cx));
     in_frame(cx, handle, |window, cx| {
@@ -378,7 +375,7 @@ fn app_lock_allows_background_cli_only_when_explicitly_enabled(cx: &mut TestAppC
         settings
     };
     let (restarted, restart_lock, created, _) =
-        open_locked_workspace_with_settings(cx, path.clone(), configured());
+        open_locked_workspace_with_settings(cx, records.clone(), configured());
     assert_eq!(created.get(), 1);
     cx.update(|cx| assert!(restart_lock.read(cx).is_locked()));
     in_frame(cx, restarted, |window, cx| {
@@ -399,19 +396,95 @@ fn app_lock_allows_background_cli_only_when_explicitly_enabled(cx: &mut TestAppC
     });
     let mut cli_off = configured();
     cli_off.update_unnotified(|settings| settings.external_cli.enabled = false);
-    let (_, _, created, _) = open_locked_workspace_with_settings(cx, path, cli_off);
+    let (_, _, created, _) = open_locked_workspace_with_settings(cx, records, cli_off);
     assert_eq!(
         created.get(),
         0,
         "the global CLI switch still applies at startup"
     );
 
-    let corrupt = dir.path().join("corrupt-lock.json");
-    std::fs::write(&corrupt, b"broken").unwrap();
+    let corrupt = Arc::new(InMemoryLockStore::default());
+    corrupt.write("broken").unwrap();
     let (_, _, created, _) = open_locked_workspace_with_settings(cx, corrupt, configured());
     assert_eq!(
         created.get(),
         0,
         "an unreadable lock never authorizes background startup"
     );
+}
+
+#[derive(Default)]
+struct UnavailableKeychain {
+    denied: std::sync::atomic::AtomicBool,
+    memory: InMemoryLockStore,
+}
+
+impl LockRecordStore for UnavailableKeychain {
+    fn read(&self) -> anyhow::Result<Option<zeroize::Zeroizing<String>>> {
+        anyhow::ensure!(
+            !self.denied.load(std::sync::atomic::Ordering::SeqCst),
+            "keychain access denied"
+        );
+        self.memory.read()
+    }
+    fn write(&self, record: &str) -> anyhow::Result<()> {
+        self.memory.write(record)
+    }
+}
+
+#[gpui_kit::test]
+fn app_lock_keychain_failure_blocks_background_startup_and_retry_recovers(cx: &mut TestAppContext) {
+    let mut settings = settings_store();
+    settings.update_unnotified(|settings| {
+        settings.external_cli.enabled = true;
+        settings.app_lock_allow_cli = true;
+    });
+    let records = Arc::new(UnavailableKeychain::default());
+    let (prepared, prepared_lock, _, _) =
+        open_locked_workspace_with_settings(cx, records.clone(), settings_store());
+    app_settings(cx, prepared);
+    in_frame(cx, prepared, |window, cx| {
+        window.click("app-lock-enable", cx)
+    });
+    in_frame(cx, prepared, |window, cx| {
+        enter(window, "app-lock-new-password", "retry password", cx);
+        enter(window, "app-lock-repeat-password", "retry password", cx);
+        window.click("app-lock-commit", cx);
+    });
+    wait_for_password(cx, &prepared_lock);
+    records
+        .denied
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let (handle, lock, created, _) =
+        open_locked_workspace_with_settings(cx, records.clone(), settings);
+    assert_eq!(created.get(), 0);
+    cx.update(|cx| {
+        assert!(lock.read(cx).is_locked());
+        assert!(!lock.read(cx).is_ready());
+    });
+    in_frame(cx, handle, |window, _| {
+        assert!(window.find("app-lock-load-error").visible());
+        assert!(window.find("app-lock-retry").visible());
+        assert!(window.try_find("app-lock-unlock").is_none());
+        assert!(window.try_find("host-search").is_none());
+    });
+    records
+        .denied
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    in_frame(cx, handle, |window, cx| window.click("app-lock-retry", cx));
+    assert_eq!(created.get(), 1);
+    cx.update(|cx| {
+        assert!(lock.read(cx).is_ready());
+        assert!(lock.read(cx).is_locked());
+    });
+    in_frame(cx, handle, |window, cx| {
+        assert!(window.try_find("app-lock-load-error").is_none());
+        enter(window, "app-lock-password", "retry password", cx);
+        window.click("app-lock-unlock", cx);
+    });
+    wait_for_password(cx, &lock);
+    in_frame(cx, handle, |window, _| {
+        assert!(window.find("host-search").visible());
+        assert!(window.try_find("app-lock-screen").is_none());
+    });
 }

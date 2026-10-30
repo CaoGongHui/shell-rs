@@ -18,6 +18,7 @@ pub struct AppShell {
     pending_links: Vec<OpenLink>,
     previous_focus: Option<FocusHandle>,
     was_locked: bool,
+    background_cli: bool,
     _subscription: Subscription,
 }
 
@@ -44,12 +45,9 @@ impl AppShell {
             pending_links: Vec::new(),
             previous_focus: None,
             was_locked: locked,
+            background_cli,
             _subscription: subscription,
         };
-        if locked && background_cli && this.lock.read(cx).load_error().is_none() {
-            this.create_workspace(window, cx);
-            this.previous_focus = window.focused(cx);
-        }
         this.sync(window, cx);
         // Keep second launches working while the workspace does not exist.
         cx.spawn_in(window, async move |this, cx| {
@@ -102,15 +100,21 @@ impl AppShell {
     }
 
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let locked = self.lock.read(cx).is_locked();
+        let lock = self.lock.read(cx);
+        let locked = lock.is_locked();
+        let ready = lock.is_ready();
+        if ready && self.content.is_none() && (!locked || self.background_cli) {
+            self.create_workspace(window, cx);
+            if locked {
+                self.previous_focus = window.focused(cx);
+            }
+        }
         if locked {
             if !self.was_locked {
                 self.previous_focus = window.focused(cx);
             }
             self.unlock
                 .update(cx, |screen, cx| screen.focus(window, cx));
-        } else if self.content.is_none() {
-            self.create_workspace(window, cx);
         } else if self.was_locked
             && let Some(focus) = self.previous_focus.take()
         {

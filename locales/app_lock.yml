@@ -85,8 +85,8 @@ app_lock.save_failed:
   zh-CN: 未能保存应用锁，原有设置保持不变：%{error}
   en: "Could not save app lock. Its previous settings are unchanged: %{error}"
 app_lock.load_failed:
-  zh-CN: 无法读取应用锁配置，暂时无法解锁。请检查数据目录的访问权限并重新启动：%{error}
-  en: "Could not read the app lock configuration. Check access to the data folder and restart: %{error}"
+  zh-CN: 无法读取系统钥匙串中的应用锁，暂时无法进入。请允许钥匙串访问后重试：%{error}
+  en: "Could not read app lock from the system keychain. Allow keychain access and retry: %{error}"
 app_lock.keywords:
   zh-CN: 应用锁,密码,安全,启动,解锁,锁定
   en: app lock,password,security,startup,unlock,lock
@@ -108,3 +108,10 @@ app_lock.allow_cli:
 app_lock.allow_cli_description:
   zh-CN: 需先启用外部 CLI。界面锁定时后台 Agent 仍可通过 CLI 工作。
   en: Requires external CLI to be enabled. Lets background agents use the CLI while the interface is locked.
+
+app_lock.loading:
+  zh-CN: 正在读取系统钥匙串…
+  en: Reading the system keychain…
+app_lock.retry:
+  zh-CN: 重试
+  en: Retry

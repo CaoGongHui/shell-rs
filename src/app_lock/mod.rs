@@ -3,11 +3,13 @@
 mod activity;
 mod password;
 mod password_form;
+mod storage;
+pub use storage::{InMemoryLockStore, KeychainLockStore, LockRecordStore};
 
 pub use activity::activity_tracker;
 use gpui_kit::*;
 use std::{
-    path::PathBuf,
+    sync::Arc,
     time::{Duration, Instant},
 };
 use zeroize::Zeroizing;
@@ -41,7 +43,8 @@ impl PasswordFailure {
 }
 
 pub struct AppLock {
-    path: Option<PathBuf>,
+    store: Arc<dyn LockRecordStore>,
+    loading: bool,
     verifier: Option<Verifier>,
     load_error: Option<String>,
     locked: bool,
@@ -55,36 +58,60 @@ struct LockGlobal(Entity<AppLock>);
 impl Global for LockGlobal {}
 
 impl AppLock {
-    /// Load only the verifier. This does not read hosts, secrets or settings.
-    pub fn load(path: PathBuf) -> Self {
-        let loaded = password::load(&path);
-        let locked = !matches!(loaded, Ok(None));
-        let (verifier, load_error) = match loaded {
-            Ok(verifier) => (verifier, None),
-            Err(error) => (None, Some(error.to_string())),
-        };
-        Self {
-            path: Some(path),
-            verifier,
-            load_error,
-            locked,
-            busy: false,
-            last_activity: None,
-            _keyboard_activity: None,
-        }
-    }
-
-    /// Isolated state for UI integration tests; never reads the user's files.
-    pub fn in_memory() -> Self {
-        Self {
-            path: None,
+    /// Start locked while the keychain is checked on a worker. No host data or
+    /// background CLI may be opened until this check has finished successfully.
+    pub fn new(store: Arc<dyn LockRecordStore>, cx: &mut Context<Self>) -> Self {
+        let mut this = Self {
+            store,
+            loading: false,
             verifier: None,
             load_error: None,
-            locked: false,
+            locked: true,
             busy: false,
             last_activity: None,
             _keyboard_activity: None,
+        };
+        this.reload(cx);
+        this
+    }
+
+    pub fn is_loading(&self) -> bool {
+        self.loading
+    }
+
+    pub fn is_ready(&self) -> bool {
+        !self.loading && self.load_error.is_none()
+    }
+
+    pub fn reload(&mut self, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
         }
+        self.loading = true;
+        self.busy = true;
+        self.locked = true;
+        self.load_error = None;
+        cx.notify();
+        let store = self.store.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move { storage::load(store.as_ref()) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.loading = false;
+                this.busy = false;
+                match result {
+                    Ok(verifier) => {
+                        this.locked = verifier.is_some();
+                        this.verifier = verifier;
+                        this.record_activity(cx);
+                    }
+                    Err(error) => this.load_error = Some(format!("{error:#}")),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub fn install(lock: Entity<Self>, cx: &mut App) {
@@ -105,7 +132,7 @@ impl AppLock {
         self.locked
     }
     pub fn is_enabled(&self) -> bool {
-        self.verifier.is_some() || self.load_error.is_some()
+        self.loading || self.verifier.is_some() || self.load_error.is_some()
     }
     pub fn is_busy(&self) -> bool {
         self.busy
@@ -167,7 +194,7 @@ impl AppLock {
         self.busy = true;
         cx.notify();
         let verifier = self.verifier.clone();
-        let path = self.path.clone();
+        let store = self.store.clone();
         // Keep the service alive even if its dialog is dismissed during work.
         let service = cx.entity();
         cx.spawn(async move |_, cx| {
@@ -188,10 +215,8 @@ impl AppLock {
                         PasswordOperation::Disable => None,
                         PasswordOperation::Unlock => verifier,
                     };
-                    if operation != PasswordOperation::Unlock
-                        && let Some(path) = path
-                    {
-                        password::save(&path, next.as_ref())
+                    if operation != PasswordOperation::Unlock {
+                        storage::save(store.as_ref(), next.as_ref())
                             .map_err(|error| PasswordFailure::Save(error.to_string()))?;
                     }
                     Ok(next)
@@ -218,9 +243,17 @@ pub fn is_locked(cx: &App) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppLock, PasswordOperation};
+    use super::storage::tests::FailingStore;
+    use super::{AppLock, InMemoryLockStore, LockRecordStore, PasswordOperation};
     use gpui_kit::{AppContext as _, Entity, TestAppContext};
+    use std::sync::{Arc, atomic::Ordering};
     use zeroize::Zeroizing;
+
+    fn open(cx: &mut TestAppContext, store: Arc<dyn LockRecordStore>) -> Entity<AppLock> {
+        let lock = cx.update(|cx| cx.new(|cx| AppLock::new(store, cx)));
+        cx.run_until_parked();
+        lock
+    }
 
     fn submit(
         cx: &mut TestAppContext,
@@ -244,9 +277,8 @@ mod tests {
 
     #[gpui_kit::test]
     fn password_lifecycle_survives_restart_and_rejects_wrong_passwords(cx: &mut TestAppContext) {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("app-lock.json");
-        let lock = cx.update(|cx| cx.new(|_| AppLock::load(path.clone())));
+        let store = Arc::new(InMemoryLockStore::default());
+        let lock = open(cx, store.clone());
         assert!(!submit(cx, &lock, PasswordOperation::Enable, "", "short"));
         assert!(submit(
             cx,
@@ -255,7 +287,7 @@ mod tests {
             "",
             "first password"
         ));
-        let lock = cx.update(|cx| cx.new(|_| AppLock::load(path.clone())));
+        let lock = open(cx, store.clone());
         cx.update(|cx| assert!(lock.read(cx).is_locked()));
         assert!(!submit(
             cx,
@@ -301,7 +333,7 @@ mod tests {
             "first password",
             "second password"
         ));
-        let lock = cx.update(|cx| cx.new(|_| AppLock::load(path.clone())));
+        let lock = open(cx, store.clone());
         assert!(!submit(
             cx,
             &lock,
@@ -323,16 +355,17 @@ mod tests {
             "second password",
             ""
         ));
-        let restarted = AppLock::load(path);
-        assert!(!restarted.is_enabled());
-        assert!(!restarted.is_locked());
+        let restarted = open(cx, store);
+        cx.update(|cx| {
+            assert!(!restarted.read(cx).is_enabled());
+            assert!(!restarted.read(cx).is_locked());
+        });
     }
 
     #[gpui_kit::test]
-    fn failed_writes_keep_the_original_lock_and_corruption_fails_closed(cx: &mut TestAppContext) {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("app-lock.json");
-        let lock = cx.update(|cx| cx.new(|_| AppLock::load(path.clone())));
+    fn failed_keychain_writes_keep_the_original_lock(cx: &mut TestAppContext) {
+        let store = Arc::new(FailingStore::default());
+        let lock = open(cx, store.clone());
         assert!(submit(
             cx,
             &lock,
@@ -340,8 +373,8 @@ mod tests {
             "",
             "first password"
         ));
-        std::fs::remove_file(&path).unwrap();
-        std::fs::create_dir(&path).unwrap();
+        let saved = store.memory.read().unwrap().unwrap();
+        store.fail_write.store(true, Ordering::SeqCst);
         assert!(!submit(
             cx,
             &lock,
@@ -356,10 +389,11 @@ mod tests {
             "first password",
             "second password"
         ));
-        cx.update(|cx| {
-            assert!(lock.read(cx).is_enabled());
-            lock.update(cx, |lock, cx| lock.lock(cx));
-        });
+        assert_eq!(
+            store.memory.read().unwrap().unwrap().as_str(),
+            saved.as_str()
+        );
+        cx.update(|cx| lock.update(cx, |lock, cx| lock.lock(cx)));
         assert!(submit(
             cx,
             &lock,
@@ -367,8 +401,37 @@ mod tests {
             "first password",
             ""
         ));
-        let unreadable = AppLock::load(path);
-        assert!(unreadable.is_locked());
-        assert!(unreadable.load_error().is_some());
+        assert!(open(cx, store).read_with(cx, |lock, _| lock.is_locked()));
+    }
+
+    #[gpui_kit::test]
+    fn loading_and_keychain_read_failures_remain_locked_until_retry(cx: &mut TestAppContext) {
+        let store = Arc::new(FailingStore::default());
+        store.fail_read.store(true, Ordering::SeqCst);
+        let lock = cx.update(|cx| cx.new(|cx| AppLock::new(store.clone(), cx)));
+        cx.update(|cx| {
+            assert!(lock.read(cx).is_loading());
+            assert!(lock.read(cx).is_locked());
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert!(!lock.read(cx).is_loading());
+            assert!(lock.read(cx).is_locked());
+            assert!(lock.read(cx).load_error().is_some());
+        });
+        assert!(!submit(
+            cx,
+            &lock,
+            PasswordOperation::Enable,
+            "",
+            "new password"
+        ));
+        store.fail_read.store(false, Ordering::SeqCst);
+        cx.update(|cx| lock.update(cx, |lock, cx| lock.reload(cx)));
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert!(lock.read(cx).load_error().is_none());
+            assert!(!lock.read(cx).is_locked());
+        });
     }
 }
