@@ -1084,6 +1084,12 @@ mod tests {
             TerminalCursorStyle::Underline
         );
         assert!(!settings.terminal_interaction.cursor_blinking);
+        // 中键粘贴 is on for a settings file from before it existed.
+        assert!(settings.terminal_interaction.middle_click_paste);
+        let settings: AppSettings =
+            serde_json::from_str(r#"{"terminal_interaction":{"middle_click_paste":false}}"#)
+                .unwrap();
+        assert!(!settings.terminal_interaction.middle_click_paste);
     }
 
     #[test]

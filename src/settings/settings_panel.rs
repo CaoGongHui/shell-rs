@@ -547,6 +547,36 @@ fn interaction_group(store: &Entity<SettingsStore>) -> SettingGroup {
                 )
                 .default_value(true),
             ),
+            SettingItem::new(
+                t!("settings.interaction.middle_click_paste"),
+                SettingField::switch(
+                    {
+                        let reader = store.clone();
+                        move |cx| {
+                            reader
+                                .read(cx)
+                                .settings()
+                                .terminal_interaction
+                                .middle_click_paste
+                        }
+                    },
+                    {
+                        let writer = store.clone();
+                        move |on, cx| {
+                            writer.update(cx, |store, cx| {
+                                store.update(
+                                    |settings| {
+                                        settings.terminal_interaction.middle_click_paste = on
+                                    },
+                                    cx,
+                                )
+                            });
+                        }
+                    },
+                )
+                .default_value(true),
+            )
+            .description(t!("settings.interaction.middle_click_paste_description")),
         ])
 }
 
