@@ -286,6 +286,12 @@ fn secret_failure(secret: &SecretRef, writing: bool) -> fn(&str) -> SharedString
         (SecretRef::SyncKeyring | SecretRef::SyncLogin, _) => {
             |error| t!("host.store.secret.sync_keyring", error = error)
         }
+        (SecretRef::LoginScript { .. }, true) => {
+            |error| t!("host.store.secret.login_script_write", error = error)
+        }
+        (SecretRef::LoginScript { .. }, false) => {
+            |error| t!("host.store.secret.login_script_delete", error = error)
+        }
     }
 }
 

@@ -46,6 +46,10 @@ pub enum SecretRef {
     /// an S3 secret key), one per device: a device syncs to one place at a
     /// time.
     SyncLogin,
+    /// An SSH host's login script (its wait-and-send rules, as JSON), by
+    /// the host's `public_id` that is never reused. The rules often hold a
+    /// password, so the whole script is only ever kept in a keychain.
+    LoginScript { host: String },
 }
 
 impl SecretRef {
@@ -81,6 +85,12 @@ impl SecretRef {
         Self::Temporary { host }
     }
 
+    pub fn login_script(public_id: impl Into<String>) -> Self {
+        Self::LoginScript {
+            host: public_id.into(),
+        }
+    }
+
     /// The keychain entry's account name. Its prefix says the kind, readable
     /// as it is in Keychain Access. Saved secrets are found by it, so it
     /// never changes.
@@ -93,6 +103,7 @@ impl SecretRef {
             Self::Temporary { host } => format!("temporary:{host}"),
             Self::SyncKeyring => "sync:keyring".into(),
             Self::SyncLogin => "sync:login".into(),
+            Self::LoginScript { host } => format!("login-script:{host}"),
         }
     }
 }
@@ -171,6 +182,7 @@ mod tests {
             SecretRef::temporary(22),
             SecretRef::SyncKeyring,
             SecretRef::SyncLogin,
+            SecretRef::login_script("root@10.0.1.12:22"),
         ]
         .map(|secret| secret.account());
         for (ix, account) in accounts.iter().enumerate() {
