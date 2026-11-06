@@ -159,6 +159,10 @@ pub struct TerminalInteraction {
     pub cursor_style: TerminalCursorStyle,
     /// Blink by default, unless a program chooses otherwise.
     pub cursor_blinking: bool,
+    /// 中键粘贴: the middle button pastes the clipboard, as PuTTY's and
+    /// Xshell's do. On unless turned off. A program that asked for the
+    /// mouse hears the button instead.
+    pub middle_click_paste: bool,
 }
 
 impl Default for TerminalInteraction {
@@ -168,6 +172,7 @@ impl Default for TerminalInteraction {
             right_click: RightClick::default(),
             cursor_style: TerminalCursorStyle::default(),
             cursor_blinking: true,
+            middle_click_paste: true,
         }
     }
 }
