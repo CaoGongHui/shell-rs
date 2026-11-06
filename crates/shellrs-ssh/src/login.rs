@@ -53,6 +53,10 @@ pub struct HostLogin {
     /// The one-time codes the host fills in when the server asks for one.
     /// Boxed: few hosts have them, and logins are copied about.
     pub totp: Option<Box<TotpLogin>>,
+    /// Where the host's login script is kept, for a saved host: its rules
+    /// run on the shell once it is up. `None` for a jump host, a temporary
+    /// host and a test, which run none.
+    pub login_script: Option<SecretRef>,
 }
 
 /// A host that answers the server's one-time code questions itself, with
@@ -89,6 +93,7 @@ impl HostLogin {
             route: LoginRoute::Direct,
             shell_only: false,
             totp: None,
+            login_script: None,
         }
     }
 

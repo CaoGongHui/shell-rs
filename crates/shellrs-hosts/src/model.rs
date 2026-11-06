@@ -460,6 +460,13 @@ impl Host {
         SecretRef::totp(self.public_id.as_str())
     }
 
+    /// Where this host's login script lives in the system keychain. Keyed
+    /// by the host's own never-reused id rather than its endpoint: hosts
+    /// behind one bastion share the endpoint and each answer it apart.
+    pub fn login_script_secret(&self) -> SecretRef {
+        SecretRef::login_script(self.public_id.as_str())
+    }
+
     /// The editable fields, for pre-filling the host form.
     pub fn draft(&self) -> HostDraft {
         HostDraft {

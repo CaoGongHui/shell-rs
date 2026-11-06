@@ -44,6 +44,8 @@ pub enum SecretRef {
     /// The password of the WebDAV server, or the secret key of the S3
     /// bucket, sync goes through.
     SyncLogin,
+    /// A saved SSH host's login script, by the host's `public_id`.
+    LoginScript { host: String },
 }
 
 impl From<&ssh::SecretRef> for SecretRef {
@@ -69,6 +71,7 @@ impl From<&ssh::SecretRef> for SecretRef {
             ssh::SecretRef::Temporary { host } => Self::Temporary { host: *host },
             ssh::SecretRef::SyncKeyring => Self::SyncKeyring,
             ssh::SecretRef::SyncLogin => Self::SyncLogin,
+            ssh::SecretRef::LoginScript { host } => Self::LoginScript { host: host.clone() },
         }
     }
 }
@@ -84,6 +87,7 @@ impl From<SecretRef> for ssh::SecretRef {
             SecretRef::Temporary { host } => Self::temporary(host),
             SecretRef::SyncKeyring => Self::SyncKeyring,
             SecretRef::SyncLogin => Self::SyncLogin,
+            SecretRef::LoginScript { host } => Self::login_script(host),
         }
     }
 }

@@ -654,6 +654,15 @@ pub struct HostFields {
     pub route: Option<RouteFields>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
+    /// An SSH host's 登录脚本: its 「等待并发送」 rules, `[{"expect": "Opt>",
+    /// "send": "10.0.0.5"}, ...]`, given as an array and carried as that
+    /// array's JSON, a secret; `null` or `[]` deletes it.
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub login_script: Option<Option<Secret>>,
 }
 
 /// A route as `hosts create` and `hosts update` take it: always whole.

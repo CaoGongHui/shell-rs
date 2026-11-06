@@ -8,6 +8,7 @@ mod group_dialog;
 mod host_dialog;
 mod host_panel;
 mod import;
+pub mod login_script;
 mod outline;
 mod quick_connect;
 mod secret_fields;

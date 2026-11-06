@@ -29,6 +29,9 @@ use crate::connection::{
 use crate::i18n::{t, tn};
 use crate::secrets::SecretRef;
 
+use super::login_script::{
+    MAX_RULE_LEN, MAX_RULES, RulesError, decode_rules, encode_rules, format_rules, parse_rules,
+};
 use super::secret_fields::SecretFields;
 use super::{
     AuthKind, COMMON_BAUD_RATES, Credential, CredentialId, CredentialKind, DEFAULT_USER, DataBits,
@@ -277,6 +280,14 @@ pub struct HostForm {
     saved_totp: Option<(SecretRef, bool)>,
     /// What the server's question for a code says; empty for the usual.
     totp_prompt: Entity<InputState>,
+    /// An SSH host's 登录脚本, as `等待 => 发送` lines. Read back from the
+    /// keychain after the form opens: until it has been, an empty field
+    /// means "still loading", so committing early deletes nothing.
+    login_script: Entity<TextareaState>,
+    login_script_loaded: bool,
+    /// Whether the 登录脚本 is on: its rules show only then. Turned on when
+    /// a saved script is read back.
+    login_script_on: bool,
     /// A Telnet host's 自动登录: whether it is on, where it takes the
     /// user name and password from, and the prompts it waits for.
     telnet_auto_login: bool,
@@ -322,6 +333,7 @@ impl HostForm {
         cx: &mut Context<Self>,
     ) -> Self {
         let secrets = store.read(cx).secrets();
+        let secrets_for_script = secrets.clone();
         let (draft, saved_totp, credential_user_value, options, credentials, key_dir, jump_hosts) = {
             let read = store.read(cx);
             let editing_host = editing.and_then(|id| read.host(id));
@@ -661,6 +673,16 @@ impl HostForm {
                         .unwrap_or_default(),
                 )
         });
+        let login_script = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .auto_grow(2, 8)
+                .placeholder(t!("host.dialog.login_script_placeholder"))
+        });
+        // Where the edited host's 登录脚本 is kept; a new host has none yet.
+        let login_script_secret = editing
+            .and_then(|id| store.read(cx).host(id))
+            .filter(|host| host.is_ssh())
+            .map(Host::login_script_secret);
 
         let subscriptions = vec![
             cx.observe_in(&credential, window, |this, _, window, cx| {
@@ -759,6 +781,10 @@ impl HostForm {
             totp_secret,
             saved_totp,
             totp_prompt,
+            login_script,
+            // Nothing to read back for a new host: its field starts empty.
+            login_script_loaded: login_script_secret.is_none(),
+            login_script_on: false,
             device,
             baud,
             data_bits,
@@ -775,7 +801,64 @@ impl HostForm {
         if protocol == ProtocolKind::Serial {
             form.look_for_ports(window, cx);
         }
+        if let Some(secret) = login_script_secret {
+            form.load_login_script(secret, secrets_for_script, cx);
+        }
         form
+    }
+
+    /// Read the edited host's 登录脚本 off the UI thread (the keychain
+    /// blocks) and put it into its field, unless the user typed first.
+    fn load_login_script(
+        &self,
+        secret: SecretRef,
+        secrets: crate::secrets::SharedSecretStore,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            let saved = cx
+                .background_executor()
+                .spawn(async move { secrets.get(&secret).ok().flatten() })
+                .await;
+            this.update_in(cx, |this, window, cx| {
+                if let Some(saved) = saved
+                    && this.login_script.read(cx).value().is_empty()
+                {
+                    let text = format_rules(&decode_rules(&saved));
+                    if !text.is_empty() {
+                        this.login_script_on = true;
+                    }
+                    this.login_script
+                        .update(cx, |input, cx| input.set_value(text, window, cx));
+                }
+                this.login_script_loaded = true;
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// What a commit does with the 登录脚本's keychain entry: `None` leaves
+    /// it alone, `Some(None)` deletes it, `Some(Some(json))` writes it.
+    fn login_script_change(&self, cx: &App) -> Result<Option<Option<String>>, SharedString> {
+        let text = self.login_script.read(cx).value();
+        // Turned off, or left empty: no script, once the saved one is known.
+        if !self.login_script_on || text.trim().is_empty() {
+            return Ok(self.login_script_loaded.then_some(None));
+        }
+        let rules = parse_rules(&text).map_err(|error| match error {
+            RulesError::NoSeparator(line) => {
+                t!("host.dialog.login_script_no_separator", line = line)
+            }
+            RulesError::TooLong(line) => t!(
+                "host.dialog.login_script_too_long",
+                line = line,
+                limit = MAX_RULE_LEN
+            ),
+            RulesError::TooMany => t!("host.dialog.login_script_too_many", limit = MAX_RULES),
+        })?;
+        Ok(Some(encode_rules(&rules)))
     }
 
     /// The form of a 临时连接: the login of a new host, without what only a
@@ -1459,6 +1542,19 @@ impl HostForm {
         };
         // The proxy's password goes the same way, under the proxy's entry.
         let proxy_change = self.proxy_change(&route, cx);
+        // The 登录脚本 too, under the host's own entry. A temporary
+        // connection's form shows no script, so it never has one.
+        let script_change = if self.temporary {
+            None
+        } else {
+            match self.login_script_change(cx) {
+                Ok(change) => change,
+                Err(error) => {
+                    window.push_notification(form_error_notification(error), cx);
+                    return false;
+                }
+            }
+        };
         let notes = self.notes.read(cx).value().trim().to_string();
         let draft = draft.with_route(route).with_notes(notes).with_totp(totp);
 
@@ -1482,6 +1578,11 @@ impl HostForm {
                 && let Some(secret) = store.host(id).map(Host::totp_secret)
             {
                 store.save_secret(secret, Some(value), cx);
+            }
+            if let Some(change) = script_change
+                && let Some(secret) = store.host(id).map(Host::login_script_secret)
+            {
+                store.save_secret(secret, change, cx);
             }
         });
         self.clear_secrets(window, cx);
@@ -1538,6 +1639,8 @@ impl HostForm {
         ] {
             fields.update(cx, |fields, cx| fields.clear(window, cx));
         }
+        self.login_script
+            .update(cx, |input, cx| input.set_value("", window, cx));
     }
 
     /// Validate and connect without saving: the host goes into the store's
@@ -2212,6 +2315,12 @@ impl Render for HostForm {
                 form.child(self.advanced_field(cx))
             })
         };
+        // An SSH host's 登录脚本, after everything else a saved host has.
+        let form = if !self.temporary && self.protocol == ProtocolKind::Ssh {
+            self.login_script_field(form, cx)
+        } else {
+            form
+        };
         v_flex()
             .gap_3()
             .w_full()
@@ -2459,6 +2568,47 @@ impl HostForm {
                 .child(self.credential_user_field())
                 .child(self.credential_field(cx)),
         }
+    }
+
+    /// An SSH host's 登录脚本: the 「等待并发送」 rules its terminal runs
+    /// once the shell is up, one `等待 => 发送` per line, shown once it is
+    /// turned on. Last in the form: most hosts never use it.
+    fn login_script_field(&self, form: Form, cx: &mut Context<Self>) -> Form {
+        let keychain = self.fields.read(cx).keychain_available();
+        let on = self.login_script_on;
+        let form = form.child(
+            Field::new()
+                .label(t!("host.dialog.login_script"))
+                .col_span(4)
+                .child(
+                    Checkbox::new("host-login-script-on")
+                        .label(t!("host.dialog.login_script_enabled"))
+                        .checked(on && keychain)
+                        .small()
+                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                            this.login_script_on = *checked;
+                            cx.notify();
+                        })),
+                )
+                .when(!keychain, |field| {
+                    field.description(t!("host.dialog.login_script_no_keychain"))
+                }),
+        );
+        if !on || !keychain {
+            return form;
+        }
+        form.child(
+            Field::new()
+                .col_span(4)
+                .child(
+                    div()
+                        .id("host-login-script")
+                        .test_support()
+                        .w_full()
+                        .child(Textarea::new(&self.login_script).text_sm()),
+                )
+                .description(t!("host.dialog.login_script_note")),
+        )
     }
 }
 

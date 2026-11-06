@@ -1002,6 +1002,11 @@ impl HostData {
         let connection = self.connection(id);
         let codes = self.totp_secret_of(id);
         let emptied = self.jumping_through(&[id]);
+        // The login script is the host's alone: it goes with it.
+        let script = self
+            .host(id)
+            .filter(|host| host.is_ssh() && !self.is_temporary(host.id))
+            .map(Host::login_script_secret);
         let removed = self.remove_unnotified(id);
         if removed {
             self.persist(Change::DeleteHost, |db| db.remove_host(id));
@@ -1011,6 +1016,9 @@ impl HostData {
             }
             if let Some(secret) = codes {
                 self.save_secret(secret, None);
+            }
+            if let Some(script) = script {
+                self.save_secret(script, None);
             }
             self.changed();
         }
@@ -1490,6 +1498,11 @@ impl HostData {
             login.password = SecretRef::temporary(host.id.0);
         }
         login.shell_only = self.is_external(host.id);
+        // A saved host's login script runs on its terminal. A temporary
+        // host has none: it never had a form to write one in.
+        if !self.is_temporary(host.id) {
+            login.login_script = Some(host.login_script_secret());
+        }
         login
     }
 
